@@ -1,0 +1,27 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%post
+  set -e
+  export DEBIAN_FRONTEND=noninteractive
+
+  apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    procps \
+    libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
+  pip install --no-cache-dir \
+    numpy \
+    tifffile \
+    imagecodecs \
+    pillow \
+    scikit-image \
+    rasterio \
+    shapely
+
+%environment
+  export PYTHONUNBUFFERED=1
+
+%runscript
+  exec "$@"

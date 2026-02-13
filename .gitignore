@@ -1,0 +1,27 @@
+.DS_Store
+.nextflow/
+.nextflow.log*
+.nxf/
+cache/
+work/
+work_*/
+results/
+results_*/
+__pycache__/
+*.pyc
+*.pyo
+.hf_cache/
+
+# local credentials
+tokens.env
+
+# large local inputs
+Data/*.ome.tif
+Data/*.btf
+
+# local container artifacts
+singularity/*.sif
+
+# runtime outputs
+*.html
+*.txt

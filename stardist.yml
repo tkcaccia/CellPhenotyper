@@ -1,0 +1,53 @@
+name: stardist
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+
+  # segmentation / spatial stack (as before)
+  - stardist
+  - csbdeep
+  - scanpy
+  - squidpy
+  - anndata
+  - spatialdata
+  - spatialdata-plot
+  - ome-zarr
+  - zarr
+  - dask
+  - dask-image
+
+  # core scientific + IO
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - scikit-image
+  - matplotlib
+  - tqdm
+  - pillow
+  - tifffile
+  - imagecodecs
+
+  # optional but commonly used in your pipeline
+  - opencv
+  - py-opencv
+  - pyarrow
+  - geopandas
+
+  # deep learning (needed by embeddings script)
+  - pytorch
+  - torchvision
+
+  # UNI/UNI2 + HF login / model loading
+  - huggingface_hub
+  - transformers
+  - timm
+  - accelerate
+  - safetensors
+  - einops
+
+  # WSI support (recommended)
+  - openslide
+  - openslide-python

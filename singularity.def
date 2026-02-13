@@ -1,0 +1,57 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%files
+  stardist.yml /opt/stardist.yml
+
+%post
+  set -e
+  export DEBIAN_FRONTEND=noninteractive
+
+  apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl wget git build-essential pkg-config \
+    libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev libicu-dev \
+    libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
+    libharfbuzz-dev libfribidi-dev libglpk-dev \
+    gfortran \
+    openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+  # ---- micromamba (no pipes; sh-safe) ----
+  curl -Ls -o /tmp/micromamba.tar.bz2 https://micro.mamba.pm/api/micromamba/linux-64/latest
+  tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba
+  install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba
+  rm -rf /tmp/micromamba.tar.bz2 /tmp/bin
+
+  export MAMBA_ROOT_PREFIX=/opt/micromamba
+
+  # ---- Create python env from your stardist.yml ----
+  micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge
+
+  # ---- Add OME tools ----
+  micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff
+
+  # ---- Install R into the SAME env + R deps ----
+  micromamba install -y -n stardist \
+    -c conda-forge -c bioconda --channel-priority strict \
+    rasterio affine \
+    r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
+    bioconductor-bluster
+
+
+  # ---- Install Bioconductor + GitHub packages ----
+  micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'
+  micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")'
+  micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")'
+
+  micromamba clean -a -y
+
+%environment
+  export LANG=C.UTF-8
+  export LC_ALL=C.UTF-8
+  export MAMBA_ROOT_PREFIX=/opt/micromamba
+  export PATH=/opt/micromamba/envs/stardist/bin:$PATH
+  export LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+
+%runscript
+  exec "$@"
