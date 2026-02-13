@@ -33,6 +33,9 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
     export LOKY_MAX_CPU_COUNT=${task.cpus}
+    if [[ -n "${params.stardist_pythonpath}" ]]; then
+      export PYTHONPATH="${params.stardist_pythonpath}:\${PYTHONPATH:-}"
+    fi
 
     mkdir -p stardist_out
 

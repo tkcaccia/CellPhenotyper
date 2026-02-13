@@ -175,10 +175,12 @@ workflow {
             }
             EXPAND_LABELS_TO_CYTOPLASM_PRIMARY(expand_primary_ch)
 
-            def expand_full_ch = labels_full_tif_ch.map { sample_id, labels_full_tif ->
-                tuple(sample_id, labels_full_tif, 'labels_full_cyto')
+            if (params.expand_full_labels as boolean) {
+                def expand_full_ch = labels_full_tif_ch.map { sample_id, labels_full_tif ->
+                    tuple(sample_id, labels_full_tif, 'labels_full_cyto')
+                }
+                EXPAND_LABELS_TO_CYTOPLASM_FULL(expand_full_ch)
             }
-            EXPAND_LABELS_TO_CYTOPLASM_FULL(expand_full_ch)
 
             cyto_mask_ch = EXPAND_LABELS_TO_CYTOPLASM_PRIMARY.out.expanded_labels
                 .filter { sample_id, expanded_mask, label_kind -> label_kind == 'labels_cyto' }

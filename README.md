@@ -4,7 +4,8 @@ CellPhenotyper is a fully reproducible, modular computational pathology workflow
 The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, and unsupervised KODAMA analysis to stratify cells into coherent phenotypic groups for exploratory spatial discovery.
 
 The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
-The default CPU Singularity runtime image used by the parameter file is `singularity-cellphenotyper-0.1.0.sif` (pulled from `ghcr.io/tkcaccia/cellphenotyper:0.1.0`).
+Select the runtime image in `pipeline_paramers.yml` using `singularity_image` or `docker_image`.
+For full UNI-2 execution, the Hugging Face token must have access to `MahmoodLab/UNI2-h`.
 
 The main entrypoint is always:
 

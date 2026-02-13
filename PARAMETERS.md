@@ -35,6 +35,7 @@ nextflow run main.nf -profile singularity \
 | `docker_image` | `''` | Image name for `-profile docker`. |
 | `max_cpus` | `Runtime.runtime.availableProcessors()` | Global CPU cap. |
 | `max_memory_gb` | `64` | Global RAM cap in GB. |
+| `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `tissue_geojson`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`.
@@ -60,6 +61,7 @@ nextflow run main.nf -profile singularity \
 | `stardist_nms` | `0.30` | NMS threshold. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
+| `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
 | `write_full_labels` | `true` | Write full labels TIFF. |
 | `full_format` | `tif` | Full label file format. |
 | `allow_huge_tif` | `true` | Allow huge TIFF writes. |
@@ -107,6 +109,6 @@ nextflow run main.nf -profile singularity \
 | Parameter group | Key controls |
 |---|---|
 | Cell assignment | `assign_*` |
-| Cytoplasm expansion | `expand_*` |
+| Cytoplasm expansion | `expand_*` (`expand_full_labels=false` skips full-image cytoplasm expansion) |
 | UNI-2 embeddings | `uni2_*`, `hf_*`, `hf_token_env_var_name` |
 | KODAMA R step | `r_*` |
