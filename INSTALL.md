@@ -171,43 +171,30 @@ git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
 ```
 
-## Step 6: Build container image
+## Step 6: Prepare container image
 
-## Step 6-S (Singularity images)
+## Step 6-S (Singularity image from GHCR, CPU)
 
-If you already have the project image `singularity-stardist_UNI-2.sif`, place it in the repository root and skip build:
+Pull the prebuilt CPU image:
 
 ```bash
-ls -lh singularity-stardist_UNI-2.sif
+singularity pull singularity-cellphenotyper-0.1.0.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.1.0
 ```
 
-Build each image once, then reuse it for all runs.
-Rebuild only when the matching `.def` file changes.
-
-Check current images:
+If the package is private, authenticate first with a GitHub token that has `read:packages`:
 
 ```bash
-ls -lh singularity/*.sif
+export SINGULARITY_DOCKER_USERNAME="<github_username>"
+export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
+singularity pull singularity-cellphenotyper-0.1.0.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.1.0
 ```
 
-Full CPU image (create only if missing):
+Verify:
 
 ```bash
-if [ ! -f singularity/cellphenotyper_full_cpu.sif ]; then
-  sudo singularity build \
-    singularity/cellphenotyper_full_cpu.sif \
-    singularity/cellphenotyper_full_cpu.def
-fi
-```
-
-Full GPU image (Linux x86_64 + NVIDIA hosts, create only if missing):
-
-```bash
-if [ ! -f singularity/cellphenotyper_full_gpu.sif ]; then
-  sudo singularity build \
-    singularity/cellphenotyper_full_gpu.sif \
-    singularity/cellphenotyper_full_gpu.def
-fi
+ls -lh singularity-cellphenotyper-0.1.0.sif
 ```
 
 ## Step 6-D (Docker images)
@@ -245,7 +232,7 @@ First, edit `pipeline_paramers.yml` with your runtime choices (`image_input`, `r
 To control where the pipeline starts/stops, set `start_point` and `end_point` in the same file.
 For the provided project image, keep:
 
-- `singularity_image: singularity-stardist_UNI-2.sif`
+- `singularity_image: singularity-cellphenotyper-0.1.0.sif`
 
 ```bash
 nextflow run main.nf \

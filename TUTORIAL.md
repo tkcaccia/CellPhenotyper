@@ -4,7 +4,7 @@ This page shows practical usage of CellPhenotyper with Nextflow.
 
 Before running, ensure the selected container image already exists.
 Do not rebuild `.sif` on every test run; rebuild only after changing the related `.def` file.
-Default Singularity image in `pipeline_paramers.yml`: `singularity-stardist_UNI-2.sif`.
+Default Singularity image in `pipeline_paramers.yml`: `singularity-cellphenotyper-0.1.0.sif`.
 
 ## Starting point
 

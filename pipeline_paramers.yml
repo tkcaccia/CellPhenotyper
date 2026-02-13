@@ -19,7 +19,7 @@ end_point: auto
 # convert, stardist, tissue_mask, tissue_geojson, cell_assignment, cytoplasm, uni2, kodama
 
 # Runtime image selection
-singularity_image: singularity-stardist_UNI-2.sif
+singularity_image: singularity-cellphenotyper-0.1.0.sif
 docker_image: cellphenotyper:full-cpu
 
 # Global resource caps

@@ -22,6 +22,8 @@ Data/*.btf
 # local container artifacts
 singularity/*.sif
 singularity-stardist_UNI-2.sif
+singularity-stardist_UNI-2-m1.sif
+singularity-cellphenotyper-0.1.0.sif
 
 # runtime outputs
 *.html
