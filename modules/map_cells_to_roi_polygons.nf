@@ -19,10 +19,11 @@ process MAP_CELLS_TO_ROI_POLYGONS {
     def chunk_rows_flag = params.assign_chunk_rows ? "--chunk-rows ${params.assign_chunk_rows}" : ''
     def xcol_flag = params.assign_xcol ? "--xcol ${params.assign_xcol}" : ''
     def ycol_flag = params.assign_ycol ? "--ycol ${params.assign_ycol}" : ''
+    def assign_script = "${projectDir}/${params.assign_script}"
     """
     set -euo pipefail
 
-    python "${params.assign_script}" \\
+    python "${assign_script}" \\
       --objects "${objects_csv}" \\
       --roi "${roi_geojson}" \\
       --shift "${shift_json}" \\

@@ -19,6 +19,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def force_full_flag = params.uni2_force_full_image ? '--force-full-image' : ''
     def save_tiles_flag = params.uni2_save_tiles ? '--save-tiles' : ''
     def device_value = params.compute_device == 'gpu' ? 'cuda' : (params.compute_device == 'auto' ? params.uni2_device_auto : 'cpu')
+    def uni2_script = "${projectDir}/${params.uni2_script}"
     """
     set -euo pipefail
 
@@ -39,7 +40,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
       HF_TOKEN_ARGS=(--hf-token "\$HF_TOKEN")
     fi
 
-    python "${params.uni2_script}" \\
+    python "${uni2_script}" \\
       --image "${image_tif}" \\
       --mask "${mask_tif}" \\
       --outdir "embeddings_${sample_id}_${embedding_mode}" \\

@@ -22,6 +22,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     script:
     def write_full_flag = params.write_full_labels ? '--write-full-labels' : ''
     def allow_huge_flag = params.allow_huge_tif ? '--allow-huge-tif' : ''
+    def stardist_script = "${projectDir}/${params.stardist_script}"
     """
     set -euo pipefail
 
@@ -35,7 +36,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
 
     mkdir -p stardist_out
 
-    python "${params.stardist_script}" \\
+    python "${stardist_script}" \\
       --in "${ome_tif}" \\
       --roi "${roi_geojson}" \\
       --outdir stardist_out \\

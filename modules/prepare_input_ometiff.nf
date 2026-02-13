@@ -19,6 +19,7 @@ process PREPARE_INPUT_OMETIFF {
     def is_ome = image_name.endsWith('.ome.tif')
     def rgb_flag = params.convert_rgb ? '--rgb' : ''
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
+    def btf_converter_script = "${projectDir}/${params.btf_converter_script}"
     """
     set -euo pipefail
 
@@ -39,7 +40,7 @@ process PREPARE_INPUT_OMETIFF {
       exit 0
     fi
 
-    bash "${params.btf_converter_script}" \\
+    bash "${btf_converter_script}" \\
       --in "${image_file}" \\
       --out "${sample_id}.ome.tif" \\
       --compression "${params.convert_compression}" \\

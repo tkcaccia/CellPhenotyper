@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./btf_to_ometiff.sh --in INPUT.btf --out OUTPUT.ome.tif [options]
+  ./bin/convert_btf_to_ometiff.sh --in INPUT.btf --out OUTPUT.ome.tif [options]
 
 Options:
   --compression  UNCOMPRESSED|LZW|JPEG|JPEG_2000|JPEG_2000_LOSSY   (default: LZW)
@@ -19,9 +19,9 @@ Options:
   --keep-tmp     Keep the intermediate .rawdir (default: delete)
 
 Examples:
-  ./btf_to_ometiff.sh --in slide.btf --out slide.ome.tif --overwrite
-  ./btf_to_ometiff.sh --in slide.btf --out slide_rgb.ome.tif --rgb --overwrite
-  ./btf_to_ometiff.sh --in slide.btf --out slide_legacy.ome.tif --legacy --overwrite
+  ./bin/convert_btf_to_ometiff.sh --in slide.btf --out slide.ome.tif --overwrite
+  ./bin/convert_btf_to_ometiff.sh --in slide.btf --out slide_rgb.ome.tif --rgb --overwrite
+  ./bin/convert_btf_to_ometiff.sh --in slide.btf --out slide_legacy.ome.tif --legacy --overwrite
 EOF
 }
 

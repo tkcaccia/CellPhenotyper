@@ -16,10 +16,11 @@ process EXPAND_LABELS_TO_CYTOPLASM {
 
     script:
     def compression_flag = params.expand_compression ? "--compression ${params.expand_compression}" : ''
+    def expand_script = "${projectDir}/${params.expand_script}"
     """
     set -euo pipefail
 
-    python "${params.expand_script}" \\
+    python "${expand_script}" \\
       --labels "${labels_tif}" \\
       --out "${sample_id}_${label_kind}.tif" \\
       --expand-px ${params.expand_px} \\

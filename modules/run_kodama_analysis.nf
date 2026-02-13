@@ -17,12 +17,13 @@ process RUN_KODAMA_ANALYSIS {
     tuple val(sample_id), path("KODAMA_${sample_id}.Rout"), emit: kodama_log
 
     script:
+    def r_script = "${projectDir}/${params.r_script}"
     """
     set -euo pipefail
 
     mkdir -p kodama_output
 
-    Rscript "${params.r_script}" \\
+    Rscript "${r_script}" \\
       "${embeddings_dir}" \\
       "${objects_assigned_csv}" \\
       "kodama_output" \\

@@ -18,17 +18,17 @@ Dependencies: pandas, numpy, shapely, tqdm
 Examples
 --------
 1) List candidate label properties:
-   python assign_cells_to_geojson_polygons_v6.py --roi ROI.geojson --list-props
+   python bin/map_cells_to_roi_polygons.py --roi ROI.geojson --list-props
 
 2) Use a specific property as label:
-   python assign_cells_to_geojson_polygons_v6.py ... --label-prop name
+   python bin/map_cells_to_roi_polygons.py ... --label-prop name
 
 3) Nested property:
-   python assign_cells_to_geojson_polygons_v6.py ... --label-prop classification.name
+   python bin/map_cells_to_roi_polygons.py ... --label-prop classification.name
 
 4) Typical run with shift + parallel:
    singularity exec --bind "$PWD":"$PWD" --pwd "$PWD" $SINGULARITY \
-     python assign_cells_to_geojson_polygons_v6.py \
+     python bin/map_cells_to_roi_polygons.py \
        --objects out_stardist_roi/objects.csv \
        --roi Data/Visium_HD_Human_Colon_Cancer_290325.geojson \
        --shift out_stardist_roi/shift.json \
