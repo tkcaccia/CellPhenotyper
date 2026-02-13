@@ -1,212 +1,260 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for tissue phenotyping from whole-slide style microscopy images.
+CellPhenotyper is a Nextflow DSL2 workflow that takes an image (`.ome.tif` or `.btf`) and an ROI GeoJSON, performs segmentation and tissue delineation, and can run a full downstream analysis including UNI-2 embeddings and KODAMA outputs.
 
-## What this pipeline does
-
-Given an input image (`.ome.tif` or `.btf`) and an ROI GeoJSON, the pipeline can run:
-
-1. Input preparation (`.btf` -> `.ome.tif` when needed)
-2. ROI StarDist segmentation
-3. Tissue mask extraction
-4. Tissue mask conversion to GeoJSON
-5. Optional downstream analysis:
-   - cell-to-polygon assignment
-   - cytoplasm expansion
-   - UNI/UNI2 embeddings
-   - KODAMA analysis
-
-Main workflow files:
-
-- `main.nf`
-- `nextflow.config`
-- `modules/prepare_input_ometiff.nf`
-- `modules/run_stardist_roi_segmentation.nf`
-- `modules/build_tissue_mask.nf`
-- `modules/convert_tissue_mask_to_geojson.nf`
-- `modules/map_cells_to_roi_polygons.nf`
-- `modules/expand_labels_to_cytoplasm.nf`
-- `modules/extract_uni2_embeddings.nf`
-- `modules/run_kodama_analysis.nf`
-
-Pipeline implementation code layout:
-
-- `modules/`: Nextflow DSL2 process modules
-- `bin/`: pipeline executable code (Python, R, and shell scripts used by Nextflow)
-
-Profiles supported:
-
-- `singularity`
-- `docker`
-
-No SLURM profile is used.
-
-## Installation
+## Quick start (full pipeline with UNI-2, ROI.ome.tif)
 
 ## 1) Prerequisites
 
-- Nextflow `25.10.2+`
+- Nextflow `25.10.2` or newer
 - Java 17+
 - Singularity/Apptainer
 
-For macOS Apple Silicon, run inside Lima:
+On macOS M1/M2, run inside Lima first:
 
 ```bash
 limactl shell default
 ```
 
-Recommended runtime packages in Lima:
+Install helper packages in Lima:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y apptainer squashfuse fuse2fs gocryptfs
 ```
 
-Install Nextflow in Lima if needed:
-
-```bash
-curl -s https://get.nextflow.io | bash
-sudo mv nextflow /usr/local/bin/
-```
-
-## 2) Build containers
+## 2) Build the Singularity image
 
 From repository root:
 
-- Tissue-only container (fastest to validate tissue GeoJSON):
-
 ```bash
-./scripts/build_singularity_tissue.sh singularity/cellphenotyper_tissue.sif
+sudo singularity build --force \
+  singularity/cellphenotyper_full_cpu.sif \
+  singularity/cellphenotyper_full_cpu.def
 ```
 
-- Full CPU container (includes `.btf` conversion + full pipeline stack):
+## 3) Configure UNI-2 token (Hugging Face)
 
-```bash
-./scripts/build_singularity_full_cpu.sh singularity/cellphenotyper_full_cpu.sif
-```
-
-- Full GPU container (NVIDIA Linux hosts):
-
-```bash
-./scripts/build_singularity_full_gpu.sh singularity/cellphenotyper_full_gpu.sif
-```
-
-## UNI-2 token setup (Hugging Face)
-
-UNI2 model loading in `bin/extract_uni2_embeddings.py` uses Hugging Face auth (parameter `--hf-token`, wired by Nextflow via `HF_TOKEN`).
-
-1. Create/sign in to Hugging Face: [huggingface.co](https://huggingface.co)
-2. Request access to model repo: [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h)
-3. Create a **Read** access token: [HF Tokens](https://huggingface.co/settings/tokens)
-4. Export token in your shell before running full pipeline:
+1. Sign in to [Hugging Face](https://huggingface.co)
+2. Request access to [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h)
+3. Create a read token at [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+4. Export the token:
 
 ```bash
 export HF_TOKEN="<your_hf_read_token>"
 ```
 
-The pipeline default token env var name is `HF_TOKEN` (see `nextflow.config` -> `hf_token_env_var_name`).
-
-## Practical examples
-
-## Example A: validated tissue GeoJSON run (local)
-
-This command path has been validated locally and produces:
-
-- `results_singularity_local/04_tissue_geojson/ROI_tissue_mask.geojson`
-
-Run:
+## 4) Run the complete pipeline with Nextflow
 
 ```bash
-./scripts/run_tissue_geojson_local_singularity.sh \
-  Data/ROI.ome.tif \
-  Data/ROI.geojson \
-  singularity/cellphenotyper_tissue.sif \
-  results_singularity_local
+nextflow run main.nf \
+  -profile singularity \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --singularity_image singularity/cellphenotyper_full_cpu.sif \
+  --run_full_pipeline true \
+  --tissue_mask_from_input false \
+  --compute_device cpu \
+  --outdir_base results_full \
+  --max_cpus 8 \
+  --max_memory_gb 32 \
+  -with-report results_full/report.html \
+  -with-trace results_full/trace.txt \
+  -with-timeline results_full/timeline.html \
+  -resume
 ```
 
-A copied validated artifact is also included in:
+For NVIDIA GPU hosts, use:
+
+- `--compute_device gpu`
+- a GPU-capable image (`singularity/cellphenotyper_full_gpu.sif`)
+
+## 5) Expected main outputs
+
+- Tissue GeoJSON: `results_full/04_tissue_geojson/`
+- Cell assignments: `results_full/05_cell_assignments/`
+- Cytoplasm masks: `results_full/06_cytoplasm/`
+- UNI-2 embeddings: `results_full/07_embeddings/`
+- KODAMA output: `results_full/08_kodama/`
+
+Validated tissue GeoJSON example committed in this repo:
 
 - `examples/validated_outputs/ROI_tissue_mask.geojson`
 
-## Example B: public Visium HD image download + tissue GeoJSON
+## Where to modify parameters
 
-Dataset page: [10x Genomics Visium HD CRC](https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-human-crc)
+All parameters are defined in:
 
-Download image:
+- `nextflow.config` inside the top-level `params { ... }` block
 
-```bash
-mkdir -p Data/visium_hd
-cd Data/visium_hd
-curl -O https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer/Visium_HD_Human_Colon_Cancer_tissue_image.btf
-cd ../..
-```
+You can change values in two ways:
 
-Create a placeholder ROI file (required by CLI, not used in tissue-only mode):
+1. Permanent default change: edit `nextflow.config`
+2. Per-run override: pass `--parameter_name value` in `nextflow run`
+
+Example override:
 
 ```bash
-cat > Data/visium_hd/placeholder_roi.geojson <<'JSON'
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "properties": {"name": "placeholder"},
-      "geometry": {
-        "type": "Polygon",
-        "coordinates": [[[0,0],[1,0],[1,1],[0,1],[0,0]]]
-      }
-    }
-  ]
-}
-JSON
+nextflow run main.nf -profile singularity \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --singularity_image singularity/cellphenotyper_full_cpu.sif \
+  --max_cpus 12 \
+  --max_memory_gb 48 \
+  --uni2_batch 32
 ```
 
-Run tissue-only workflow from `.btf` input (use full CPU image because `.btf` conversion tools are included there):
+## Complete parameter reference
 
-```bash
-./scripts/run_tissue_geojson_local_singularity.sh \
-  Data/visium_hd/Visium_HD_Human_Colon_Cancer_tissue_image.btf \
-  Data/visium_hd/placeholder_roi.geojson \
-  singularity/cellphenotyper_full_cpu.sif \
-  results_visium_hd
-```
+Every parameter below can be modified in `nextflow.config` (`params`) or overridden on the CLI with `--<name>`.
 
-## Example C: full pipeline with UNI2 embeddings
+## Core I/O and execution
 
-CPU:
+| Parameter | Default | Meaning |
+|---|---|---|
+| `image_input` | `null` | Input image path (`.ome.tif` or `.btf`). |
+| `roi_geojson` | `null` | ROI GeoJSON path used by ROI-aware steps. |
+| `outdir_base` | `results` | Base output directory. |
+| `run_full_pipeline` | `true` | `true` runs full workflow (UNI-2 + KODAMA included). |
+| `tissue_mask_from_input` | `false` | `true` builds tissue mask directly from input image; `false` uses StarDist crop output. |
+| `compute_device` | `cpu` | Main device mode: `cpu`, `gpu`, or `auto`. |
+| `uni2_device_auto` | `cpu` | Device used by UNI-2 only when `compute_device=auto`. |
+| `singularity_image` | `''` | Singularity image path for `-profile singularity`. |
+| `docker_image` | `''` | Docker image for `-profile docker`. |
+| `max_cpus` | `Runtime.runtime.availableProcessors()` | Global CPU cap for all process-level CPU requests. |
+| `max_memory_gb` | `64` | Global RAM cap (GB) for all process-level memory requests. |
 
-```bash
-export HF_TOKEN="<your_hf_read_token>"
-MAX_CPUS=8 MAX_MEM_GB=32 COMPUTE_DEVICE=cpu \
-./scripts/run_full_pipeline_local_singularity.sh \
-  Data/ROI.ome.tif \
-  Data/ROI.geojson \
-  singularity/cellphenotyper_full_cpu.sif \
-  results_full_cpu
-```
+## BTF -> OME-TIFF conversion
 
-GPU (NVIDIA Linux host):
+| Parameter | Default | Meaning |
+|---|---|---|
+| `btf_converter_script` | `bin/convert_btf_to_ometiff.sh` | Converter script path. |
+| `convert_compression` | `LZW` | OME-TIFF compression mode. |
+| `convert_downsample` | `GAUSSIAN` | Pyramid downsample algorithm. |
+| `convert_rgb` | `true` | Convert to RGB output when possible. |
+| `convert_overwrite` | `true` | Overwrite output if it already exists. |
+| `convert_cpus` | `8` | CPU request for conversion step. |
+| `convert_memory_gb` | `16` | RAM request (GB) for conversion step. |
+| `convert_time` | `6h` | Wall time request for conversion step. |
 
-```bash
-export HF_TOKEN="<your_hf_read_token>"
-MAX_CPUS=16 MAX_MEM_GB=64 COMPUTE_DEVICE=gpu \
-./scripts/run_full_pipeline_local_singularity.sh \
-  Data/ROI.ome.tif \
-  Data/ROI.geojson \
-  singularity/cellphenotyper_full_gpu.sif \
-  results_full_gpu
-```
+## StarDist segmentation
 
-## Resource management knobs
+| Parameter | Default | Meaning |
+|---|---|---|
+| `stardist_script` | `bin/run_stardist_roi_segmentation.py` | StarDist runner script path. |
+| `stardist_model` | `2D_versatile_he` | Pretrained StarDist model name. |
+| `stardist_prob` | `0.48` | Probability threshold for detections. |
+| `stardist_nms` | `0.30` | Non-max suppression threshold. |
+| `stardist_tiles_x` | `32` | Number of StarDist tiles in X. |
+| `stardist_tiles_y` | `32` | Number of StarDist tiles in Y. |
+| `write_full_labels` | `true` | Write full-image labels output. |
+| `full_format` | `tif` | Output format for full labels. |
+| `allow_huge_tif` | `true` | Allow huge TIFF writing in StarDist script. |
+| `stardist_cpus` | `16` | CPU request for StarDist step. |
+| `stardist_memory_gb` | `48` | RAM request (GB) for StarDist step. |
+| `stardist_time` | `24h` | Wall time request for StarDist step. |
 
-Global resource caps:
+## Tissue mask generation
 
-- `--max_cpus`
-- `--max_memory_gb`
-- `--compute_device` (`cpu|gpu|auto`)
+| Parameter | Default | Meaning |
+|---|---|---|
+| `tissue_mask_script` | `bin/build_tissue_mask.py` | Tissue mask script path. |
+| `tissue_work_downsample` | `8` | Downsample factor for mask computation (higher = lower RAM). |
+| `tissue_preview_factor` | `10` | Downsample factor for preview image. |
+| `tissue_close_radius` | `12` | Morphological closing radius (pixels). |
+| `tissue_min_obj_area` | `30000` | Remove connected components smaller than this area. |
+| `tissue_hole_area` | `30000` | Fill holes smaller than this area. |
+| `tissue_keep_largest` | `true` | Keep only largest connected tissue component. |
+| `tissue_tile` | `512` | TIFF tile size for output mask. |
+| `tissue_compression` | `deflate` | Compression for output tissue mask TIFF. |
+| `tissue_bigtiff` | `true` | Write BigTIFF for large outputs. |
+| `tissue_mask_cpus` | `8` | CPU request for tissue-mask step. |
+| `tissue_mask_memory_gb` | `16` | RAM request (GB) for tissue-mask step. |
+| `tissue_mask_time` | `6h` | Wall time request for tissue-mask step. |
 
-For tissue mask memory/performance tradeoff:
+## Tissue mask -> GeoJSON
 
-- `--tissue_work_downsample` (default `8`)
+| Parameter | Default | Meaning |
+|---|---|---|
+| `tissue_geojson_script` | `bin/convert_tissue_mask_to_geojson.py` | GeoJSON conversion script path. |
+| `tissue_geojson_page` | `0` | TIFF page index to read (usually full-res page 0). |
+| `tissue_geojson_binary` | `true` | Treat mask as binary foreground. |
+| `tissue_geojson_dissolve` | `true` | Merge binary polygons into one geometry. |
+| `tissue_geojson_dissolve_by_value` | `false` | For labeled masks: dissolve geometries by value. |
+| `tissue_geojson_min_area` | `2500` | Drop polygons below this area. |
+| `tissue_geojson_smooth_buffer` | `6` | Smoothing buffer radius (pixels). |
+| `tissue_geojson_smooth_passes` | `2` | Number of smoothing passes. |
+| `tissue_geojson_simplify` | `2` | Simplification tolerance (pixels). |
+| `tissue_geojson_preserve_topology` | `true` | Preserve topology during simplification. |
+| `tissue_geojson_fill_holes` | `true` | Remove interior holes in polygons. |
+| `tissue_geojson_cpus` | `8` | CPU request for GeoJSON conversion step. |
+| `tissue_geojson_memory_gb` | `16` | RAM request (GB) for GeoJSON conversion step. |
+| `tissue_geojson_time` | `6h` | Wall time request for GeoJSON conversion step. |
 
-Higher downsample reduces RAM and runtime for large images.
+## Cell-to-ROI assignment
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `assign_script` | `bin/map_cells_to_roi_polygons.py` | Assignment script path. |
+| `assign_label_prop` | `name` | ROI property used as label. |
+| `assign_out_col` | `polygon_label` | Output column name for assigned label. |
+| `assign_choose` | `smallest` | Rule when multiple polygons contain a cell. |
+| `assign_chunk_rows` | `20000` | CSV chunk size during assignment. |
+| `assign_xcol` | `null` | Optional custom X coordinate column in objects CSV. |
+| `assign_ycol` | `null` | Optional custom Y coordinate column in objects CSV. |
+| `assign_cpus` | `12` | CPU request for assignment step. |
+| `assign_memory_gb` | `24` | RAM request (GB) for assignment step. |
+| `assign_time` | `6h` | Wall time request for assignment step. |
+
+## Cytoplasm expansion
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `expand_script` | `bin/expand_labels_to_cytoplasm.py` | Cytoplasm expansion script path. |
+| `expand_px` | `12` | Expansion distance in pixels. |
+| `expand_compression` | `zlib` | Compression mode for expanded label TIFF output. |
+| `expand_cpus` | `8` | CPU request for expansion step. |
+| `expand_memory_gb` | `16` | RAM request (GB) for expansion step. |
+| `expand_time` | `4h` | Wall time request for expansion step. |
+
+## UNI / UNI-2 embeddings
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `uni2_script` | `bin/extract_uni2_embeddings.py` | UNI embedding script path. |
+| `uni2_image_level` | `0` | Image pyramid level used for tiles. |
+| `uni2_force_full_image` | `true` | Force full image load before sampling tiles. |
+| `uni2_grid` | `10x10` | Spatial grid for batching cells/tiles. |
+| `uni2_tile_size` | `224` | Tile size in pixels. |
+| `uni2_save_tiles` | `true` | Save extracted tiles to disk. |
+| `uni2_tiles_root` | `tiles` | Root folder name for saved tiles. |
+| `uni2_bucket_size` | `5000` | Number of cells per tile subfolder bucket. |
+| `uni2_min_area` | `0` | Minimum cell area filter before embeddings. |
+| `uni2_encoder` | `uni2-h` | Encoder preset/name (UNI2 default). |
+| `uni2_backend` | `auto` | Backend choice (`auto`, `timm_hf`, `hf_transformers`, `dinov2_hub`). |
+| `uni2_pooling` | `auto` | Token pooling strategy. |
+| `uni2_img_size` | `224` | Model input image size. |
+| `uni2_batch` | `64` | Embedding batch size. |
+| `uni2_torch_threads` | `16` | Torch thread count. |
+| `uni2_rows_per_csv` | `10000` | Rows written per embedding CSV shard. |
+| `uni2_mask_block` | `4096` | Block size for mask streaming. |
+| `uni2_cpus` | `16` | CPU request for UNI step. |
+| `uni2_memory_gb` | `48` | RAM request (GB) for UNI step. |
+| `uni2_time` | `24h` | Wall time request for UNI step. |
+
+## Hugging Face cache/token wiring
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `hf_home` | `${baseDir}/.hf_cache` | Hugging Face home/cache root path. |
+| `hf_hub_cache` | `${baseDir}/.hf_cache/hub` | Hugging Face hub cache path. |
+| `hf_token_env_var_name` | `HF_TOKEN` | Environment variable name read for token. |
+
+## R / KODAMA step
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `r_script` | `bin/run_kodama_analysis.R` | R script path for KODAMA analysis. |
+| `r_cpus` | `8` | CPU request for R/KODAMA step. |
+| `r_memory_gb` | `24` | RAM request (GB) for R/KODAMA step. |
+| `r_time` | `8h` | Wall time request for R/KODAMA step. |
