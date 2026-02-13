@@ -5,42 +5,31 @@ dependencies:
   - python=3.11
   - pip
 
-  # segmentation / spatial stack (as before)
-  - stardist
-  - csbdeep
-  - scanpy
-  - squidpy
-  - anndata
-  - spatialdata
-  - spatialdata-plot
-  - ome-zarr
-  - zarr
-  - dask
-  - dask-image
-
-  # core scientific + IO
+  # Core scientific + image I/O
   - numpy
   - scipy
   - pandas
-  - scikit-learn
   - scikit-image
-  - matplotlib
+  - matplotlib-base
   - tqdm
   - pillow
   - tifffile
   - imagecodecs
 
-  # optional but commonly used in your pipeline
-  - opencv
-  - py-opencv
-  - pyarrow
-  - geopandas
+  # Geometry / geospatial
+  - shapely
 
-  # deep learning (needed by embeddings script)
+  # WSI + tiled image handling
+  - pyvips
+  - openslide
+  - openslide-python
+  - zarr
+
+  # Deep learning (UNI-2)
   - pytorch
   - torchvision
 
-  # UNI/UNI2 + HF login / model loading
+  # UNI-2 model loading
   - huggingface_hub
   - transformers
   - timm
@@ -48,6 +37,7 @@ dependencies:
   - safetensors
   - einops
 
-  # WSI support (recommended)
-  - openslide
-  - openslide-python
+  # StarDist stack installed through pip for ARM compatibility
+  - pip:
+    - stardist
+    - csbdeep

@@ -1,0 +1,30 @@
+# CellPhenotyper runtime parameters
+# Usage:
+#   nextflow run main.nf -profile singularity -params-file pipeline_paramers.yml -resume
+
+# Starting point (inputs)
+image_input: Data/ROI.ome.tif
+roi_geojson: Data/ROI.geojson
+
+# Endpoint (outputs)
+outdir_base: results_full
+
+# Pipeline mode
+run_full_pipeline: true
+tissue_mask_from_input: false
+compute_device: cpu   # cpu | gpu | auto
+start_point: convert
+end_point: auto
+# Allowed stage names for start/end:
+# convert, stardist, tissue_mask, tissue_geojson, cell_assignment, cytoplasm, uni2, kodama
+
+# Runtime image selection
+singularity_image: singularity-stardist_UNI-2.sif
+docker_image: cellphenotyper:full-cpu
+
+# Global resource caps
+max_cpus: 8
+max_memory_gb: 32
+
+# UNI-2 token variable name
+hf_token_env_var_name: HF_TOKEN

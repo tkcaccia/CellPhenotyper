@@ -17,8 +17,18 @@ From: ubuntu:22.04
     openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-  # micromamba install
-  curl -Ls -o /tmp/micromamba.tar.bz2 https://micro.mamba.pm/api/micromamba/linux-64/latest
+  # micromamba install (arch-aware)
+  MM_ARCH="$(uname -m)"
+  if [ "${MM_ARCH}" = "x86_64" ]; then
+    MM_PLATFORM="linux-64"
+  elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then
+    MM_PLATFORM="linux-aarch64"
+  else
+    echo "Unsupported architecture for micromamba: ${MM_ARCH}" >&2
+    exit 1
+  fi
+
+  curl -Ls -o /tmp/micromamba.tar.bz2 "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest"
   tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba
   install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba
   rm -rf /tmp/micromamba.tar.bz2 /tmp/bin
@@ -27,6 +37,14 @@ From: ubuntu:22.04
 
   # Python environment
   micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge
+
+  # Ensure key Python modules are available even when conda packages differ by arch.
+  if ! micromamba run -n stardist python -c "import stardist, csbdeep" >/dev/null 2>&1; then
+    micromamba run -n stardist pip install --no-cache-dir stardist csbdeep
+  fi
+  if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then
+    micromamba run -n stardist pip install --no-cache-dir imagecodecs
+  fi
 
   # OME tools
   micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff

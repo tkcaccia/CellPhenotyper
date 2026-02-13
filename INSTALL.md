@@ -175,20 +175,39 @@ cd CellPhenotyper
 
 ## Step 6-S (Singularity images)
 
-Full CPU image:
+If you already have the project image `singularity-stardist_UNI-2.sif`, place it in the repository root and skip build:
 
 ```bash
-sudo singularity build --force \
-  singularity/cellphenotyper_full_cpu.sif \
-  singularity/cellphenotyper_full_cpu.def
+ls -lh singularity-stardist_UNI-2.sif
 ```
 
-Full GPU image (Linux x86_64 + NVIDIA hosts):
+Build each image once, then reuse it for all runs.
+Rebuild only when the matching `.def` file changes.
+
+Check current images:
 
 ```bash
-sudo singularity build --force \
-  singularity/cellphenotyper_full_gpu.sif \
-  singularity/cellphenotyper_full_gpu.def
+ls -lh singularity/*.sif
+```
+
+Full CPU image (create only if missing):
+
+```bash
+if [ ! -f singularity/cellphenotyper_full_cpu.sif ]; then
+  sudo singularity build \
+    singularity/cellphenotyper_full_cpu.sif \
+    singularity/cellphenotyper_full_cpu.def
+fi
+```
+
+Full GPU image (Linux x86_64 + NVIDIA hosts, create only if missing):
+
+```bash
+if [ ! -f singularity/cellphenotyper_full_gpu.sif ]; then
+  sudo singularity build \
+    singularity/cellphenotyper_full_gpu.sif \
+    singularity/cellphenotyper_full_gpu.def
+fi
 ```
 
 ## Step 6-D (Docker images)
@@ -222,18 +241,16 @@ The pipeline reads this token from env var `HF_TOKEN` by default.
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
+First, edit `pipeline_paramers.yml` with your runtime choices (`image_input`, `roi_geojson`, `compute_device`, `singularity_image`, resource caps).
+To control where the pipeline starts/stops, set `start_point` and `end_point` in the same file.
+For the provided project image, keep:
+
+- `singularity_image: singularity-stardist_UNI-2.sif`
+
 ```bash
 nextflow run main.nf \
   -profile singularity \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --singularity_image singularity/cellphenotyper_full_cpu.sif \
-  --run_full_pipeline true \
-  --tissue_mask_from_input false \
-  --compute_device cpu \
-  --outdir_base results_full \
-  --max_cpus 8 \
-  --max_memory_gb 32 \
+  -params-file pipeline_paramers.yml \
   -with-report results_full/report.html \
   -with-trace results_full/trace.txt \
   -with-timeline results_full/timeline.html \
@@ -242,23 +259,15 @@ nextflow run main.nf \
 
 For GPU run, set:
 
-- `--compute_device gpu`
-- `--singularity_image singularity/cellphenotyper_full_gpu.sif`
+- `compute_device: gpu` in `pipeline_paramers.yml`
+- `singularity_image: singularity/cellphenotyper_full_gpu.sif` in `pipeline_paramers.yml`
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 
 ```bash
 nextflow run main.nf \
   -profile docker \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --docker_image cellphenotyper:full-cpu \
-  --run_full_pipeline true \
-  --tissue_mask_from_input false \
-  --compute_device cpu \
-  --outdir_base results_full \
-  --max_cpus 8 \
-  --max_memory_gb 32 \
+  -params-file pipeline_paramers.yml \
   -with-report results_full/report.html \
   -with-trace results_full/trace.txt \
   -with-timeline results_full/timeline.html \
@@ -267,5 +276,5 @@ nextflow run main.nf \
 
 For GPU run, set:
 
-- `--compute_device gpu`
-- `--docker_image cellphenotyper:full-gpu`
+- `compute_device: gpu` in `pipeline_paramers.yml`
+- `docker_image: cellphenotyper:full-gpu` in `pipeline_paramers.yml`
