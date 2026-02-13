@@ -1,50 +1,22 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 workflow that takes an image (`.ome.tif` or `.btf`) and an ROI GeoJSON, performs segmentation and tissue delineation, and can run a full downstream analysis including UNI-2 embeddings and KODAMA outputs.
+CellPhenotyper runs with **Nextflow** as the main command (`nextflow run main.nf`).
 
-## Quick start (full pipeline with UNI-2, ROI.ome.tif)
+## Installation
 
-## 1) Prerequisites
+Use the dedicated installation page:
 
-- Nextflow `25.10.2` or newer
-- Java 17+
-- Singularity/Apptainer
+- `INSTALL.md`
 
-On macOS M1/M2, run inside Lima first:
+That page includes:
 
-```bash
-limactl shell default
-```
+- Ubuntu, macOS, and Windows setup
+- both Singularity and Docker runtime paths
+- start/end step options so users can begin from the right point
 
-Install helper packages in Lima:
+## Complete ROI example (full pipeline + UNI-2)
 
-```bash
-sudo apt-get update
-sudo apt-get install -y apptainer squashfuse fuse2fs gocryptfs
-```
-
-## 2) Build the Singularity image
-
-From repository root:
-
-```bash
-sudo singularity build --force \
-  singularity/cellphenotyper_full_cpu.sif \
-  singularity/cellphenotyper_full_cpu.def
-```
-
-## 3) Configure UNI-2 token (Hugging Face)
-
-1. Sign in to [Hugging Face](https://huggingface.co)
-2. Request access to [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h)
-3. Create a read token at [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-4. Export the token:
-
-```bash
-export HF_TOKEN="<your_hf_read_token>"
-```
-
-## 4) Run the complete pipeline with Nextflow
+After completing installation through `INSTALL.md` (including token setup), run:
 
 ```bash
 nextflow run main.nf \
@@ -64,33 +36,27 @@ nextflow run main.nf \
   -resume
 ```
 
-For NVIDIA GPU hosts, use:
+For Docker runtime, use the equivalent command in `INSTALL.md` at **Step 8-D**.
 
-- `--compute_device gpu`
-- a GPU-capable image (`singularity/cellphenotyper_full_gpu.sif`)
+Main outputs:
 
-## 5) Expected main outputs
+- `results_full/04_tissue_geojson/`
+- `results_full/05_cell_assignments/`
+- `results_full/06_cytoplasm/`
+- `results_full/07_embeddings/`
+- `results_full/08_kodama/`
 
-- Tissue GeoJSON: `results_full/04_tissue_geojson/`
-- Cell assignments: `results_full/05_cell_assignments/`
-- Cytoplasm masks: `results_full/06_cytoplasm/`
-- UNI-2 embeddings: `results_full/07_embeddings/`
-- KODAMA output: `results_full/08_kodama/`
-
-Validated tissue GeoJSON example committed in this repo:
+Validated tissue GeoJSON example committed in this repository:
 
 - `examples/validated_outputs/ROI_tissue_mask.geojson`
 
 ## Where to modify parameters
 
-All parameters are defined in:
+Edit defaults in:
 
-- `nextflow.config` inside the top-level `params { ... }` block
+- `nextflow.config` (inside `params { ... }`)
 
-You can change values in two ways:
-
-1. Permanent default change: edit `nextflow.config`
-2. Per-run override: pass `--parameter_name value` in `nextflow run`
+Or override per run from CLI with `--parameter value`.
 
 Example override:
 
@@ -103,7 +69,6 @@ nextflow run main.nf -profile singularity \
   --max_memory_gb 48 \
   --uni2_batch 32
 ```
-
 ## Complete parameter reference
 
 Every parameter below can be modified in `nextflow.config` (`params`) or overridden on the CLI with `--<name>`.
