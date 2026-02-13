@@ -21,6 +21,7 @@ Data/*.btf
 
 # local container artifacts
 singularity/*.sif
+singularity-stardist_UNI-2.sif
 
 # runtime outputs
 *.html

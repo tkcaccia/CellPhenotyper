@@ -1,6 +1,9 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for tissue segmentation, cell-level feature extraction, UNI-2 embeddings, and KODAMA downstream analysis.
+CellPhenotyper is a fully reproducible, modular computational pathology workflow that takes raw H&E whole-slide images to quantitative cell-level phenotypes.  
+The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, and unsupervised KODAMA analysis to stratify cells into coherent phenotypic groups for exploratory spatial discovery.
+
+The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
 The default Singularity runtime image used by the parameter file is `singularity-stardist_UNI-2.sif`.
 
 The main entrypoint is always:
