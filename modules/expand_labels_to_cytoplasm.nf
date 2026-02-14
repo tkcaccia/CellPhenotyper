@@ -24,6 +24,9 @@ process EXPAND_LABELS_TO_CYTOPLASM {
       --labels "${labels_tif}" \\
       --out "${sample_id}_${label_kind}.tif" \\
       --expand-px ${params.expand_px} \\
+      --mode "${params.expand_mode}" \\
+      --tile-size ${params.expand_tile_size} \\
+      --auto-threshold-mpix ${params.expand_auto_threshold_mpix} \\
       ${compression_flag}
     """
 

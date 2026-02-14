@@ -105,11 +105,25 @@ nextflow run main.nf -profile singularity \
 | `tissue_geojson_memory_gb` | `16` | RAM allocation. |
 | `tissue_geojson_time` | `6h` | Time allocation. |
 
+## Cytoplasm expansion
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `expand_px` | `12` | Expansion radius (pixels). |
+| `expand_full_labels` | `true` | Also expand `labels_full.tif` to `labels_full_cyto.tif`. |
+| `expand_mode` | `auto` | `auto`, `full`, or `tiled` expansion strategy. |
+| `expand_tile_size` | `2048` | Core tile size used in tiled mode. |
+| `expand_auto_threshold_mpix` | `25.0` | In `auto` mode, switch to tiled when image is larger than this MP threshold. |
+| `expand_compression` | `zlib` | TIFF compression for output mask. |
+| `expand_cpus` | `8` | CPU allocation. |
+| `expand_memory_gb` | `16` | RAM allocation. |
+| `expand_time` | `4h` | Time allocation. |
+
 ## Cell assignment + cytoplasm + UNI-2 + R
 
 | Parameter group | Key controls |
 |---|---|
 | Cell assignment | `assign_*` |
-| Cytoplasm expansion | `expand_*` (`expand_full_labels=false` skips full-image cytoplasm expansion) |
+| Cytoplasm expansion | `expand_*` (`expand_mode`, `expand_tile_size`, `expand_auto_threshold_mpix` control memory-safe tiled expansion; `expand_full_labels=false` skips full-image expansion) |
 | UNI-2 embeddings | `uni2_*`, `hf_*`, `hf_token_env_var_name` |
 | KODAMA R step | `r_*` |

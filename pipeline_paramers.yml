@@ -27,6 +27,9 @@ max_cpus: 8
 max_memory_gb: 32
 stardist_pythonpath: ""
 expand_full_labels: true
+expand_mode: auto
+expand_tile_size: 2048
+expand_auto_threshold_mpix: 25.0
 
 # UNI-2 token variable name
 hf_token_env_file: tokens.env
