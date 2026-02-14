@@ -32,10 +32,9 @@ This runs from StarDist and stops after UNI-2 embeddings.
 ## 1) Run the complete pipeline (Singularity + UNI-2)
 
 UNI-2 requires a valid Hugging Face token with access to `MahmoodLab/UNI2-h`.
+By default the pipeline loads the token from `tokens.env` using `hf_token_env_file` + `hf_token_env_var_name` in `pipeline_paramers.yml`.
 
 ```bash
-export HF_TOKEN="<your_hf_token_with_uni2_access>"
-
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
@@ -48,8 +47,6 @@ nextflow run main.nf \
 ## 2) Run the complete pipeline (Docker + UNI-2)
 
 ```bash
-export HF_TOKEN="<your_hf_token_with_uni2_access>"
-
 nextflow run main.nf \
   -profile docker \
   -params-file pipeline_paramers.yml \

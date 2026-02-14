@@ -218,13 +218,16 @@ Why: UNI-2 model access is authenticated through Hugging Face.
 1. Sign in at [Hugging Face](https://huggingface.co)
 2. Request access to [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h)
 3. Create a read token: [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-4. Export token:
+4. Save token in `tokens.env` (recommended, file is git-ignored):
 
 ```bash
-export HF_TOKEN="<your_hf_read_token>"
+printf 'HF_UNI2="%s"\n' "<your_hf_read_token>" > tokens.env
 ```
 
-The pipeline reads this token from env var `HF_TOKEN` by default.
+By default the pipeline reads token file/variable from:
+
+- `hf_token_env_file: tokens.env`
+- `hf_token_env_var_name: HF_UNI2`
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 

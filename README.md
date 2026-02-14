@@ -6,6 +6,7 @@ The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed
 The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
 Select the runtime image in `pipeline_paramers.yml` using `singularity_image` or `docker_image`.
 For full UNI-2 execution, the Hugging Face token must have access to `MahmoodLab/UNI2-h`.
+Token loading is configured via `hf_token_env_file` and `hf_token_env_var_name` in `pipeline_paramers.yml`.
 
 The main entrypoint is always:
 

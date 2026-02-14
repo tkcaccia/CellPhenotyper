@@ -29,4 +29,5 @@ stardist_pythonpath: ""
 expand_full_labels: true
 
 # UNI-2 token variable name
-hf_token_env_var_name: HF_TOKEN
+hf_token_env_file: tokens.env
+hf_token_env_var_name: HF_UNI2

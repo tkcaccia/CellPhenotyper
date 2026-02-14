@@ -36,6 +36,7 @@ nextflow run main.nf -profile singularity \
 | `max_cpus` | `Runtime.runtime.availableProcessors()` | Global CPU cap. |
 | `max_memory_gb` | `64` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
+| `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `tissue_geojson`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`.

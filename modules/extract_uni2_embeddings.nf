@@ -20,13 +20,28 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def save_tiles_flag = params.uni2_save_tiles ? '--save-tiles' : ''
     def device_value = params.compute_device == 'gpu' ? 'cuda' : (params.compute_device == 'auto' ? params.uni2_device_auto : 'cpu')
     def uni2_script = "${projectDir}/${params.uni2_script}"
+    def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     """
     set -euo pipefail
 
+    TOKEN_ENV_FILE="${token_env_file}"
     TOKEN_VAR_NAME="${params.hf_token_env_var_name ?: 'HF_TOKEN'}"
+    if [[ -n "\$TOKEN_ENV_FILE" && -f "\$TOKEN_ENV_FILE" ]]; then
+      set -a
+      # shellcheck disable=SC1090
+      source "\$TOKEN_ENV_FILE"
+      set +a
+    fi
+
     export HF_HOME="${params.hf_home}"
     export HF_HUB_CACHE="${params.hf_hub_cache}"
     export HF_TOKEN="\$(printenv "\$TOKEN_VAR_NAME" || true)"
+    if [[ -z "\$HF_TOKEN" ]]; then
+      export HF_TOKEN="\$(printenv HF_TOKEN || true)"
+    fi
+    if [[ -z "\$HF_TOKEN" ]]; then
+      export HF_TOKEN="\$(printenv HF_UNI2 || true)"
+    fi
 
     export OMP_NUM_THREADS=1
     export MKL_NUM_THREADS=1
