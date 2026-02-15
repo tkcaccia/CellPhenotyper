@@ -27,7 +27,7 @@ nextflow run main.nf -profile singularity \
 | `outdir_base` | `results` | Base output directory. |
 | `run_full_pipeline` | `true` | Run complete workflow including UNI-2 and KODAMA. |
 | `start_point` | `convert` | Stage where execution starts. |
-| `end_point` | `auto` | Stage where execution stops (`auto` = `kodama` if full pipeline, else `tissue_geojson`). |
+| `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_geojson`). |
 | `tissue_mask_from_input` | `false` | Build tissue mask from input image directly. |
 | `compute_device` | `cpu` | `cpu`, `gpu`, or `auto`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
@@ -39,7 +39,7 @@ nextflow run main.nf -profile singularity \
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
 
 `start_point` / `end_point` allowed values:
-`convert`, `stardist`, `tissue_mask`, `tissue_geojson`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`.
+`convert`, `stardist`, `tissue_mask`, `tissue_geojson`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
 
 ## Conversion (`.btf` -> `.ome.tif`)
 
@@ -119,7 +119,7 @@ nextflow run main.nf -profile singularity \
 | `expand_memory_gb` | `16` | RAM allocation. |
 | `expand_time` | `4h` | Time allocation. |
 
-## Cell assignment + cytoplasm + UNI-2 + R
+## Cell assignment + cytoplasm + UNI-2 + KODAMA + post-KODAMA
 
 | Parameter group | Key controls |
 |---|---|
@@ -127,3 +127,7 @@ nextflow run main.nf -profile singularity \
 | Cytoplasm expansion | `expand_*` (`expand_mode`, `expand_tile_size`, `expand_auto_threshold_mpix` control memory-safe tiled expansion; `expand_full_labels=false` skips full-image expansion) |
 | UNI-2 embeddings | `uni2_*`, `hf_*`, `hf_token_env_var_name` |
 | KODAMA R step | `r_*` |
+| KODAMA clustering | `cluster_*` |
+| Cluster mask build | `cluster_mask_*` |
+| Grow clusters to tissue | `grow_*` |
+| Final cluster GeoJSON | `cluster_geojson_*` |

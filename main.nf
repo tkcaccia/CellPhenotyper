@@ -9,6 +9,10 @@ include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_PRIMARY } fro
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_FULL } from './modules/expand_labels_to_cytoplasm'
 include { EXTRACT_UNI2_EMBEDDINGS } from './modules/extract_uni2_embeddings'
 include { RUN_KODAMA_ANALYSIS } from './modules/run_kodama_analysis'
+include { RUN_RCODE_CLUSTERING } from './modules/run_rcode_clustering'
+include { LABELS_TO_CLUSTER_MASK } from './modules/labels_to_cluster_mask'
+include { GROW_TO_TISSUE } from './modules/grow_to_tissue'
+include { MASK_TO_GEOJSON } from './modules/mask_to_geojson'
 
 workflow {
     def roi_geojson = file(params.roi_geojson, checkIfExists: true)
@@ -32,9 +36,18 @@ workflow {
         uni_2           : 'uni2',
         'uni-2'         : 'uni2',
         embeddings      : 'uni2',
-        kodama          : 'kodama'
+        kodama          : 'kodama',
+        clustering      : 'clustering',
+        rcode_clustering: 'clustering',
+        cluster_mask    : 'cluster_mask',
+        labels_to_cluster_mask: 'cluster_mask',
+        grow_tissue     : 'grow_tissue',
+        grow_to_tissue  : 'grow_tissue',
+        cluster_geojson : 'cluster_geojson',
+        mask_to_geojson : 'cluster_geojson',
+        final_geojson   : 'cluster_geojson'
     ]
-    def stage_order = ['convert', 'stardist', 'tissue_mask', 'tissue_geojson', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama']
+    def stage_order = ['convert', 'stardist', 'tissue_mask', 'tissue_geojson', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
     def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
     def normalize_stage = { raw_value, fallback_value ->
@@ -49,7 +62,7 @@ workflow {
         key
     }
 
-    def default_end_point = run_full_pipeline ? 'kodama' : 'tissue_geojson'
+    def default_end_point = run_full_pipeline ? 'cluster_geojson' : 'tissue_geojson'
     def start_point = normalize_stage(params.start_point, 'convert')
     def end_point = normalize_stage(params.end_point, default_end_point)
 
@@ -73,6 +86,11 @@ workflow {
     def run_cytoplasm = should_run_stage('cytoplasm')
     def run_uni2 = should_run_stage('uni2')
     def run_kodama = should_run_stage('kodama')
+    def run_clustering = should_run_stage('clustering')
+    def run_cluster_mask = should_run_stage('cluster_mask')
+    def run_grow_tissue = should_run_stage('grow_tissue')
+    def run_cluster_geojson = should_run_stage('cluster_geojson')
+    def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
 
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
@@ -152,7 +170,7 @@ workflow {
         CONVERT_TISSUE_MASK_TO_GEOJSON(tissue_mask_ch)
     }
 
-    if (run_cell_assignment || run_cytoplasm || run_uni2 || run_kodama) {
+    if (run_cell_assignment || run_cytoplasm || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
         def objects_assigned_ch = Channel.empty()
         if (run_cell_assignment) {
             def assign_input_ch = objects_csv_ch
@@ -193,19 +211,23 @@ workflow {
 
         def tile_embeddings_ch = Channel.empty()
         if (run_uni2) {
-            def uni2_cyto_input_ch = crop_roi_ch
-                .join(cyto_mask_ch)
-                .map { sample_id, crop_roi_tif, cyto_mask_tif ->
-                    tuple(sample_id, crop_roi_tif, cyto_mask_tif, 'cyto', true)
-                }
-
             def uni2_tile_input_ch = crop_roi_ch
                 .join(labels_tif_ch)
                 .map { sample_id, crop_roi_tif, labels_tif ->
                     tuple(sample_id, crop_roi_tif, labels_tif, 'tile', false)
                 }
 
-            EXTRACT_UNI2_EMBEDDINGS(uni2_cyto_input_ch.mix(uni2_tile_input_ch))
+            def uni2_input_ch = uni2_tile_input_ch
+            if (include_uni2_cyto) {
+                def uni2_cyto_input_ch = crop_roi_ch
+                    .join(cyto_mask_ch)
+                    .map { sample_id, crop_roi_tif, cyto_mask_tif ->
+                        tuple(sample_id, crop_roi_tif, cyto_mask_tif, 'cyto', true)
+                    }
+                uni2_input_ch = uni2_input_ch.mix(uni2_cyto_input_ch)
+            }
+
+            EXTRACT_UNI2_EMBEDDINGS(uni2_input_ch)
             tile_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
                 .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'tile' }
                 .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
@@ -215,6 +237,7 @@ workflow {
             }
         }
 
+        def kodama_dir_ch = Channel.empty()
         if (run_kodama) {
             def kodama_input_ch = tile_embeddings_ch
                 .join(objects_assigned_ch)
@@ -222,16 +245,138 @@ workflow {
                     tuple(sample_id, embeddings_dir, objects_assigned)
                 }
             RUN_KODAMA_ANALYSIS(kodama_input_ch)
+            kodama_dir_ch = RUN_KODAMA_ANALYSIS.out.kodama_dir
+        } else if (run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
+            kodama_dir_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/08_kodama/kodama_output", checkIfExists: true))
+            }
+        }
+
+        def cluster_csv_ch = Channel.empty()
+        if (run_clustering) {
+            RUN_RCODE_CLUSTERING(kodama_dir_ch)
+            cluster_csv_ch = RUN_RCODE_CLUSTERING.out.cluster_csv
+        } else if (run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
+            cluster_csv_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/09_clustering/${sample_id}_cluster.csv", checkIfExists: true))
+            }
+        }
+
+        def labels_for_cluster_ch = Channel.empty()
+        if (run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
+            labels_for_cluster_ch = run_cytoplasm
+                ? cyto_mask_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_cyto.tif", checkIfExists: true))
+                }
+        }
+
+        def cluster_mask_ch = Channel.empty()
+        if (run_cluster_mask) {
+            def cluster_mask_input_ch = labels_for_cluster_ch
+                .join(cluster_csv_ch)
+                .map { sample_id, labels_tif, cluster_csv ->
+                    tuple(sample_id, labels_tif, cluster_csv)
+                }
+            LABELS_TO_CLUSTER_MASK(cluster_mask_input_ch)
+            cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask
+        } else if (run_grow_tissue || run_cluster_geojson) {
+            cluster_mask_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/10_cluster_mask/${sample_id}_cluster_mask.tif", checkIfExists: true))
+            }
+        }
+
+        def grown_mask_ch = Channel.empty()
+        if (run_grow_tissue) {
+            def image_for_growth_ch = run_stardist
+                ? crop_roi_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/stardist_out/crop_roi.tif", checkIfExists: true))
+                }
+            def tissue_mask_for_growth_ch = run_tissue_mask
+                ? tissue_mask_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/03_tissue_mask/${sample_id}_tissue_mask.tif", checkIfExists: true))
+                }
+
+            def grow_input_ch = image_for_growth_ch
+                .join(cluster_mask_ch)
+                .join(tissue_mask_for_growth_ch)
+                .map { sample_id, image_tif, cluster_mask_tif, tissue_mask_tif ->
+                    tuple(sample_id, image_tif, cluster_mask_tif, tissue_mask_tif)
+                }
+            GROW_TO_TISSUE(grow_input_ch)
+            grown_mask_ch = GROW_TO_TISSUE.out.grown_mask
+        } else if (run_cluster_geojson) {
+            grown_mask_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/11_grown_tissue/${sample_id}_grown_mask.ome.tif", checkIfExists: true))
+            }
+        }
+
+        if (run_cluster_geojson) {
+            MASK_TO_GEOJSON(grown_mask_ch)
         }
     }
 }
 
 workflow.onComplete {
+    def outdir = params.outdir_base ?: 'results'
+    def executionDir = new File("${outdir}/00_execution")
+    executionDir.mkdirs()
+
+    def stageDirs = [
+        '01_input',
+        '02_stardist',
+        '03_tissue_mask',
+        '04_tissue_geojson',
+        '05_cell_assignments',
+        '06_cytoplasm',
+        '07_embeddings',
+        '08_kodama',
+        '08_kodama_logs',
+        '09_clustering',
+        '09_clustering_logs',
+        '10_cluster_mask',
+        '11_grown_tissue',
+        '12_cluster_geojson',
+        '00_execution'
+    ]
+
+    def manifest = new File(executionDir, 'outputs_manifest.txt')
+    def lines = []
+    lines << "CellPhenotyper Output Manifest"
+    lines << "Run name: ${workflow.runName}"
+    lines << "Success: ${workflow.success}"
+    lines << "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
+    lines << ""
+    lines << "Stage folders under: ${outdir}"
+    stageDirs.each { dirName ->
+        def dir = new File(outdir, dirName)
+        def status = dir.exists() ? 'PRESENT' : 'MISSING'
+        lines << "${status}\t${dir.path}"
+    }
+    manifest.text = lines.join('\n') + '\n'
+
+    // Keep backward-compatible top-level report filename in sync with latest run report.
+    def runReport = new File(executionDir, 'report.html')
+    def legacyGeojsonReport = new File(outdir, 'report_tissue_geojson.html')
+    if (runReport.exists()) {
+        legacyGeojsonReport.bytes = runReport.bytes
+    }
+
     if (workflow.success) {
         println "PIPELINE COMPLETED SUCCESSFULLY"
-        println "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'tissue_geojson'}"
+        println "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
+        println "Execution reports dir: ${outdir}/00_execution"
+        println "Output manifest: ${outdir}/00_execution/outputs_manifest.txt"
         if ((params._resolved_end_point ?: '') in ['tissue_geojson', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama']) {
             println "Tissue GeoJSON output dir: ${params.outdir_base}/04_tissue_geojson"
         }
+        if ((params._resolved_end_point ?: '') in ['clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']) {
+            println "Cluster GeoJSON output dir: ${params.outdir_base}/12_cluster_geojson"
+        }
+    } else {
+        println "Execution reports dir: ${outdir}/00_execution"
+        println "Output manifest: ${outdir}/00_execution/outputs_manifest.txt"
     }
 }

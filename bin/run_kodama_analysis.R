@@ -27,21 +27,32 @@ an = read.csv(annot,row.names=1)
 
 ll=list.files( uni2_folder,full.names=TRUE,recursive=TRUE)
 r_tile=NULL
-for(ii in 1:length(ll)){
-  if(endsWith(ll[ii], "csv.gz")){
-    df <- fread(ll[ii])
-    r_tile <- rbind(r_tile, df)
+if (length(ll) > 0) {
+  for (ii in seq_along(ll)) {
+    if (!is.na(ll[ii]) && endsWith(ll[ii], "csv.gz")) {
+      df <- fread(ll[ii])
+      r_tile <- rbind(r_tile, df)
+    }
   }
+}
+if (is.null(r_tile) || nrow(r_tile) == 0) {
+  stop(paste("No UNI-2 tile embedding files found in", uni2_folder))
 }
 
 
-ll=list.files( "embeddings_uni2_cyto",full.names=TRUE,recursive=TRUE)
+ll=list.files("embeddings_uni2_cyto",full.names=TRUE,recursive=TRUE)
 r_nuclei=NULL
-for(ii in 1:length(ll)){
-  if(endsWith(ll[ii], "csv.gz")){
-    df <- fread(ll[ii])
-    r_nuclei <- rbind(r_nuclei, df)
+if (length(ll) > 0) {
+  for (ii in seq_along(ll)) {
+    if (!is.na(ll[ii]) && endsWith(ll[ii], "csv.gz")) {
+      df <- fread(ll[ii])
+      r_nuclei <- rbind(r_nuclei, df)
+    }
   }
+}
+if (is.null(r_nuclei) || nrow(r_nuclei) == 0) {
+  message("No cytoplasm embedding files found; reusing tile embeddings.")
+  r_nuclei <- copy(r_tile)
 }
 
 
@@ -93,7 +104,19 @@ data=cbind(r_tile,r_nuclei)
 
 
 data2=scale(data)
-pca_results <- irlba(A = data2, nv = 50)
+# Guard against low-sample runs and constant columns
+data2[is.na(data2)] <- 0
+max_nv <- min(50, nrow(data2) - 1, ncol(data2) - 1)
+if (is.na(max_nv) || max_nv < 2) {
+  stop(
+    paste0(
+      "Not enough observations/features for PCA after preprocessing: ",
+      "nrow=", nrow(data2), ", ncol=", ncol(data2),
+      ". Need at least 3 cells and 3 varying features."
+    )
+  )
+}
+pca_results <- irlba(A = data2, nv = max_nv)
 pca <- pca_results$u %*% diag(pca_results$d)
 
 
@@ -112,12 +135,13 @@ if (!dir.exists(output)) {
 }
 
 
-txt=paste(output,"/pca_full_20.pdf",sep="")
+pca_dim <- ncol(pca)
+txt=paste(output,"/pca_full_",pca_dim,".pdf",sep="")
 pdf(txt)
 plot(pca,pch=20,col=lab)
 dev.off()
 
-txt=paste(output,"/pca_full_20.RData",sep="")
+txt=paste(output,"/pca_full_",pca_dim,".RData",sep="")
 save(pca,xy,file=txt)
 
 
@@ -125,112 +149,39 @@ save(pca,xy,file=txt)
 
 u=umap(pca)$layout
 rownames(u)=a
-txt=paste(output,"/umap_full_20.pdf",sep="")
+txt=paste(output,"/umap_full_",pca_dim,".pdf",sep="")
 pdf(txt)
 plot(u,pch=20,col=lab,cex=0.5)
 dev.off()
 
 rownames(u)=a
-txt=paste(output,"/umap_full_20.RData",sep="")
+txt=paste(output,"/umap_full_",pca_dim,".RData",sep="")
 save(u,xy,an,a,an,lab,file=txt)
 
 
-if(TRUE){
-	jj=KODAMA.matrix.parallel(pca[,1:10],
-                          spatial = xy,
-                          landmarks = 10000,
-                          n.cores=8,
-                          seed = 543210,
-	                  ancestry=FALSE)
+dims_to_run <- 10 
+jj <- KODAMA.matrix.parallel(pca[, 1: dims_to_run, drop = FALSE],
+        spatial = spatial_for_kodama,
+        landmarks = 1000,
+        n.cores = 4,
+        seed = 543210,
+        ancestry = FALSE
+      )
 
-        config=umap.defaults
-        config$n_neighbors=30
-        config$n_threads = 8
-        vis <- KODAMA.visualization(jj, config=config)
+config <- umap.defaults
+config$n_neighbors <- min(30, nrow(pca) - 1)
+config$n_threads <- 4
+vis <- KODAMA.visualization(jj, config = config)
+    
 
+rownames(vis) <- a
+txt <- paste(output, "/kodama_full_", dims_to_run, ".pdf", sep = "")
+pdf(txt)
+plot(vis, pch = 20, col = lab, cex = 0.5)
+dev.off()
 
-        rownames(vis)=a
-        txt=paste(output,"/kodama_full_10.pdf",sep="")
-        pdf(txt)
-        plot(vis,pch=20,col=lab,cex=0.5)
-        dev.off()
-
-        txt=paste(output,"/kodama_full_10.RData",sep="")
-        save(vis,xy,a,an,lab,file=txt)
-
-
-        jj=KODAMA.matrix.parallel(pca[,1:20],
-                          spatial = xy,
-                          landmarks = 10000,
-                          n.cores=8,
-                          seed = 543210,
-                          ancestry=FALSE)
-
-        config=umap.defaults
-        config$n_neighbors=30
-        config$n_threads = 8
-        vis <- KODAMA.visualization(jj, config=config)
-
-
-        rownames(vis)=a
-        txt=paste(output,"/kodama_full_20.pdf",sep="")
-        pdf(txt)
-        plot(vis,pch=20,col=lab,cex=0.5)
-        dev.off()
-
-        txt=paste(output,"/kodama_full_20.RData",sep="")
-        save(vis,xy,a,an,lab,file=txt)
-
-
-        jj=KODAMA.matrix.parallel(pca[,1:30],
-                          spatial = xy,
-                          landmarks = 10000,
-                          n.cores=8,
-                          seed = 543210,
-                          ancestry=FALSE)
-
-        config=umap.defaults
-      #  config$n_neighbors=30
-        config$n_threads = 8
-        vis <- KODAMA.visualization(jj, config=config)
-
-
-        rownames(vis)=a
-        txt=paste(output,"/kodama_full_30.pdf",sep="")
-        pdf(txt)
-        plot(vis,pch=20,col=lab,cex=0.5)
-        dev.off()
-
-        txt=paste(output,"/kodama_full_30.RData",sep="")
-        save(vis,xy,a,an,lab,file=txt)
-
-        jj=KODAMA.matrix.parallel(pca,
-                          spatial = xy,
-                          landmarks = 10000,
-                          n.cores=8,
-                          seed = 543210,
-                          ancestry=FALSE)
-
-        config=umap.defaults
-      #  config$n_neighbors=30
-        config$n_threads = 8
-        vis <- KODAMA.visualization(jj, config=config)
-
-
-        rownames(vis)=a
-        txt=paste(output,"/kodama_full_50.pdf",sep="")
-        pdf(txt)
-        plot(vis,pch=20,col=lab,cex=0.5)
-        dev.off()
-
-        txt=paste(output,"/kodama_full_50.RData",sep="")
-        save(vis,xy,a,an,lab,file=txt)
-
-
-}
-
-
-
-
+txt <- paste(output, "/kodama_full_", dims_to_run, ".RData", sep = "")
+save(vis, xy, a, an, lab, file = txt)
+  
 
 

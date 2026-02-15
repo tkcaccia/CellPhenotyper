@@ -16,7 +16,8 @@ compute_device: cpu   # cpu | gpu | auto
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, stardist, tissue_mask, tissue_geojson, cell_assignment, cytoplasm, uni2, kodama
+# convert, stardist, tissue_mask, tissue_geojson, cell_assignment, cytoplasm, uni2,
+# kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
 singularity_image: singularity-stardist_UNI-2-m1.sif
@@ -34,3 +35,4 @@ expand_auto_threshold_mpix: 25.0
 # UNI-2 token variable name
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
+uni2_include_cyto: true

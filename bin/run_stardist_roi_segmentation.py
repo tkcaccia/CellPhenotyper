@@ -77,8 +77,15 @@ def write_full_labels_zarr(full_out: Path, labels_crop: np.ndarray, x0: int, y0:
 
 import zarr
 
-# IMPORTANT: import StarDist early (per Squidpy tutorial)
-from stardist.models import StarDist2D
+STARDIST_AVAILABLE = True
+STARDIST_IMPORT_ERROR = None
+try:
+    # IMPORTANT: import StarDist early (per Squidpy tutorial)
+    from stardist.models import StarDist2D
+except Exception as e:
+    STARDIST_AVAILABLE = False
+    STARDIST_IMPORT_ERROR = e
+    StarDist2D = None
 
 def load_stardist_model_filtered(model_name: str):
     """
@@ -87,6 +94,9 @@ def load_stardist_model_filtered(model_name: str):
     Those values are the model's recommended defaults from thresholds.json and are NOT used
     if you pass your own prob_thresh/nms_thresh to predict_instances().
     """
+    if not STARDIST_AVAILABLE:
+        raise RuntimeError(f"StarDist import failed: {STARDIST_IMPORT_ERROR}")
+
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
         model = StarDist2D.from_pretrained(model_name)
@@ -100,7 +110,30 @@ def load_stardist_model_filtered(model_name: str):
         print(line, flush=True)
     return model
 
-from stardist.plot import render_label
+if STARDIST_AVAILABLE:
+    from stardist.plot import render_label
+else:
+    def render_label(labels: np.ndarray, img: Optional[np.ndarray] = None) -> np.ndarray:
+        """Fallback overlay when stardist.plot is unavailable."""
+        if img is None:
+            base = np.zeros((labels.shape[0], labels.shape[1], 3), dtype=np.float32)
+        else:
+            arr = np.asarray(img)
+            if arr.ndim == 2:
+                base = np.repeat(arr[..., None], 3, axis=2)
+            elif arr.ndim == 3 and arr.shape[-1] == 1:
+                base = np.repeat(arr, 3, axis=2)
+            else:
+                base = arr[..., :3]
+            base = base.astype(np.float32, copy=False)
+            vmax = float(np.max(base)) if base.size else 1.0
+            if vmax > 1.0:
+                base = base / vmax
+            base = np.clip(base, 0.0, 1.0)
+        b = find_boundaries(labels, mode="outer")
+        out = base.copy()
+        out[b] = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        return out
 
 import pandas as pd
 import matplotlib
@@ -658,6 +691,29 @@ def stardist_segment_roi(img_yxc: np.ndarray, roi_mask: np.ndarray,
 
     return labels.astype(np.uint32), details
 
+
+def load_precomputed_labels_crop(full_labels_path: str, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+    """Load a crop from a precomputed full-size labels map (TIFF or Zarr)."""
+    p = Path(full_labels_path)
+    if not p.exists():
+        die(f"Precomputed labels not found: {p}")
+
+    if p.is_dir() or str(p).lower().endswith(".zarr"):
+        z = zarr.open(str(p), mode="r")
+        arr = np.asarray(z[int(y0):int(y1), int(x0):int(x1)])
+    else:
+        try:
+            mm = tifffile.memmap(str(p), mode="r")
+            arr = np.asarray(mm[int(y0):int(y1), int(x0):int(x1)])
+        except Exception:
+            # Some TIFFs are compressed/non-mappable; fallback to regular read.
+            full = tifffile.imread(str(p))
+            arr = np.asarray(full[int(y0):int(y1), int(x0):int(x1)])
+
+    if arr.ndim != 2:
+        die(f"Precomputed labels must be 2D, got {arr.shape}")
+    return arr.astype(np.uint32, copy=False)
+
 def labels_to_geojson_polygons(labels: np.ndarray, out_geojson: Path,
                               max_objects: int = 0, offset_x: float = 0.0, offset_y: float = 0.0) -> None:
     """
@@ -846,6 +902,8 @@ def main() -> None:
                     help="Chunk size for Zarr full labels (pixels). Larger chunks = fewer files but higher write bursts. Default 2048.")
     ap.add_argument("--allow-huge-tif", action="store_true", default=False,
                     help="Allow writing a huge full-size TIFF (may require enormous disk/RAM). If not set, the script will refuse very large TIFFs.")
+    ap.add_argument("--precomputed-labels-full", default="",
+                    help="Optional full-size labels map used as fallback when StarDist/TensorFlow is unavailable.")
     ap.add_argument("--write-polygons", action="store_true", default=False,
                     help="Write segmentation polygons GeoJSON (VERY slow on large WSIs). Default: off.")
     ap.add_argument("--max-polygons", type=int, default=0,
@@ -926,16 +984,35 @@ def main() -> None:
     model_name = choose_model(img_yxc, args.model)
     log(f"Using StarDist model: {model_name}")
 
-    labels, details = stardist_segment_roi(
-        img_yxc=img_yxc,
-        roi_mask=roi_mask,
-        model_name=args.model,
-        prob_thresh=args.prob,
-        nms_thresh=args.nms,
-        tiles=args.tiles,
-        no_tiles=args.no_tiles,
-        tile_progress=args.tile_progress,
-    )
+    if STARDIST_AVAILABLE:
+        labels, details = stardist_segment_roi(
+            img_yxc=img_yxc,
+            roi_mask=roi_mask,
+            model_name=args.model,
+            prob_thresh=args.prob,
+            nms_thresh=args.nms,
+            tiles=args.tiles,
+            no_tiles=args.no_tiles,
+            tile_progress=args.tile_progress,
+        )
+    else:
+        if not args.precomputed_labels_full:
+            die(
+                "StarDist is unavailable (TensorFlow missing) and no fallback labels were provided. "
+                "Set --precomputed-labels-full to a full labels TIFF/Zarr."
+            )
+        log(
+            f"StarDist unavailable ({STARDIST_IMPORT_ERROR}); "
+            f"loading fallback labels from {args.precomputed_labels_full}"
+        )
+        labels = load_precomputed_labels_crop(args.precomputed_labels_full, x0, y0, x1, y1)
+        labels[~roi_mask] = 0
+        if relabel_sequential is not None:
+            labels, _, _ = relabel_sequential(labels)
+        details = {
+            "fallback": "precomputed_labels_full",
+            "source": str(Path(args.precomputed_labels_full).resolve())
+        }
     tifffile.imwrite(outdir / "labels.tif", labels, compression="zlib")
     (outdir / "stardist_details.json").write_text(
         json.dumps({k: (v.tolist() if isinstance(v, np.ndarray) else str(v))

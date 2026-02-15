@@ -22,6 +22,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     script:
     def write_full_flag = params.write_full_labels ? '--write-full-labels' : ''
     def allow_huge_flag = params.allow_huge_tif ? '--allow-huge-tif' : ''
+    def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
     """
     set -euo pipefail
@@ -49,6 +50,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
       --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
       --full-format "${params.full_format}" \\
       --full-out "stardist_out/labels_full.tif" \\
+      ${precomputed_flag} \\
       ${write_full_flag} \\
       ${allow_huge_flag}
     """

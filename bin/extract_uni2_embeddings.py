@@ -17,6 +17,7 @@ import os
 import sys
 import math
 import random
+import shutil
 from pathlib import Path
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -74,6 +75,59 @@ def _maybe_hf_login(token: Optional[str]):
             login(token=token)
         except Exception as e:
             print(f"[WARN] Could not login to HuggingFace Hub: {e}", file=sys.stderr)
+
+
+def _clear_hf_repo_cache(repo_id: str) -> None:
+    hf_hub_cache = os.environ.get("HF_HUB_CACHE")
+    if hf_hub_cache:
+        hub_root = Path(hf_hub_cache)
+    else:
+        hf_home = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
+        hub_root = Path(hf_home) / "hub"
+
+    repo_dir = hub_root / f"models--{repo_id.replace('/', '--')}"
+    if repo_dir.exists():
+        print(f"[WARN] Clearing corrupted HF cache: {repo_dir}", file=sys.stderr)
+        shutil.rmtree(repo_dir, ignore_errors=True)
+
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        xet_dir = Path(hf_home) / "xet"
+        if xet_dir.exists():
+            print(f"[WARN] Clearing HF xet cache: {xet_dir}", file=sys.stderr)
+            shutil.rmtree(xet_dir, ignore_errors=True)
+
+
+def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str) -> Any:
+    from huggingface_hub import hf_hub_download
+
+    ckpt_path = hf_hub_download(repo_id=repo_id, filename="pytorch_model.bin")
+    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+    if isinstance(checkpoint, dict):
+        state_dict = None
+        for key in ("state_dict", "model", "model_state_dict"):
+            maybe = checkpoint.get(key)
+            if isinstance(maybe, dict):
+                state_dict = maybe
+                break
+        if state_dict is None and all(isinstance(k, str) for k in checkpoint.keys()):
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
+
+    if not isinstance(state_dict, dict):
+        raise RuntimeError("Unsupported checkpoint format for legacy timm HF load")
+
+    if any(k.startswith("module.") for k in state_dict.keys()):
+        state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"[WARN] Legacy load missing keys: {len(missing)}", file=sys.stderr)
+    if unexpected:
+        print(f"[WARN] Legacy load unexpected keys: {len(unexpected)}", file=sys.stderr)
+    return model
 
 
 def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_token: Optional[str]):
@@ -145,7 +199,46 @@ def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_tok
             timm_kwargs.setdefault("mlp_layer", SwiGLUPacked)
             timm_kwargs.setdefault("act_layer", torch.nn.SiLU)
 
-        model = timm.create_model(enc_id, pretrained=True, **timm_kwargs)
+        repo_id = enc_id.split("hf-hub:", 1)[1] if enc_id.startswith("hf-hub:") else None
+        legacy_weights_msg = "weights_only=True"  # torch>=2.6 + legacy .tar checkpoint
+        legacy_tar_msg = "legacy .tar format"
+        try:
+            model = timm.create_model(enc_id, pretrained=True, **timm_kwargs)
+        except (RuntimeError, OSError) as e:
+            msg = str(e)
+            corrupted = (
+                "PytorchStreamReader failed reading file" in msg
+                or "archive is corrupted" in msg
+                or "invalid header" in msg
+            )
+            if repo_id and corrupted:
+                print(
+                    f"[WARN] Corrupted cached weights detected for '{repo_id}'. Clearing cache and retrying once.",
+                    file=sys.stderr,
+                )
+                _clear_hf_repo_cache(repo_id)
+                try:
+                    model = timm.create_model(enc_id, pretrained=True, **timm_kwargs)
+                except (RuntimeError, OSError) as e2:
+                    msg2 = str(e2)
+                    if legacy_weights_msg in msg2 and legacy_tar_msg in msg2:
+                        print(
+                            f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
+                            file=sys.stderr,
+                        )
+                        model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+                        model = _load_timm_hf_legacy_checkpoint(model, repo_id)
+                    else:
+                        raise
+            elif repo_id and legacy_weights_msg in msg and legacy_tar_msg in msg:
+                print(
+                    f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
+                    file=sys.stderr,
+                )
+                model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+                model = _load_timm_hf_legacy_checkpoint(model, repo_id)
+            else:
+                raise
         model.eval()
 
         cfg = resolve_data_config(getattr(model, "pretrained_cfg", {}), model=model)
@@ -626,18 +719,21 @@ def main():
 
     half = args.tile_size // 2
 
-    rows = []
+    row_parts: List[pd.DataFrame] = []
+    row_count = 0
     shard_idx = 0
     feat_dim = None
+    feat_cols: Optional[List[str]] = None
 
     def flush_csv(tile_out: Path):
-        nonlocal rows, shard_idx
-        if not rows:
+        nonlocal row_parts, row_count, shard_idx
+        if row_count == 0:
             return
-        df = pd.DataFrame.from_records(rows)
+        df = pd.concat(row_parts, ignore_index=True)
         out_path = tile_out / f"{tag}_embeddings_shard{shard_idx:04d}.csv.gz"
         df.to_csv(out_path, index=False, compression="gzip")
-        rows = []
+        row_parts = []
+        row_count = 0
         shard_idx += 1
 
     batch_items = []
@@ -652,7 +748,7 @@ def main():
         batch_meta.append(meta)
 
     def run_batch(tile_out: Path):
-        nonlocal feat_dim, batch_items, batch_meta, rows
+        nonlocal feat_dim, feat_cols, batch_items, batch_meta, row_parts, row_count
         if not batch_items:
             return
 
@@ -678,16 +774,15 @@ def main():
 
         if feat_dim is None:
             feat_dim = int(feats.shape[1])
+            feat_cols = [f"feat_{j+1}" for j in range(feat_dim)]
 
-        for i in range(feats.shape[0]):
-            meta = batch_meta[i]
-            row = dict(meta)
-            for j in range(feat_dim):
-                row[f"feat_{j+1}"] = float(feats[i, j])
-            rows.append(row)
+        meta_df = pd.DataFrame.from_records(batch_meta)
+        feat_df = pd.DataFrame(feats, columns=feat_cols)
+        row_parts.append(pd.concat([meta_df.reset_index(drop=True), feat_df], axis=1))
+        row_count += feats.shape[0]
 
         batch_items, batch_meta = [], []
-        if len(rows) >= args.rows_per_csv:
+        if row_count >= args.rows_per_csv:
             flush_csv(tile_out)
 
     # Pass 2: process grid tiles
@@ -707,8 +802,10 @@ def main():
             tile_tiles = tile_folder(tiles_root, tr, tc) if args.save_tiles else None
 
             shard_idx = 0
-            rows = []
+            row_parts = []
+            row_count = 0
             feat_dim = None
+            feat_cols = None
 
             for i in tqdm(range(s, e), desc=f"grid {tr:02d},{tc:02d}", leave=False):
                 lab = int(labels[i])
@@ -723,12 +820,12 @@ def main():
                 y0 = y - half
 
                 img_tile_raw = img_reader.read(x0, y0, args.tile_size, args.tile_size)
-                m_tile = mask_reader.read(x0, y0, args.tile_size, args.tile_size).astype(np.int64, copy=False)
 
                 # FIX: consistent mapping to uint8 using global scaling
                 img_tile = to_rgb_uint8_global(img_tile_raw, lo=lo, hi=hi)
 
                 if args.zero_outside_mask:
+                    m_tile = mask_reader.read(x0, y0, args.tile_size, args.tile_size).astype(np.int64, copy=False)
                     keep_m = (m_tile == lab)
                     fill = int(args.outside_fill)
                     fill = 0 if fill < 0 else (255 if fill > 255 else fill)

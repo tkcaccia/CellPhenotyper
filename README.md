@@ -1,7 +1,7 @@
 # CellPhenotyper
 
 CellPhenotyper is a fully reproducible, modular computational pathology workflow that takes raw H&E whole-slide images to quantitative cell-level phenotypes.  
-The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, and unsupervised KODAMA analysis to stratify cells into coherent phenotypic groups for exploratory spatial discovery.
+The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, unsupervised KODAMA analysis, and post-KODAMA spatial region construction (`Rcode_Clustering`, `labels_to_cluster_mask`, `grow_to_tissue`, `mask_to_geojson`) to produce final cluster-level GeoJSON.
 
 The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
 Select the runtime image in `pipeline_paramers.yml` using `singularity_image` or `docker_image`.
@@ -30,9 +30,6 @@ After completing installation and UNI-2 token setup, edit `pipeline_paramers.yml
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  -with-report results_full/report.html \
-  -with-trace results_full/trace.txt \
-  -with-timeline results_full/timeline.html \
   -resume
 ```
 

@@ -5,7 +5,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     publishDir "${params.outdir_base}/07_embeddings", mode: 'copy', overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
+    memory { "${Math.max(1, Math.min(params.max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
     time { params.uni2_time as String }
 
     input:
@@ -50,11 +50,6 @@ process EXTRACT_UNI2_EMBEDDINGS {
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
 
-    HF_TOKEN_ARGS=()
-    if [[ -n "\$HF_TOKEN" ]]; then
-      HF_TOKEN_ARGS=(--hf-token "\$HF_TOKEN")
-    fi
-
     python "${uni2_script}" \\
       --image "${image_tif}" \\
       --mask "${mask_tif}" \\
@@ -76,8 +71,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
       --batch ${params.uni2_batch} \\
       --torch-threads ${Math.max(1, Math.min(task.cpus as int, params.uni2_torch_threads as int))} \\
       --rows-per-csv ${params.uni2_rows_per_csv} \\
-      --mask-block ${params.uni2_mask_block} \\
-      "\${HF_TOKEN_ARGS[@]}"
+      --mask-block ${params.uni2_mask_block}
     """
 
     stub:
