@@ -26,7 +26,7 @@ end_point: auto
 # then automatically falls back to docker:// when the release asset is missing.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
-container_cpu_tag: 0.2.0
+container_cpu_tag: 0.2.0   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 0.2.0-amd64
 container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 0.2.0-gpu

@@ -121,17 +121,18 @@ workflow {
     if (!container_repo) {
         container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
     }
-    def container_cpu_tag = (paramOr('container_cpu_tag', '0.2.0') ?: '0.2.0').toString().trim()
+    def default_cpu_tag_generic = detected_arch == 'amd64' ? '0.2.0-amd64' : '0.2.0'
+    def container_cpu_tag = (paramOr('container_cpu_tag', default_cpu_tag_generic) ?: default_cpu_tag_generic).toString().trim()
     if (!container_cpu_tag) {
-        container_cpu_tag = '0.2.0'
+        container_cpu_tag = default_cpu_tag_generic
     }
     def container_cpu_tag_amd64 = (paramOr('container_cpu_tag_amd64', '0.2.0-amd64') ?: '0.2.0-amd64').toString().trim()
     if (!container_cpu_tag_amd64) {
-        container_cpu_tag_amd64 = container_cpu_tag
+        container_cpu_tag_amd64 = '0.2.0-amd64'
     }
     def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0') ?: '0.2.0').toString().trim()
     if (!container_cpu_tag_arm64) {
-        container_cpu_tag_arm64 = container_cpu_tag
+        container_cpu_tag_arm64 = '0.2.0'
     }
     def container_gpu_tag = (paramOr('container_gpu_tag', '0.2.0-gpu') ?: '0.2.0-gpu').toString().trim()
     if (!container_gpu_tag) {
