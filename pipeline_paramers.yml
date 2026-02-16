@@ -20,8 +20,8 @@ end_point: auto
 # kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
-singularity_image: singularity-stardist_UNI-2-m1.sif
-docker_image: cellphenotyper:full-cpu
+singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0
 
 # Global resource caps
 max_cpus: 8
