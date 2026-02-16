@@ -26,21 +26,43 @@ From: ubuntu:22.04
     exit 1
   fi
 
-  curl -Ls -o /tmp/micromamba.tar.bz2 "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest"
+  curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
+    -o /tmp/micromamba.tar.bz2 \
+    "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest"
+  bzip2 -t /tmp/micromamba.tar.bz2
   tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba
   install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba
   rm -rf /tmp/micromamba.tar.bz2 /tmp/bin
 
   export MAMBA_ROOT_PREFIX=/opt/micromamba
+  retry_cmd() {
+    local n=1
+    local max=3
+    local delay=10
+    while true; do
+      "$@" && break
+      if [ "$n" -ge "$max" ]; then
+        return 1
+      fi
+      n=$((n+1))
+      sleep "$delay"
+    done
+  }
 
   # Base environment from project spec
-  micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge
+  retry_cmd micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge
   # Prefer micromamba runtime libs during build-time import checks.
   export STARDIST_ENV_LIB=/opt/micromamba/envs/stardist/lib
   export LD_LIBRARY_PATH="${STARDIST_ENV_LIB}:${LD_LIBRARY_PATH:-}"
 
   # Ensure key Python modules are available.
-  if ! micromamba run -n stardist python -c "import stardist, csbdeep" >/dev/null 2>&1; then
+  # Avoid importing stardist before TF check, because runtime backend import can fail.
+  if ! micromamba run -n stardist python - <<'PY' >/dev/null 2>&1; then
+import importlib.util, sys
+mods = ("stardist", "csbdeep")
+missing = [m for m in mods if importlib.util.find_spec(m) is None]
+sys.exit(0 if not missing else 1)
+PY
     micromamba run -n stardist pip install --no-cache-dir stardist csbdeep
   fi
   if ! micromamba run -n stardist python -c "import tensorflow" >/dev/null 2>&1; then
