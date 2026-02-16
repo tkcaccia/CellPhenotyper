@@ -14,6 +14,65 @@ The main entrypoint is always:
 nextflow run main.nf
 ```
 
+## Start here: clone, pull container, run first example
+
+Use this first if you want to run immediately with the repository example input files:
+
+- `Data/ROI.ome.tif`
+- `Data/ROI.geojson`
+
+Current runtime image version:
+
+- CPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+
+1. Clone repository:
+
+```bash
+git clone https://github.com/tkcaccia/CellPhenotyper.git
+cd CellPhenotyper
+```
+
+2. Pull runtime image (choose one):
+
+```bash
+# Singularity/Apptainer image
+./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-docker
+
+# Docker image
+./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-singularity
+```
+
+3. Add UNI-2 token file:
+
+```bash
+printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
+```
+
+4. Run first full example (choose one profile):
+
+```bash
+# Singularity
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
+
+# Docker
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
+```
+
+5. Final result:
+
+- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+
 ## Documentation
 
 - [Installation](INSTALL.md)
@@ -32,60 +91,6 @@ nextflow run main.nf \
   -params-file pipeline_paramers.yml \
   -resume
 ```
-
-## Easy example from GitHub data
-
-This example uses the files already committed in this repository:
-
-- `Data/ROI.ome.tif`
-- `Data/ROI.geojson`
-
-1. Clone and enter the repository:
-
-```bash
-git clone https://github.com/tkcaccia/CellPhenotyper.git
-cd CellPhenotyper
-```
-
-2. Pull runtime image (choose one):
-
-```bash
-# Singularity/Apptainer
-./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-docker
-
-# Docker
-./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-singularity
-```
-
-3. Add UNI-2 token (required for full run):
-
-```bash
-printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
-```
-
-4. Run full pipeline with included example input (choose one profile):
-
-```bash
-# Singularity profile
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --outdir_base results_example
-
-# Docker profile
-nextflow run main.nf \
-  -profile docker \
-  -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --outdir_base results_example
-```
-
-Final output to inspect:
-
-- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
 
 ## Runtime images (GHCR)
 
