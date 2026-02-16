@@ -64,7 +64,7 @@ docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 ```bash
 printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
 source tokens.env
-export HF_TOKEN="{HF_UNI2}"
+export HF_TOKEN="$HF_UNI2"
 ```
 
 4. Run first full example (choose one profile):
