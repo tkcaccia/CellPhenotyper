@@ -5,6 +5,10 @@ dependencies:
   - python=3.11
   - pip
 
+  # Ensure modern GNU C++ runtime in the env (fixes CXXABI mismatches on some hosts)
+  - libstdcxx-ng>=13
+  - libgcc-ng>=13
+
   # Core scientific + image I/O
   - numpy
   - scipy

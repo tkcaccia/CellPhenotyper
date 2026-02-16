@@ -41,6 +41,9 @@ From: ubuntu:22.04
 
   # Python environment
   micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge
+  # Prefer micromamba runtime libs during build-time import checks.
+  export STARDIST_ENV_LIB=/opt/micromamba/envs/stardist/lib
+  export LD_LIBRARY_PATH="${STARDIST_ENV_LIB}:${LD_LIBRARY_PATH:-}"
 
   # Ensure key Python modules are available even when conda packages differ by arch.
   if ! micromamba run -n stardist python -c "import stardist, csbdeep" >/dev/null 2>&1; then
