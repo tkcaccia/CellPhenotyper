@@ -289,6 +289,18 @@ nextflow run main.nf \
   -resume
 ```
 
+If you see:
+
+`ERROR ~ .nextflow/history.lock (No such file or directory)`
+
+it usually means you are running in a read-only mount (common in Lima under `/Users/...`).
+Fix by running from a writable Linux path (for example `~/CellPhenotyper`), or set:
+
+```bash
+export NXF_HOME=/var/tmp/nextflow_home
+mkdir -p "$NXF_HOME"
+```
+
 For forced GPU image run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
@@ -305,6 +317,22 @@ nextflow run main.nf \
   -with-trace results_full/trace.txt \
   -with-timeline results_full/timeline.html \
   -resume
+```
+
+## Step 9: Check status and copy results (optional)
+
+Inside Linux/Lima:
+
+```bash
+ps aux | grep -E 'nextflow|java' | grep -v grep
+tail -n 50 -f .nextflow.log
+```
+
+Copy results to macOS host (run on macOS terminal):
+
+```bash
+limactl copy default:/home/<lima-user>/CellPhenotyper/results_full \
+  /Users/<your-user>/Documents/test/CellPhenotyper/
 ```
 
 For GPU run, set:

@@ -88,6 +88,12 @@ singularity/publish_sif_release_asset.sh \
   --upload
 ```
 
+Important behavior:
+
+- `--source docker` in `publish_sif_release_asset.sh` pulls an existing OCI image and converts it to `.sif`, then uploads the `.sif` release asset.
+- It does **not** build/push Docker images to GHCR.
+- Docker publish is a separate step (`docker build` + `docker push`).
+
 For Singularity users, no manual pull command is needed.
 Nextflow auto-selects the release-hosted `.sif` by architecture/device when using `-profile singularity`.
 

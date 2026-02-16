@@ -71,6 +71,9 @@ export HF_TOKEN="$HF_UNI2"
 
 Use only one profile per run. Do not run both `-profile singularity` and `-profile docker` for the same output folder.
 
+If you use Lima on macOS, run from a writable Linux path (for example `~/CellPhenotyper`) instead of `/Users/...` mounts to avoid:
+`ERROR ~ .nextflow/history.lock (No such file or directory)`.
+
 ```bash
 # Singularity
 nextflow run main.nf \
@@ -105,6 +108,39 @@ nextflow run main.nf \
 5. Final result:
 
 - `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+
+## Lima Note: writable run directory
+
+Inside `limactl shell default`:
+
+```bash
+mkdir -p ~/CellPhenotyper
+rsync -a --delete /Users/<your-user>/Documents/test/CellPhenotyper/ ~/CellPhenotyper/
+cd ~/CellPhenotyper
+```
+
+Run Nextflow from this Linux-home copy.
+
+## Monitor status and copy results back
+
+Check if run is still active:
+
+```bash
+ps aux | grep -E 'nextflow|java' | grep -v grep
+```
+
+Watch live logs:
+
+```bash
+tail -n 50 -f .nextflow.log
+```
+
+Copy results to macOS host (from macOS terminal):
+
+```bash
+limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
+  /Users/<your-user>/Documents/test/CellPhenotyper/
+```
 
 ## Documentation
 
