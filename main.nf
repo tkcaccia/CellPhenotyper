@@ -143,7 +143,7 @@ workflow {
     def auto_docker_image = "${container_repo}:${selected_container_tag}"
     def auto_docker_singularity_image = "docker://${auto_docker_image}"
 
-    def singularity_image_source = (paramOr('singularity_image_source', 'release') ?: 'release').toString().trim().toLowerCase()
+    def singularity_image_source = (paramOr('singularity_image_source', 'auto') ?: 'auto').toString().trim().toLowerCase()
     if (!(singularity_image_source in ['auto', 'release', 'docker'])) {
         singularity_image_source = 'auto'
     }

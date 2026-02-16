@@ -191,12 +191,13 @@ Reference Singularity assets (GitHub release `v0.2.0`):
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
-Default behavior is `runtime_image_mode: auto` and `singularity_image_source: release`.
+Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`
+(release `.sif` first, then automatic `docker://` fallback if missing).
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
 - `runtime_image_mode: auto`
-- `singularity_image_source: release`
+- `singularity_image_source: auto`
 - `singularity_image: ""`
 
 To force a specific manual image, set:

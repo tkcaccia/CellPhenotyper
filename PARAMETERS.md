@@ -38,7 +38,7 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
 | `container_gpu_tag` | `0.2.0-gpu` | GPU tag used when `compute_device` resolves to GPU. |
-| `singularity_image_source` | `release` | `release`, `auto`, or `docker` for singularity profile image source. |
+| `singularity_image_source` | `auto` | `auto` tries release `.sif` first and falls back to `docker://`; `release` is strict release-only; `docker` forces `docker://`. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v0.2.0` | GitHub release tag containing `.sif` assets. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |

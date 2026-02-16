@@ -22,15 +22,15 @@ end_point: auto
 # kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
-# In `runtime_image_mode: auto`, singularity uses release-hosted .sif assets by default.
-# Set `singularity_image_source: docker` to force docker:// OCI fallback.
+# In `runtime_image_mode: auto`, singularity tries release-hosted .sif first,
+# then automatically falls back to docker:// when the release asset is missing.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_cpu_tag: 0.2.0
 container_cpu_tag_amd64: 0.2.0-amd64
 container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 0.2.0-gpu
-singularity_image_source: release   # release | auto | docker
+singularity_image_source: auto   # auto | release | docker
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v0.2.0
 singularity_cpu_asset_amd64: cellphenotyper-0.2.0-amd64.sif

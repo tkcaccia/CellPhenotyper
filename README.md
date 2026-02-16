@@ -46,7 +46,8 @@ cd CellPhenotyper
 # Singularity/Apptainer:
 # no manual pull command is needed.
 # Nextflow auto-selects the release-hosted .sif by architecture/device.
-# If not available, set --singularity_image_source docker to use docker:// fallback.
+# In default `singularity_image_source: auto`, Nextflow tries release `.sif` first
+# and automatically falls back to docker:// if the release asset is missing.
 
 # Docker (optional pre-pull)
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
@@ -144,7 +145,8 @@ docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
 
 For Singularity/Apptainer profile, no manual pull script is required:
-`runtime_image_mode: auto` + `singularity_image_source: release` resolves the correct release `.sif` by host architecture/device.
+`runtime_image_mode: auto` + `singularity_image_source: auto` resolves the correct image by host architecture/device:
+release `.sif` when available, otherwise `docker://` fallback.
 
 Use only one runtime profile per execution: either `singularity` or `docker`.
 
