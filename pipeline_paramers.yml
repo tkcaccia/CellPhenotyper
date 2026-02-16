@@ -40,7 +40,7 @@ end_point: auto
 # container_gpu_tag: 0.2.0-gpu
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_cpu_tag: 0.2.0
-container_cpu_tag_amd64: 0.2.0-amd64
+container_cpu_tag_amd64: 0.2.0
 container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 0.2.0-gpu
 singularity_image: ""

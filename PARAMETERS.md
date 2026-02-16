@@ -16,7 +16,7 @@ nextflow run main.nf -profile singularity -params-file pipeline_paramers.yml --m
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base image repo. |
 | `container_cpu_tag` | `0.2.0` | Generic CPU tag fallback. |
-| `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
+| `container_cpu_tag_amd64` | `0.2.0` | CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
 | `container_gpu_tag` | `0.2.0-gpu` | GPU tag (amd64 + NVIDIA). |
 | `singularity_image` | `""` | If empty, auto-resolved from repo/tag/arch/device. |

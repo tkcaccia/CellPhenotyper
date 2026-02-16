@@ -51,7 +51,7 @@ Default runtime behavior is fully automatic (see `nextflow.config` + `pipeline_p
 Container tags used by auto-selection:
 
 - `container_cpu_tag_arm64: 0.2.0`
-- `container_cpu_tag_amd64: 0.2.0-amd64`
+- `container_cpu_tag_amd64: 0.2.0`
 - `container_gpu_tag: 0.2.0-gpu`
 
 You can force architecture if needed:
@@ -63,9 +63,9 @@ You can force architecture if needed:
 You can still override images directly:
 
 ```bash
---singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+--singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0
 # or
---docker_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+--docker_image ghcr.io/tkcaccia/cellphenotyper:0.2.0
 ```
 
 ## UNI-2 token

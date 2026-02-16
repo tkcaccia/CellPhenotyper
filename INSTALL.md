@@ -62,7 +62,7 @@ printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
 Auto tags:
 
 - CPU arm64: `0.2.0`
-- CPU amd64: `0.2.0-amd64`
+- CPU amd64: `0.2.0`
 - GPU amd64: `0.2.0-gpu`
 
 Force architecture only if detection is wrong:
@@ -102,7 +102,7 @@ export IMAGE_ARM64="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0"
 docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.cpu -t "$IMAGE_ARM64" --push .
 
 # CPU amd64 tag
-export IMAGE_AMD64="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-amd64"
+export IMAGE_AMD64="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0"
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t "$IMAGE_AMD64" --push .
 
 # GPU amd64 tag
