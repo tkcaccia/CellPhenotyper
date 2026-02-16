@@ -51,7 +51,7 @@ From: ubuntu:22.04
   fi
   # StarDist requires TensorFlow backend. On ARM, install via pip if missing.
   if ! micromamba run -n stardist python -c "from stardist.models import StarDist2D" >/dev/null 2>&1; then
-    micromamba run -n stardist pip install --no-cache-dir tensorflow
+    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.20.0
   fi
   if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then
     micromamba run -n stardist pip install --no-cache-dir imagecodecs

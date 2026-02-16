@@ -43,6 +43,9 @@ From: ubuntu:22.04
   if ! micromamba run -n stardist python -c "import stardist, csbdeep" >/dev/null 2>&1; then
     micromamba run -n stardist pip install --no-cache-dir stardist csbdeep
   fi
+  if ! micromamba run -n stardist python -c "import tensorflow" >/dev/null 2>&1; then
+    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.20.0
+  fi
   if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then
     micromamba run -n stardist pip install --no-cache-dir imagecodecs
   fi
