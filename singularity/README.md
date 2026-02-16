@@ -61,6 +61,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
   --device cpu \
   --tmpdir /var/tmp/apptainer/tmp \
   --cachedir /var/tmp/apptainer/cache \
+  --outdir /var/tmp/apptainer/out \
   --upload
 ```
 
@@ -143,7 +144,18 @@ Then rerun:
 
 ```bash
 cd /path/to/CellPhenotyper
-./singularity/publish_sif_release_asset.sh --version 0.2.0 --device cpu --upload
+./singularity/publish_sif_release_asset.sh \
+  --version 0.2.0 \
+  --device cpu \
+  --outdir /var/tmp/apptainer/out \
+  --upload
+```
+
+If `/Users/...` mount is read-only in Lima, always write SIF to `/var/tmp/apptainer/out` and copy back to macOS:
+
+```bash
+limactl copy default:/var/tmp/apptainer/out/cellphenotyper-0.2.0-arm64.sif \
+  /Users/<your-user>/Documents/CellPhenotyper/
 ```
 
 ## Update Pipeline Defaults for a New Release

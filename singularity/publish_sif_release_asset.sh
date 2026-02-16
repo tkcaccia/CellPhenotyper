@@ -210,6 +210,18 @@ if [[ "$DEVICE" == "gpu" && "$HOST_ARCH" != "amd64" ]]; then
 fi
 
 mkdir -p "$OUTDIR"
+if [[ ! -w "$OUTDIR" ]]; then
+  echo "Output directory is not writable: $OUTDIR" >&2
+  echo "Use --outdir /var/tmp/apptainer/out (or another writable path)." >&2
+  exit 1
+fi
+outdir_probe="${OUTDIR%/}/.cellphenotyper_write_test_$$"
+if ! touch "$outdir_probe" 2>/dev/null; then
+  echo "Cannot create files in output directory: $OUTDIR (read-only filesystem?)." >&2
+  echo "Use --outdir /var/tmp/apptainer/out and retry." >&2
+  exit 1
+fi
+rm -f "$outdir_probe"
 
 name_suffix=""
 if [[ "$DEVICE" == "gpu" ]]; then
