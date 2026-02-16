@@ -153,10 +153,21 @@ workflow {
     def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-0.2.0-amd64.sif') ?: 'cellphenotyper-0.2.0-amd64.sif').toString().trim()
     def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-0.2.0-arm64.sif') ?: 'cellphenotyper-0.2.0-arm64.sif').toString().trim()
     def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-0.2.0-gpu-amd64.sif') ?: 'cellphenotyper-0.2.0-gpu-amd64.sif').toString().trim()
+    def singularity_local_dir = (paramOr('singularity_local_dir', '') ?: '').toString().trim()
 
     def selected_release_asset = resolved_compute_device == 'gpu'
         ? singularity_gpu_asset_amd64
         : (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
+    def local_sif_candidates = []
+    if (selected_release_asset) {
+        if (singularity_local_dir) {
+            local_sif_candidates << new File(singularity_local_dir, selected_release_asset)
+        }
+        local_sif_candidates << new File(baseDir.toString(), selected_release_asset)
+        local_sif_candidates << new File(baseDir.toString(), "singularity/${selected_release_asset}")
+    }
+    def local_sif_file = local_sif_candidates.find { it.exists() && it.isFile() }
+    def auto_local_singularity_image = local_sif_file ? local_sif_file.absolutePath : ''
     def auto_release_singularity_image = (singularity_release_repo && singularity_release_tag && selected_release_asset)
         ? "https://github.com/${singularity_release_repo}/releases/download/${singularity_release_tag}/${selected_release_asset}"
         : ''
@@ -169,7 +180,10 @@ workflow {
 
     def auto_singularity_image = auto_docker_singularity_image
     def auto_singularity_origin = 'docker'
-    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
+    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_local_singularity_image) {
+        auto_singularity_image = auto_local_singularity_image
+        auto_singularity_origin = 'local'
+    } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
         auto_singularity_image = auto_release_singularity_image
         auto_singularity_origin = 'release'
     } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release']) {

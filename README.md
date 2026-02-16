@@ -48,6 +48,7 @@ cd CellPhenotyper
 # Nextflow auto-selects the release-hosted .sif by architecture/device.
 # In default `singularity_image_source: auto`, Nextflow tries release `.sif` first
 # and automatically falls back to docker:// if the release asset is missing.
+# If a matching local `.sif` exists in repo root or `singularity/`, it is used first.
 
 # Docker (optional pre-pull)
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0

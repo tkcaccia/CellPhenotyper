@@ -44,6 +44,7 @@ nextflow run main.nf -profile singularity \
 | `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-0.2.0-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
 | `singularity_gpu_asset_amd64` | `cellphenotyper-0.2.0-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
+| `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
 | `max_cpus` | `Runtime.runtime.availableProcessors()` | Global CPU cap. |
@@ -73,6 +74,8 @@ nextflow run main.nf -profile singularity \
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.48` | Detection probability threshold. |
 | `stardist_nms` | `0.30` | NMS threshold. |
+| `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
+| `stardist_tensorflow_version` | `2.20.0` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
