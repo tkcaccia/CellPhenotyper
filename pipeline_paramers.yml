@@ -37,8 +37,13 @@ end_point: auto
 # container_cpu_tag_amd64: ""
 # container_cpu_tag_arm64: ""
 # container_gpu_tag: 0.2.0-gpu
-singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0
+container_repo: ghcr.io/tkcaccia/cellphenotyper
+container_cpu_tag: 0.2.0
+container_cpu_tag_amd64: 0.2.0-amd64
+container_cpu_tag_arm64: 0.2.0
+container_gpu_tag: 0.2.0-gpu
+singularity_image: ""
+docker_image: ""
 
 # Global resource caps
 max_cpus: 8
