@@ -14,16 +14,19 @@ __pycache__/
 
 # local credentials
 tokens.env
+GHCRtoken.env
 
 # large local inputs
 Data/*.ome.tif
 Data/*.btf
+!Data/ROI.ome.tif
 
 # local container artifacts
 singularity/*.sif
+singularity/cellphenotyper_*.sif
 singularity-stardist_UNI-2.sif
 singularity-stardist_UNI-2-m1.sif
-singularity-cellphenotyper-0.1.0.sif
+singularity-cellphenotyper-*.sif
 
 # runtime outputs
 *.html
