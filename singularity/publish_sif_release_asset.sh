@@ -152,6 +152,26 @@ if [[ -z "$SING_BIN" ]]; then
   exit 1
 fi
 
+# Pick sane defaults for build temp/cache when not provided.
+# This avoids filling tiny VM root filesystems during large image builds.
+if [[ -z "${SINGULARITY_TMPDIR:-}" ]]; then
+  if [[ -d "/Users/${USER:-}" && -w "/Users/${USER:-}" ]]; then
+    export SINGULARITY_TMPDIR="/Users/${USER}/.singularity-tmp"
+  else
+    export SINGULARITY_TMPDIR="/var/tmp"
+  fi
+fi
+if [[ -z "${SINGULARITY_CACHEDIR:-}" ]]; then
+  if [[ -d "/Users/${USER:-}" && -w "/Users/${USER:-}" ]]; then
+    export SINGULARITY_CACHEDIR="/Users/${USER}/.singularity-cache"
+  else
+    export SINGULARITY_CACHEDIR="/var/tmp/.singularity-cache"
+  fi
+fi
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$SINGULARITY_TMPDIR}"
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$SINGULARITY_CACHEDIR}"
+mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
 if [[ "$DEVICE" == "gpu" && "$HOST_ARCH" != "amd64" ]]; then
   echo "GPU SIF publishing is supported only on amd64 hosts. Detected: $HOST_ARCH" >&2
@@ -191,7 +211,7 @@ if [[ "$SOURCE" == "def" ]]; then
   if [[ "$USE_FAKEROOT" == "true" || "$EUID" -eq 0 ]]; then
     "${build_cmd[@]}"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo "${build_cmd[@]}"
+    sudo --preserve-env=SINGULARITY_TMPDIR,SINGULARITY_CACHEDIR,APPTAINER_TMPDIR,APPTAINER_CACHEDIR "${build_cmd[@]}"
   else
     echo "Definition build requires root/sudo or --fakeroot support." >&2
     exit 1
