@@ -41,6 +41,15 @@ workflow {
                 error "Invalid singularity_image '${singularity_image}'. Use a valid OCI reference, e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
             }
         }
+
+        def resolved_arch = (params._detected_arch ?: '').toString().trim().toLowerCase()
+        def image_lc = singularity_image.toLowerCase()
+        if (resolved_arch == 'amd64' && image_lc.contains('arm64')) {
+            error "Detected host architecture amd64 but singularity_image appears arm64: ${singularity_image}. Set --host_arch amd64 and/or override --singularity_image."
+        }
+        if (resolved_arch == 'arm64' && (image_lc.contains('amd64') || image_lc.contains('x86_64'))) {
+            error "Detected host architecture arm64 but singularity_image appears amd64/x86_64: ${singularity_image}. Set --host_arch arm64 and/or override --singularity_image."
+        }
     }
 
     def stage_aliases = [
@@ -116,6 +125,7 @@ workflow {
     def run_cluster_geojson = should_run_stage('cluster_geojson')
     def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
 
+    println "Runtime auto-selection: requested_arch=${params.host_arch ?: 'auto'}, detected_arch=${params._detected_arch ?: 'unknown'}, arch_candidates=${params._detected_arch_candidates ?: ''}, requested_compute_device=${params._requested_compute_device ?: params.compute_device}, resolved_compute_device=${params.compute_device}, singularity_image=${params.singularity_image}, docker_image=${params.docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     Channel

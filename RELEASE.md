@@ -1,76 +1,49 @@
 # Release
 
-## Latest state
+## Runtime tags expected by automatic architecture selection
 
-Track official releases here:
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
-- [GitHub Releases](https://github.com/tkcaccia/CellPhenotyper/releases)
+## Singularity definition files in repository
 
-Current default branch:
+- `singularity/cellphenotyper_full_cpu.def`
+- `singularity/cellphenotyper_full_gpu.def`
 
-- `main`
-
-Current published runtime tags:
-
-- CPU default: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
-
-## Versioning policy
-
-- Release tags should follow semantic versioning (`vMAJOR.MINOR.PATCH`).
-- Update `INSTALL.md`, `TUTORIAL.md`, `PARAMETERS.md`, and `OUTPUT.md` whenever behavior or defaults change.
-
-## Container release workflow (GHCR)
-
-1. Set credentials:
+## Publish workflow (GHCR)
 
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 ```
 
-2. Publish CPU image for a new version:
+### CPU arm64
 
 ```bash
-export TAG="0.2.0"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker push "${IMAGE}"
+export IMAGE_ARM64="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0"
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.cpu -t "$IMAGE_ARM64" --push .
 ```
 
-3. Publish GPU image (Linux x86_64 + NVIDIA only):
+### CPU amd64
 
 ```bash
-export TAG="0.2.0-gpu"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker push "${IMAGE}"
+export IMAGE_AMD64="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-amd64"
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t "$IMAGE_AMD64" --push .
 ```
 
-4. Verify pull:
+### GPU amd64
+
+```bash
+export IMAGE_GPU="ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-gpu"
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.gpu -t "$IMAGE_GPU" --push .
+```
+
+## Verify pulls
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
-```
-
-For Singularity users, no manual pull command is needed.
-Nextflow pulls `singularity_image` automatically when using `-profile singularity`.
-
-```bash
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --start_point convert \
-  --end_point tissue_mask
-```
-
-## Changelog source
-
-Use Git history for full change details:
-
-```bash
-git log --oneline --decorate --graph
 ```

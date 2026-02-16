@@ -1,98 +1,95 @@
 # CellPhenotyper
 
-CellPhenotyper is a fully reproducible, modular computational pathology workflow that takes raw H&E whole-slide images to quantitative cell-level phenotypes.  
-The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, unsupervised KODAMA analysis, and post-KODAMA spatial region construction (`Rcode_Clustering`, `labels_to_cluster_mask`, `grow_to_tissue`, `mask_to_geojson`) to produce final cluster-level GeoJSON.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E image phenotyping from ROI segmentation to final cluster GeoJSON.
 
-The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
-Select the runtime image in `pipeline_paramers.yml` using `singularity_image` or `docker_image`.
-For full UNI-2 execution, the Hugging Face token must have access to `MahmoodLab/UNI2-h`.
-Token loading is configured via `hf_token_env_file` and `hf_token_env_var_name` in `pipeline_paramers.yml`.
+The pipeline is architecture-aware at runtime:
 
-The main entrypoint is always:
+- detects host architecture (`amd64` or `arm64`)
+- resolves compute mode (`cpu`/`gpu` from `compute_device`)
+- selects the proper container tag automatically
+
+Main command:
 
 ```bash
 nextflow run main.nf
 ```
 
-## Start here: clone, prepare runtime, run first example
+## Quick start
 
-Use this first if you want to run immediately with the repository example input files:
+Inputs already included in this repository:
 
 - `Data/ROI.ome.tif`
 - `Data/ROI.geojson`
 
-Current runtime image version:
-
-- CPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
-
-1. Clone repository:
+Run one profile only (`singularity` or `docker`):
 
 ```bash
 git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
+
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
 ```
 
-2. Prepare runtime (choose one):
+Expected final output:
+
+- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+
+## Runtime auto-selection
+
+Default runtime behavior is fully automatic (see `nextflow.config` + `pipeline_paramers.yml`):
+
+- `compute_device: auto`
+- `host_arch: auto`
+- `singularity_image: ""`
+- `docker_image: ""`
+
+Container tags used by auto-selection:
+
+- `container_cpu_tag_arm64: 0.2.0`
+- `container_cpu_tag_amd64: 0.2.0-amd64`
+- `container_gpu_tag: 0.2.0-gpu`
+
+You can force architecture if needed:
 
 ```bash
-# Singularity/Apptainer:
-# no manual pull command is needed.
-# Nextflow pulls the image from `singularity_image` automatically on first run.
-
-# Docker (optional pre-pull)
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+--host_arch amd64
 ```
 
-3. Get and configure UNI-2 token:
+You can still override images directly:
 
-- Create/sign in Hugging Face account: `https://huggingface.co`
-- Request access to model: `https://huggingface.co/MahmoodLab/UNI2-h`
-- Create a read token: `https://huggingface.co/settings/tokens`
-- Save token in `tokens.env`:
+```bash
+--singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+# or
+--docker_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+```
+
+## UNI-2 token
+
+UNI-2 requires a Hugging Face token with access to `MahmoodLab/UNI2-h`.
 
 ```bash
 printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
 ```
 
-4. Run first full example (choose one profile):
+Pipeline defaults:
 
-Use only one profile per run. Do not run both `-profile singularity` and `-profile docker` for the same output folder.
+- `hf_token_env_file: tokens.env`
+- `hf_token_env_var_name: HF_UNI2`
 
-```bash
-# Singularity
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --outdir_base results_example
+## Singularity definitions in repository
 
-# Docker
-nextflow run main.nf \
-  -profile docker \
-  -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --outdir_base results_example
-```
+The repository includes updated definition files:
 
-If you see an error with an old invalid image value such as
-`docker://singularity-stardist_UNI-2-m1.sif`, force the correct image:
+- `singularity/cellphenotyper_full_cpu.def`
+- `singularity/cellphenotyper_full_gpu.def`
 
-```bash
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0 \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
-  --outdir_base results_example
-```
-
-5. Final result:
-
-- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+Users do not need to build `.sif` manually for standard runs.
+With `-profile singularity`, Nextflow pulls from GHCR automatically.
 
 ## Documentation
 
@@ -101,40 +98,3 @@ nextflow run main.nf \
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
 - [Release](RELEASE.md)
-
-## Quick start
-
-After completing installation and UNI-2 token setup, edit `pipeline_paramers.yml` (`start_point` / `end_point` included) and run:
-
-```bash
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  -resume
-```
-
-## Runtime images (GHCR)
-
-Default runtime tags are hosted on GHCR:
-
-- CPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
-
-Runtime behavior:
-
-```bash
-# Docker profile: optional pre-pull
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
-```
-
-For Singularity/Apptainer profile, no manual pull script is required:
-Nextflow pulls `params.singularity_image` automatically.
-
-Use only one runtime profile per execution: either `singularity` or `docker`.
-
-Container publishing is documented in `RELEASE.md`.
-
-Validated tissue GeoJSON example committed in this repository:
-
-- `examples/validated_outputs/ROI_tissue_mask.geojson`
