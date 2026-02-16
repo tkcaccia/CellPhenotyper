@@ -1,9 +1,11 @@
+import groovy.io.FileType
+import groovy.json.JsonOutput
+
 nextflow.enable.dsl = 2
 
 include { PREPARE_INPUT_OMETIFF } from './modules/prepare_input_ometiff'
 include { RUN_STARDIST_ROI_SEGMENTATION } from './modules/run_stardist_roi_segmentation'
 include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
-include { CONVERT_TISSUE_MASK_TO_GEOJSON } from './modules/convert_tissue_mask_to_geojson'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_PRIMARY } from './modules/expand_labels_to_cytoplasm'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_FULL } from './modules/expand_labels_to_cytoplasm'
@@ -87,6 +89,7 @@ workflow {
         normalize_arch(command_output('uname -m')),
         normalize_arch(command_output('dpkg --print-architecture'))
     ].findAll { it && it != 'unknown' && it != 'auto' }
+
     def detected_arch = (requested_arch in ['amd64', 'arm64'])
         ? requested_arch
         : (detected_arch_candidates ? detected_arch_candidates[0] : 'unknown')
@@ -98,13 +101,15 @@ workflow {
     if (!(requested_compute_device in ['cpu', 'gpu', 'auto'])) {
         requested_compute_device = 'auto'
     }
-    def detected_nvidia = command_succeeds('command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1')
+
+    def nvidia_visible = (System.getenv('NVIDIA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
+    def cuda_visible = (System.getenv('CUDA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
+    def is_positive = { String value -> value && !(value in ['none', 'void', 'no', 'false', '-1']) }
+    def detected_nvidia = is_positive(nvidia_visible) || is_positive(cuda_visible)
     if (!detected_nvidia) {
-        def nvidia_visible = (System.getenv('NVIDIA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
-        def cuda_visible = (System.getenv('CUDA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
-        def is_positive = { String value -> value && !(value in ['none', 'void', 'no', 'false', '-1']) }
-        detected_nvidia = is_positive(nvidia_visible) || is_positive(cuda_visible)
+        detected_nvidia = command_succeeds('command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1')
     }
+
     def resolved_compute_device = requested_compute_device == 'auto'
         ? ((detected_arch == 'amd64' && detected_nvidia) ? 'gpu' : 'cpu')
         : requested_compute_device
@@ -113,19 +118,62 @@ workflow {
     }
 
     def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper') ?: 'ghcr.io/tkcaccia/cellphenotyper').toString().trim()
-    if (!container_repo) container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
+    if (!container_repo) {
+        container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
+    }
     def container_cpu_tag = (paramOr('container_cpu_tag', '0.2.0') ?: '0.2.0').toString().trim()
-    if (!container_cpu_tag) container_cpu_tag = '0.2.0'
+    if (!container_cpu_tag) {
+        container_cpu_tag = '0.2.0'
+    }
     def container_cpu_tag_amd64 = (paramOr('container_cpu_tag_amd64', '0.2.0-amd64') ?: '0.2.0-amd64').toString().trim()
-    if (!container_cpu_tag_amd64) container_cpu_tag_amd64 = container_cpu_tag
+    if (!container_cpu_tag_amd64) {
+        container_cpu_tag_amd64 = container_cpu_tag
+    }
     def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0') ?: '0.2.0').toString().trim()
-    if (!container_cpu_tag_arm64) container_cpu_tag_arm64 = container_cpu_tag
+    if (!container_cpu_tag_arm64) {
+        container_cpu_tag_arm64 = container_cpu_tag
+    }
     def container_gpu_tag = (paramOr('container_gpu_tag', '0.2.0-gpu') ?: '0.2.0-gpu').toString().trim()
-    if (!container_gpu_tag) container_gpu_tag = '0.2.0-gpu'
+    if (!container_gpu_tag) {
+        container_gpu_tag = '0.2.0-gpu'
+    }
+
     def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
     def selected_container_tag = resolved_compute_device == 'gpu' ? container_gpu_tag : selected_cpu_tag
     def auto_docker_image = "${container_repo}:${selected_container_tag}"
-    def auto_singularity_image = "docker://${auto_docker_image}"
+    def auto_docker_singularity_image = "docker://${auto_docker_image}"
+
+    def singularity_image_source = (paramOr('singularity_image_source', 'release') ?: 'release').toString().trim().toLowerCase()
+    if (!(singularity_image_source in ['auto', 'release', 'docker'])) {
+        singularity_image_source = 'auto'
+    }
+    def singularity_release_repo = (paramOr('singularity_release_repo', 'tkcaccia/CellPhenotyper') ?: 'tkcaccia/CellPhenotyper').toString().trim()
+    def singularity_release_tag = (paramOr('singularity_release_tag', 'v0.2.0') ?: 'v0.2.0').toString().trim()
+    def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-0.2.0-amd64.sif') ?: 'cellphenotyper-0.2.0-amd64.sif').toString().trim()
+    def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-0.2.0-arm64.sif') ?: 'cellphenotyper-0.2.0-arm64.sif').toString().trim()
+    def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-0.2.0-gpu-amd64.sif') ?: 'cellphenotyper-0.2.0-gpu-amd64.sif').toString().trim()
+
+    def selected_release_asset = resolved_compute_device == 'gpu'
+        ? singularity_gpu_asset_amd64
+        : (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
+    def auto_release_singularity_image = (singularity_release_repo && singularity_release_tag && selected_release_asset)
+        ? "https://github.com/${singularity_release_repo}/releases/download/${singularity_release_tag}/${selected_release_asset}"
+        : ''
+
+    def release_asset_reachable = false
+    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image) {
+        def escaped_release_url = auto_release_singularity_image.replace("'", "'\"'\"'")
+        release_asset_reachable = command_succeeds("curl -fsIL --max-time 12 '${escaped_release_url}' >/dev/null 2>&1")
+    }
+
+    def auto_singularity_image = auto_docker_singularity_image
+    def auto_singularity_origin = 'docker'
+    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
+        auto_singularity_image = auto_release_singularity_image
+        auto_singularity_origin = 'release'
+    } else if (runtime_profiles.contains('singularity') && singularity_image_source == 'release') {
+        error "Release-hosted Singularity image is not reachable: ${auto_release_singularity_image}. Upload the ${selected_release_asset} asset (or set --singularity_image_source docker)."
+    }
 
     def raw_singularity_image = (paramOr('singularity_image', '') ?: '').toString().trim()
     def resolved_singularity_image = raw_singularity_image
@@ -139,6 +187,7 @@ workflow {
     } else if (raw_singularity_image.toLowerCase().endsWith('.sif') && !raw_singularity_image.contains('/')) {
         resolved_singularity_image = auto_singularity_image
     }
+
     def raw_docker_image = (paramOr('docker_image', '') ?: '').toString().trim()
     def resolved_docker_image = raw_docker_image
     if (runtime_image_mode == 'auto' || !raw_docker_image || raw_docker_image == 'cellphenotyper:full-cpu') {
@@ -179,8 +228,8 @@ workflow {
         startdist       : 'stardist',
         tissue_mask     : 'tissue_mask',
         mask_tissue     : 'tissue_mask',
-        tissue_geojson  : 'tissue_geojson',
-        geojson         : 'tissue_geojson',
+        tissue_geojson  : 'tissue_mask',
+        geojson         : 'cluster_geojson',
         cell_assignment : 'cell_assignment',
         assign          : 'cell_assignment',
         cytoplasm       : 'cytoplasm',
@@ -199,7 +248,7 @@ workflow {
         mask_to_geojson : 'cluster_geojson',
         final_geojson   : 'cluster_geojson'
     ]
-    def stage_order = ['convert', 'stardist', 'tissue_mask', 'tissue_geojson', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
+    def stage_order = ['convert', 'stardist', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
     def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
     def normalize_stage = { raw_value, fallback_value ->
@@ -214,7 +263,7 @@ workflow {
         key
     }
 
-    def default_end_point = run_full_pipeline ? 'cluster_geojson' : 'tissue_geojson'
+    def default_end_point = run_full_pipeline ? 'cluster_geojson' : 'tissue_mask'
     def start_point = normalize_stage(params.start_point, 'convert')
     def end_point = normalize_stage(params.end_point, default_end_point)
 
@@ -233,7 +282,6 @@ workflow {
     def run_convert = should_run_stage('convert')
     def run_stardist = should_run_stage('stardist')
     def run_tissue_mask = should_run_stage('tissue_mask')
-    def run_tissue_geojson = should_run_stage('tissue_geojson')
     def run_cell_assignment = should_run_stage('cell_assignment')
     def run_cytoplasm = should_run_stage('cytoplasm')
     def run_uni2 = should_run_stage('uni2')
@@ -242,9 +290,14 @@ workflow {
     def run_cluster_mask = should_run_stage('cluster_mask')
     def run_grow_tissue = should_run_stage('grow_tissue')
     def run_cluster_geojson = should_run_stage('cluster_geojson')
+    def include_uni2_nuclei = params.uni2_include_nuclei == null ? true : (params.uni2_include_nuclei as boolean)
     def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
+    def include_uni2_inner_square = params.uni2_include_inner_square == null ? true : (params.uni2_include_inner_square as boolean)
+    if (run_kodama && run_uni2 && (!include_uni2_nuclei || !include_uni2_cyto || !include_uni2_inner_square)) {
+        error "KODAMA stage requires all embedding families from UNI-2. Set uni2_include_nuclei=true, uni2_include_cyto=true and uni2_include_inner_square=true."
+    }
 
-    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
+    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     Channel
@@ -297,6 +350,9 @@ workflow {
             def objects_existing = file("${stardist_base_dir}/objects.csv", checkIfExists: true)
             def shift_existing = file("${stardist_base_dir}/shift.json", checkIfExists: true)
             def labels_full_existing = file("${stardist_base_dir}/labels_full.tif")
+            if (run_uni2 && !labels_full_existing.exists()) {
+                error "UNI-2 stage requires full-size labels at ${labels_full_existing}. Run StarDist with write_full_labels enabled."
+            }
 
             crop_roi_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, crop_roi_existing) }
             labels_tif_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, labels_existing) }
@@ -313,14 +369,6 @@ workflow {
         def tissue_mask_input_ch = tissue_mask_from_input ? ome_tif_ch : crop_roi_ch
         BUILD_TISSUE_MASK(tissue_mask_input_ch)
         tissue_mask_ch = BUILD_TISSUE_MASK.out.tissue_mask
-    } else if (run_tissue_geojson) {
-        tissue_mask_ch = image_input_ch.map { sample_id, _ ->
-            tuple(sample_id, file("${params.outdir_base}/03_tissue_mask/${sample_id}_tissue_mask.tif", checkIfExists: true))
-        }
-    }
-
-    if (run_tissue_geojson) {
-        CONVERT_TISSUE_MASK_TO_GEOJSON(tissue_mask_ch)
     }
 
     if (run_cell_assignment || run_cytoplasm || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
@@ -340,17 +388,25 @@ workflow {
         }
 
         def cyto_mask_ch = Channel.empty()
+        def cyto_mask_full_ch = Channel.empty()
         if (run_cytoplasm) {
-            def expand_primary_ch = labels_tif_ch.map { sample_id, labels_tif ->
-                tuple(sample_id, labels_tif, 'labels_cyto')
-            }
+            def expand_primary_ch = labels_tif_ch
+                .join(crop_roi_ch)
+                .map { sample_id, labels_tif, preview_background_tif ->
+                    tuple(sample_id, labels_tif, 'labels_cyto', preview_background_tif.toString())
+                }
             EXPAND_LABELS_TO_CYTOPLASM_PRIMARY(expand_primary_ch)
 
             if (params.expand_full_labels as boolean) {
                 def expand_full_ch = labels_full_tif_ch.map { sample_id, labels_full_tif ->
-                    tuple(sample_id, labels_full_tif, 'labels_full_cyto')
+                    tuple(sample_id, labels_full_tif, 'labels_full_cyto', '')
                 }
                 EXPAND_LABELS_TO_CYTOPLASM_FULL(expand_full_ch)
+                cyto_mask_full_ch = EXPAND_LABELS_TO_CYTOPLASM_FULL.out.expanded_labels
+                    .filter { sample_id, expanded_mask, label_kind -> label_kind == 'labels_full_cyto' }
+                    .map { sample_id, expanded_mask, label_kind -> tuple(sample_id, expanded_mask) }
+            } else if (run_uni2 && (include_uni2_cyto || include_uni2_inner_square)) {
+                error "UNI-2 cyto/inner-square embeddings require expand_full_labels=true to generate *_labels_full_cyto.tif."
             }
 
             cyto_mask_ch = EXPAND_LABELS_TO_CYTOPLASM_PRIMARY.out.expanded_labels
@@ -360,42 +416,90 @@ workflow {
             cyto_mask_ch = image_input_ch.map { sample_id, _ ->
                 tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_cyto.tif", checkIfExists: true))
             }
+            cyto_mask_full_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_full_cyto.tif", checkIfExists: true))
+            }
         }
 
         def tile_embeddings_ch = Channel.empty()
+        def nuclei_embeddings_ch = Channel.empty()
+        def cyto_embeddings_ch = Channel.empty()
+        def inner_square_embeddings_ch = Channel.empty()
         if (run_uni2) {
-            def uni2_tile_input_ch = crop_roi_ch
-                .join(labels_tif_ch)
-                .map { sample_id, crop_roi_tif, labels_tif ->
-                    tuple(sample_id, crop_roi_tif, labels_tif, 'tile', false)
+            def uni2_tile_input_ch = ome_tif_ch
+                .join(labels_full_tif_ch)
+                .map { sample_id, ome_tif, labels_full_tif ->
+                    tuple(sample_id, ome_tif, labels_full_tif, 'tile', false, 'none', 255)
                 }
 
             def uni2_input_ch = uni2_tile_input_ch
             if (include_uni2_cyto) {
-                def uni2_cyto_input_ch = crop_roi_ch
-                    .join(cyto_mask_ch)
-                    .map { sample_id, crop_roi_tif, cyto_mask_tif ->
-                        tuple(sample_id, crop_roi_tif, cyto_mask_tif, 'cyto', true)
+                def uni2_cyto_input_ch = ome_tif_ch
+                    .join(cyto_mask_full_ch)
+                    .map { sample_id, ome_tif, cyto_mask_tif ->
+                        tuple(sample_id, ome_tif, cyto_mask_tif, 'cyto', true, 'label', 255)
                     }
                 uni2_input_ch = uni2_input_ch.mix(uni2_cyto_input_ch)
+            }
+            if (include_uni2_inner_square) {
+                def uni2_inner_square_input_ch = ome_tif_ch
+                    .join(cyto_mask_full_ch)
+                    .map { sample_id, ome_tif, cyto_mask_tif ->
+                        tuple(sample_id, ome_tif, cyto_mask_tif, 'inner_square', true, 'inner_square', 255)
+                    }
+                uni2_input_ch = uni2_input_ch.mix(uni2_inner_square_input_ch)
+            }
+            if (include_uni2_nuclei) {
+                def uni2_nuclei_input_ch = crop_roi_ch
+                    .join(labels_tif_ch)
+                    .map { sample_id, crop_roi_tif, labels_tif ->
+                        tuple(sample_id, crop_roi_tif, labels_tif, 'nuclei', true, 'label', 255)
+                    }
+                uni2_input_ch = uni2_input_ch.mix(uni2_nuclei_input_ch)
             }
 
             EXTRACT_UNI2_EMBEDDINGS(uni2_input_ch)
             tile_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
                 .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'tile' }
                 .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
+            nuclei_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
+                .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'nuclei' }
+                .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
+            cyto_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
+                .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'cyto' }
+                .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
+            inner_square_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
+                .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'inner_square' }
+                .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
         } else if (run_kodama) {
             tile_embeddings_ch = image_input_ch.map { sample_id, _ ->
                 tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_tile", checkIfExists: true))
+            }
+            nuclei_embeddings_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_nuclei", checkIfExists: true))
+            }
+            cyto_embeddings_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_cyto", checkIfExists: true))
+            }
+            inner_square_embeddings_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_inner_square", checkIfExists: true))
             }
         }
 
         def kodama_dir_ch = Channel.empty()
         if (run_kodama) {
-            def kodama_input_ch = tile_embeddings_ch
+            def embedding_quad_ch = tile_embeddings_ch
+                .join(nuclei_embeddings_ch)
+                .join(cyto_embeddings_ch)
+                .join(inner_square_embeddings_ch)
+                .map { sample_id, tile_embeddings_dir, nuclei_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir ->
+                    tuple(sample_id, tile_embeddings_dir, nuclei_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir)
+                }
+
+            def kodama_input_ch = embedding_quad_ch
                 .join(objects_assigned_ch)
-                .map { sample_id, embeddings_dir, objects_assigned ->
-                    tuple(sample_id, embeddings_dir, objects_assigned)
+                .map { sample_id, tile_embeddings_dir, nuclei_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, objects_assigned ->
+                    tuple(sample_id, tile_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, nuclei_embeddings_dir, objects_assigned)
                 }
             RUN_KODAMA_ANALYSIS(kodama_input_ch)
             kodama_dir_ch = RUN_KODAMA_ANALYSIS.out.kodama_dir
@@ -407,7 +511,12 @@ workflow {
 
         def cluster_csv_ch = Channel.empty()
         if (run_clustering) {
-            RUN_RCODE_CLUSTERING(kodama_dir_ch)
+            def clustering_input_ch = kodama_dir_ch
+                .join(objects_assigned_ch)
+                .map { sample_id, kodama_dir, objects_assigned_csv ->
+                    tuple(sample_id, kodama_dir, objects_assigned_csv)
+                }
+            RUN_RCODE_CLUSTERING(clustering_input_ch)
             cluster_csv_ch = RUN_RCODE_CLUSTERING.out.cluster_csv
         } else if (run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
             cluster_csv_ch = image_input_ch.map { sample_id, _ ->
@@ -426,10 +535,17 @@ workflow {
 
         def cluster_mask_ch = Channel.empty()
         if (run_cluster_mask) {
+            def preview_image_for_cluster_mask_ch = run_stardist
+                ? crop_roi_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/stardist_out/crop_roi.tif", checkIfExists: true))
+                }
+
             def cluster_mask_input_ch = labels_for_cluster_ch
                 .join(cluster_csv_ch)
-                .map { sample_id, labels_tif, cluster_csv ->
-                    tuple(sample_id, labels_tif, cluster_csv)
+                .join(preview_image_for_cluster_mask_ch)
+                .map { sample_id, labels_tif, cluster_csv, preview_tif ->
+                    tuple(sample_id, labels_tif, cluster_csv, preview_tif)
                 }
             LABELS_TO_CLUSTER_MASK(cluster_mask_input_ch)
             cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask
@@ -477,23 +593,141 @@ workflow.onComplete {
     def executionDir = new File("${outdir}/00_execution")
     executionDir.mkdirs()
 
-    def stageDirs = [
-        '01_input',
-        '02_stardist',
-        '03_tissue_mask',
-        '04_tissue_geojson',
-        '05_cell_assignments',
-        '06_cytoplasm',
-        '07_embeddings',
-        '08_kodama',
-        '08_kodama_logs',
-        '09_clustering',
-        '09_clustering_logs',
-        '10_cluster_mask',
-        '11_grown_tissue',
-        '12_cluster_geojson',
-        '00_execution'
+    def stageDefs = [
+        [folder: '01_input',          title: 'Input Conversion',        expected: ['.ome.tif']],
+        [folder: '02_stardist',       title: 'StarDist Segmentation',   expected: ['labels.tif', 'objects.csv']],
+        [folder: '03_tissue_mask',    title: 'Tissue Mask',             expected: ['_tissue_mask.tif']],
+        [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
+        [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
+        [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],
+        [folder: '08_kodama',         title: 'KODAMA',                  expected: ['kodama_output']],
+        [folder: '08_kodama_logs',    title: 'KODAMA Logs',             expected: ['.Rout']],
+        [folder: '09_clustering',     title: 'Clustering',              expected: ['_cluster.csv']],
+        [folder: '09_clustering_logs', title: 'Clustering Logs',        expected: ['.Rout']],
+        [folder: '10_cluster_mask',   title: 'Cluster Mask',            expected: ['_cluster_mask.tif']],
+        [folder: '11_grown_tissue',   title: 'Grown Tissue',            expected: ['_grown_mask.ome.tif']],
+        [folder: '12_cluster_geojson', title: 'Cluster GeoJSON',        expected: ['.geojson']],
+        [folder: '00_execution',      title: 'Execution Metadata',      expected: ['trace.tsv', 'timeline.html', 'dag.html']]
     ]
+
+    def bytesToHuman = { long bytes ->
+        if (bytes < 1024L) return "${bytes} B"
+        def units = ['KB', 'MB', 'GB', 'TB']
+        double value = bytes
+        int idx = -1
+        while (value >= 1024.0d && idx < units.size() - 1) {
+            value /= 1024.0d
+            idx++
+        }
+        return String.format('%.2f %s', value, units[idx])
+    }
+
+    def parseDurationSeconds = { String raw ->
+        if (!raw) return 0.0d
+        def value = raw.trim()
+        def m = (value =~ /(?i)^([0-9]+(?:\.[0-9]+)?)\s*(ms|s|m|h|d)$/)
+        if (!m.matches()) return 0.0d
+        def n = m.group(1) as double
+        switch (m.group(2).toLowerCase()) {
+            case 'ms': return n / 1000.0d
+            case 's' : return n
+            case 'm' : return n * 60.0d
+            case 'h' : return n * 3600.0d
+            case 'd' : return n * 86400.0d
+            default  : return 0.0d
+        }
+    }
+
+    def parseMemoryBytes = { String raw ->
+        if (!raw) return 0L
+        def value = raw.trim()
+        def m = (value =~ /(?i)^([0-9]+(?:\.[0-9]+)?)\s*([kmgtp]?i?b)?$/)
+        if (!m.matches()) return 0L
+        def n = m.group(1) as double
+        def unit = (m.group(2) ?: 'b').toLowerCase()
+        def factor = 1.0d
+        switch (unit) {
+            case 'kb':
+            case 'kib': factor = 1024.0d; break
+            case 'mb':
+            case 'mib': factor = 1024.0d * 1024.0d; break
+            case 'gb':
+            case 'gib': factor = 1024.0d * 1024.0d * 1024.0d; break
+            case 'tb':
+            case 'tib': factor = 1024.0d * 1024.0d * 1024.0d * 1024.0d; break
+            default: factor = 1.0d
+        }
+        return (long) (n * factor)
+    }
+
+    def stageSummaries = []
+    stageDefs.each { def stage ->
+        def dir = new File(outdir, stage.folder)
+        def fileCount = 0
+        def totalBytes = 0L
+        def relFiles = []
+        if (dir.exists()) {
+            dir.eachFileRecurse(FileType.FILES) { f ->
+                fileCount++
+                totalBytes += f.length()
+                relFiles << f.path
+            }
+        }
+        relFiles = relFiles.sort()
+        def keyFiles = relFiles.findAll { p ->
+            stage.expected.any { needle -> p.contains(needle) }
+        }.take(5)
+
+        stageSummaries << [
+            folder      : stage.folder,
+            title       : stage.title,
+            present     : dir.exists(),
+            file_count  : fileCount,
+            size_bytes  : totalBytes,
+            size_human  : bytesToHuman(totalBytes),
+            key_files   : keyFiles
+        ]
+    }
+
+    def traceSummaryRows = []
+    def traceFile = new File(executionDir, 'trace.tsv')
+    if (traceFile.exists()) {
+        def lines = traceFile.readLines().findAll { it?.trim() }
+        if (lines.size() > 1) {
+            def header = lines[0].split('\t', -1)
+            def idxName = header.findIndexOf { it == 'name' }
+            def idxRealtime = header.findIndexOf { it == 'realtime' }
+            def idxPeakRss = header.findIndexOf { it == 'peak_rss' }
+            def idxStatus = header.findIndexOf { it == 'status' }
+
+            def grouped = [:].withDefault { [tasks: 0, realtime_s: 0.0d, peak_bytes: 0L, failed: 0] }
+            lines.drop(1).each { row ->
+                def cols = row.split('\t', -1)
+                if (idxName < 0 || idxName >= cols.size()) return
+                def processName = cols[idxName]
+                grouped[processName].tasks += 1
+                if (idxRealtime >= 0 && idxRealtime < cols.size()) {
+                    grouped[processName].realtime_s += parseDurationSeconds(cols[idxRealtime])
+                }
+                if (idxPeakRss >= 0 && idxPeakRss < cols.size()) {
+                    grouped[processName].peak_bytes = Math.max(grouped[processName].peak_bytes, parseMemoryBytes(cols[idxPeakRss]))
+                }
+                if (idxStatus >= 0 && idxStatus < cols.size() && cols[idxStatus] != 'COMPLETED') {
+                    grouped[processName].failed += 1
+                }
+            }
+
+            traceSummaryRows = grouped.collect { k, v ->
+                [
+                    process     : k,
+                    tasks       : v.tasks,
+                    realtime_s  : v.realtime_s,
+                    peak_bytes  : v.peak_bytes,
+                    failed      : v.failed
+                ]
+            }.sort { a, b -> b.realtime_s <=> a.realtime_s }
+        }
+    }
 
     def manifest = new File(executionDir, 'outputs_manifest.txt')
     def lines = []
@@ -503,33 +737,91 @@ workflow.onComplete {
     lines << "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
     lines << ""
     lines << "Stage folders under: ${outdir}"
-    stageDirs.each { dirName ->
-        def dir = new File(outdir, dirName)
-        def status = dir.exists() ? 'PRESENT' : 'MISSING'
-        lines << "${status}\t${dir.path}"
+    stageSummaries.each { s ->
+        def status = s.present ? 'PRESENT' : 'MISSING'
+        lines << "${status}\t${new File(outdir, s.folder).path}\tfiles=${s.file_count}\tsize=${s.size_human}"
     }
     manifest.text = lines.join('\n') + '\n'
 
-    // Keep backward-compatible top-level report filename in sync with latest run report.
-    def runReport = new File(executionDir, 'report.html')
-    def legacyGeojsonReport = new File(outdir, 'report_tissue_geojson.html')
-    if (runReport.exists()) {
-        legacyGeojsonReport.bytes = runReport.bytes
+    def finalReportMd = new File(executionDir, 'final_report.md')
+    def reportLines = []
+    reportLines << "# CellPhenotyper Final Report"
+    reportLines << ""
+    reportLines << "- Run name: `${workflow.runName}`"
+    reportLines << "- Success: `${workflow.success}`"
+    reportLines << "- Stage window: `${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}`"
+    reportLines << "- Output root: `${outdir}`"
+    reportLines << ""
+    reportLines << "## Stage Outputs"
+    reportLines << ""
+    reportLines << "| Folder | Stage | Status | Files | Size |"
+    reportLines << "|---|---|---:|---:|---:|"
+    stageSummaries.each { s ->
+        reportLines << "| `${s.folder}` | ${s.title} | ${s.present ? 'PRESENT' : 'MISSING'} | ${s.file_count} | ${s.size_human} |"
     }
+    reportLines << ""
+    reportLines << "## Key Result Files"
+    reportLines << ""
+    stageSummaries.each { s ->
+        if (s.key_files && !s.key_files.isEmpty()) {
+            reportLines << "- `${s.folder}`"
+            s.key_files.each { path ->
+                reportLines << "  - `${path}`"
+            }
+        }
+    }
+    reportLines << ""
+    reportLines << "## Runtime And Memory (From trace.tsv)"
+    reportLines << ""
+    if (traceSummaryRows && !traceSummaryRows.isEmpty()) {
+        reportLines << "| Process | Tasks | Total Realtime (s) | Peak RSS | Failed Tasks |"
+        reportLines << "|---|---:|---:|---:|---:|"
+        traceSummaryRows.each { t ->
+            reportLines << "| `${t.process}` | ${t.tasks} | ${String.format('%.1f', t.realtime_s)} | ${bytesToHuman(t.peak_bytes)} | ${t.failed} |"
+        }
+    } else {
+        reportLines << "Trace file not available."
+    }
+    reportLines << ""
+    finalReportMd.text = reportLines.join('\n') + '\n'
+
+    def finalReportJson = new File(executionDir, 'final_report.json')
+    def jsonPayload = [
+        run_name      : workflow.runName,
+        success       : workflow.success,
+        stage_window  : [
+            start: (params._resolved_start_point ?: 'convert'),
+            end  : (params._resolved_end_point ?: 'cluster_geojson')
+        ],
+        output_root   : outdir,
+        stages        : stageSummaries.collect { s ->
+            [
+                folder      : s.folder,
+                stage       : s.title,
+                present     : s.present,
+                file_count  : s.file_count,
+                size_bytes  : s.size_bytes,
+                key_files   : s.key_files
+            ]
+        },
+        process_trace_summary: traceSummaryRows
+    ]
+    finalReportJson.text = JsonOutput.prettyPrint(JsonOutput.toJson(jsonPayload)) + '\n'
 
     if (workflow.success) {
         println "PIPELINE COMPLETED SUCCESSFULLY"
         println "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
         println "Execution reports dir: ${outdir}/00_execution"
         println "Output manifest: ${outdir}/00_execution/outputs_manifest.txt"
-        if ((params._resolved_end_point ?: '') in ['tissue_geojson', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama']) {
-            println "Tissue GeoJSON output dir: ${params.outdir_base}/04_tissue_geojson"
-        }
+        println "Final report: ${outdir}/00_execution/final_report.md"
+        println "Final report JSON: ${outdir}/00_execution/final_report.json"
         if ((params._resolved_end_point ?: '') in ['clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']) {
             println "Cluster GeoJSON output dir: ${params.outdir_base}/12_cluster_geojson"
         }
     } else {
         println "Execution reports dir: ${outdir}/00_execution"
         println "Output manifest: ${outdir}/00_execution/outputs_manifest.txt"
+        println "Final report: ${outdir}/00_execution/final_report.md"
+        println "Final report JSON: ${outdir}/00_execution/final_report.json"
     }
 }

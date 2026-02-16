@@ -1,95 +1,106 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E image phenotyping from ROI segmentation to final cluster GeoJSON.
+CellPhenotyper is a fully reproducible, modular computational pathology workflow that takes raw H&E whole-slide images to quantitative cell-level phenotypes.  
+The pipeline performs image conversion/ROI handling, StarDist-based ROI-informed segmentation, UNI-2 foundation-model embeddings, unsupervised KODAMA analysis, and post-KODAMA spatial region construction (`Rcode_Clustering`, `labels_to_cluster_mask`, `grow_to_tissue`, `mask_to_geojson`) to produce final cluster-level GeoJSON.
 
-The pipeline is architecture-aware at runtime:
+The workflow is implemented in Nextflow DSL2 with containerized execution for portability, scalability, and auditability across datasets and compute environments.  
+Container image selection is automatic by default (`runtime_image_mode: auto`): the pipeline detects host architecture/device and resolves the correct GHCR image.
+For full UNI-2 execution, the Hugging Face token must have access to `MahmoodLab/UNI2-h`.
+Token loading is configured via `hf_token_env_file` and `hf_token_env_var_name` in `pipeline_paramers.yml`.
 
-- detects host architecture (`amd64` or `arm64`)
-- resolves compute mode (`cpu`/`gpu` from `compute_device`)
-- selects the proper container tag automatically
-
-Main command:
+The main entrypoint is always:
 
 ```bash
 nextflow run main.nf
 ```
 
-## Quick start
+## Start here: clone, prepare runtime, run first example
 
-Inputs already included in this repository:
+Use this first if you want to run immediately with the repository example input files:
 
 - `Data/ROI.ome.tif`
 - `Data/ROI.geojson`
 
-Run one profile only (`singularity` or `docker`):
+Current OCI image tags (Docker profile, or Singularity fallback):
+
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+
+Current Singularity release assets (auto-selected in `-profile singularity`):
+
+- `cellphenotyper-0.2.0-amd64.sif`
+- `cellphenotyper-0.2.0-arm64.sif`
+- `cellphenotyper-0.2.0-gpu-amd64.sif`
+
+1. Clone repository:
 
 ```bash
 git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
+```
 
+2. Prepare runtime (choose one):
+
+```bash
+# Singularity/Apptainer:
+# no manual pull command is needed.
+# Nextflow auto-selects the release-hosted .sif by architecture/device.
+# If not available, set --singularity_image_source docker to use docker:// fallback.
+
+# Docker (optional pre-pull)
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+```
+
+3. Get and configure UNI-2 token:
+
+- Create/sign in Hugging Face account: `https://huggingface.co`
+- Request access to model: `https://huggingface.co/MahmoodLab/UNI2-h`
+- Create a read token: `https://huggingface.co/settings/tokens`
+- Save token in `tokens.env`:
+
+```bash
+printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
+```
+
+4. Run first full example (choose one profile):
+
+Use only one profile per run. Do not run both `-profile singularity` and `-profile docker` for the same output folder.
+
+```bash
+# Singularity
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
   --image_input Data/ROI.ome.tif \
   --roi_geojson Data/ROI.geojson \
   --outdir_base results_example
+
+# Docker
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
 ```
 
-Expected final output:
+If you need to force a specific image manually, switch to manual mode:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --runtime_image_mode manual \
+  --singularity_image https://github.com/tkcaccia/CellPhenotyper/releases/download/v0.2.0/cellphenotyper-0.2.0-amd64.sif \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
+```
+
+5. Final result:
 
 - `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
-
-## Runtime auto-selection
-
-Default runtime behavior is fully automatic (see `nextflow.config` + `pipeline_paramers.yml`):
-
-- `compute_device: auto`
-- `host_arch: auto`
-- `singularity_image: ""`
-- `docker_image: ""`
-
-Container tags used by auto-selection:
-
-- `container_cpu_tag_arm64: 0.2.0`
-- `container_cpu_tag_amd64: 0.2.0`
-- `container_gpu_tag: 0.2.0-gpu`
-
-You can force architecture if needed:
-
-```bash
---host_arch amd64
-```
-
-You can still override images directly:
-
-```bash
---singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0
-# or
---docker_image ghcr.io/tkcaccia/cellphenotyper:0.2.0
-```
-
-## UNI-2 token
-
-UNI-2 requires a Hugging Face token with access to `MahmoodLab/UNI2-h`.
-
-```bash
-printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
-```
-
-Pipeline defaults:
-
-- `hf_token_env_file: tokens.env`
-- `hf_token_env_var_name: HF_UNI2`
-
-## Singularity definitions in repository
-
-The repository includes updated definition files:
-
-- `singularity/cellphenotyper_full_cpu.def`
-- `singularity/cellphenotyper_full_gpu.def`
-
-Users do not need to build `.sif` manually for standard runs.
-With `-profile singularity`, Nextflow pulls from GHCR automatically.
 
 ## Documentation
 
@@ -98,3 +109,47 @@ With `-profile singularity`, Nextflow pulls from GHCR automatically.
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
 - [Release](RELEASE.md)
+
+## Quick start
+
+After completing installation and UNI-2 token setup, edit `pipeline_paramers.yml` (`start_point` / `end_point` included) and run:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  -resume
+```
+
+## Runtime images (GHCR + release assets)
+
+Default OCI runtime tags hosted on GHCR:
+
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+
+Default Singularity assets hosted on GitHub Releases (`v0.2.0`):
+
+- `cellphenotyper-0.2.0-amd64.sif`
+- `cellphenotyper-0.2.0-arm64.sif`
+- `cellphenotyper-0.2.0-gpu-amd64.sif`
+
+Runtime behavior:
+
+```bash
+# Docker profile: optional pre-pull
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+```
+
+For Singularity/Apptainer profile, no manual pull script is required:
+`runtime_image_mode: auto` + `singularity_image_source: release` resolves the correct release `.sif` by host architecture/device.
+
+Use only one runtime profile per execution: either `singularity` or `docker`.
+
+Container publishing is documented in `RELEASE.md`.
+
+Validated tissue GeoJSON example committed in this repository:
+
+- `examples/validated_outputs/ROI_tissue_mask.geojson`

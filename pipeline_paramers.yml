@@ -12,37 +12,30 @@ outdir_base: results_full
 # Pipeline mode
 run_full_pipeline: true
 tissue_mask_from_input: false
-compute_device: auto  # cpu | gpu | auto
-host_arch: auto      # auto | amd64 | arm64
-runtime_image_mode: auto  # auto | manual
+compute_device: cpu    # cpu | gpu | auto
+host_arch: auto        # auto | amd64 | arm64
+runtime_image_mode: auto   # auto | manual
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, stardist, tissue_mask, tissue_geojson, cell_assignment, cytoplasm, uni2,
+# convert, stardist, tissue_mask, cell_assignment, cytoplasm, uni2,
 # kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
-# CPU default image tags from GHCR
-# For GPU, switch both to tag suffix -gpu (example: 0.2.0-gpu)
-#
-# Optional fully-automatic selector (recommended): leave both empty
-# You can force architecture detection if needed:
-# host_arch: amd64
-# and let Nextflow choose by architecture/device.
-# singularity_image: ""
-# docker_image: ""
-#
-# Optional tag controls used by auto-selection
-# container_repo: ghcr.io/tkcaccia/cellphenotyper
-# container_cpu_tag: 0.2.0
-# container_cpu_tag_amd64: ""
-# container_cpu_tag_arm64: ""
-# container_gpu_tag: 0.2.0-gpu
+# In `runtime_image_mode: auto`, singularity uses release-hosted .sif assets by default.
+# Set `singularity_image_source: docker` to force docker:// OCI fallback.
+# Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_cpu_tag: 0.2.0
-container_cpu_tag_amd64: 0.2.0
+container_cpu_tag_amd64: 0.2.0-amd64
 container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 0.2.0-gpu
+singularity_image_source: release   # release | auto | docker
+singularity_release_repo: tkcaccia/CellPhenotyper
+singularity_release_tag: v0.2.0
+singularity_cpu_asset_amd64: cellphenotyper-0.2.0-amd64.sif
+singularity_cpu_asset_arm64: cellphenotyper-0.2.0-arm64.sif
+singularity_gpu_asset_amd64: cellphenotyper-0.2.0-gpu-amd64.sif
 singularity_image: ""
 docker_image: ""
 
@@ -50,12 +43,56 @@ docker_image: ""
 max_cpus: 8
 max_memory_gb: 32
 stardist_pythonpath: ""
+stardist_prob: 0.52
+stardist_nms: 0.28
+stardist_min_area: 120
+stardist_crop_pad: 0
+tissue_auto_no_downsample_max_side: 1024
 expand_full_labels: true
 expand_mode: auto
 expand_tile_size: 2048
 expand_auto_threshold_mpix: 25.0
+expand_preview_factor: 10
+expand_preview_threshold_mb: 100.0
+expand_preview_alpha: 0.45
 
 # UNI-2 token variable name
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
+uni2_include_nuclei: true
 uni2_include_cyto: true
+uni2_include_inner_square: true
+uni2_force_full_image: false
+uni2_save_tiles: true
+uni2_mask_context_mode: label
+uni2_inner_square_factor: 1.0
+uni2_inner_square_min_px: 32
+uni2_inner_square_max_px: 0
+uni2_inner_square_fixed_px: 90
+
+# KODAMA embedding source:
+# tile | nuclei | cyto | inner_square | any comma-separated combination | all
+kodama_embedding_mode: all
+kodama_dims_to_run: 20
+kodama_spark_top_features: 100
+kodama_n_cores: 4
+
+# Clustering defaults (Louvain on KODAMA embedding)
+cluster_kodama_dim: 20
+cluster_snn_k: 10
+cluster_resolution: auto
+cluster_target_n: 0
+cluster_annotation_guided: true
+cluster_annotation_only: true
+cluster_annotation_col: polygon_label
+cluster_annotation_ari_margin: 0.01
+
+# Cluster mask preview (overlay on crop_roi.tif)
+cluster_mask_preview_factor: 10
+cluster_mask_preview_threshold_mb: 100.0
+cluster_mask_preview_alpha: 0.45
+
+# Grown tissue preview (same overlay style as cluster mask preview)
+grow_preview_factor: 10
+grow_preview_threshold_mb: 100.0
+grow_preview_alpha: 0.45
