@@ -13,6 +13,7 @@ outdir_base: results_full
 run_full_pipeline: true
 tissue_mask_from_input: false
 compute_device: auto  # cpu | gpu | auto
+host_arch: auto      # auto | amd64 | arm64
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
@@ -24,6 +25,8 @@ end_point: auto
 # For GPU, switch both to tag suffix -gpu (example: 0.2.0-gpu)
 #
 # Optional fully-automatic selector (recommended): leave both empty
+# You can force architecture detection if needed:
+# host_arch: amd64
 # and let Nextflow choose by architecture/device.
 # singularity_image: ""
 # docker_image: ""
