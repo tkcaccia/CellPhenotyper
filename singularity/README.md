@@ -39,7 +39,7 @@ limactl shell default
 ### 1) Build/upload arm64 CPU asset (Mac M1/M2 or Linux arm64)
 
 ```bash
-cd /Users/stefano/Documents/CellPhenotyper
+cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 0.2.0 \
   --device cpu \
@@ -85,6 +85,44 @@ You should see the correct asset names for your release.
   --source docker \
   --device cpu \
   --upload
+```
+
+## Troubleshooting: `No space left on device`
+
+If a Singularity build fails with errors like:
+
+- `Could not write to file ... No space left on device`
+- `Failure writing output to destination`
+- `Error when extracting package`
+
+clean temporary/cache directories inside your Linux/Singularity runtime (for macOS this is usually inside Lima), then force temporary and cache directories to a larger writable location.
+
+```bash
+# enter Linux VM if using Lima on macOS
+limactl shell default
+
+# inspect usage
+df -h
+du -sh /tmp /var/tmp ~/.singularity ~/.apptainer ~/.cache 2>/dev/null
+
+# clean common temp/cache leftovers
+sudo rm -rf /tmp/build-temp-* /tmp/bundle-temp-* /tmp/nxf-* /tmp/pip-*
+sudo rm -rf /var/tmp/build-temp-* /var/tmp/bundle-temp-* /var/tmp/Rtmp* /var/tmp/pip-*
+rm -rf ~/.singularity/cache ~/.apptainer/cache ~/.cache/pip
+
+# use larger host-mounted dirs for Singularity temp/cache
+mkdir -p /Users/$USER/.singularity-tmp /Users/$USER/.singularity-cache
+export SINGULARITY_TMPDIR=/Users/$USER/.singularity-tmp
+export APPTAINER_TMPDIR=/Users/$USER/.singularity-tmp
+export SINGULARITY_CACHEDIR=/Users/$USER/.singularity-cache
+export APPTAINER_CACHEDIR=/Users/$USER/.singularity-cache
+```
+
+Then rerun:
+
+```bash
+cd /path/to/CellPhenotyper
+./singularity/publish_sif_release_asset.sh --version 0.2.0 --device cpu --upload
 ```
 
 ## Update Pipeline Defaults for a New Release
