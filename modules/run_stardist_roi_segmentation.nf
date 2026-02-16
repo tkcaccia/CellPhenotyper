@@ -78,6 +78,13 @@ PY
 
     mkdir -p stardist_out
 
+    MIN_AREA_FLAG=""
+    if python "${stardist_script}" --help 2>&1 | grep -q -- "--min-area"; then
+      MIN_AREA_FLAG="--min-area ${params.stardist_min_area}"
+    else
+      echo "[WARN] StarDist script does not support --min-area; skipping area filter at segmentation step."
+    fi
+
     python "${stardist_script}" \\
       --in "${ome_tif}" \\
       --roi "${roi_geojson}" \\
@@ -85,7 +92,7 @@ PY
       --model "${params.stardist_model}" \\
       --prob ${params.stardist_prob} \\
       --nms ${params.stardist_nms} \\
-      --min-area ${params.stardist_min_area} \\
+      \${MIN_AREA_FLAG} \\
       --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
       --pad ${params.stardist_crop_pad} \\
       --full-format "${params.full_format}" \\
