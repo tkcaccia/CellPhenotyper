@@ -77,6 +77,19 @@ nextflow run main.nf \
   --outdir_base results_example
 ```
 
+If you see an error with an old invalid image value such as
+`docker://singularity-stardist_UNI-2-m1.sif`, force the correct image:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --singularity_image docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0 \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example
+```
+
 5. Final result:
 
 - `results_example/12_cluster_geojson/ROI_grown_mask.geojson`

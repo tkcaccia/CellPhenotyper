@@ -18,6 +18,30 @@ workflow {
     def roi_geojson = file(params.roi_geojson, checkIfExists: true)
     def run_full_pipeline = params.run_full_pipeline as boolean
     def tissue_mask_from_input = params.tissue_mask_from_input as boolean
+    def active_profiles = (workflow.profile ?: '')
+        .split(',')
+        .collect { it.trim().toLowerCase() }
+        .findAll { it }
+
+    def runtime_profiles = active_profiles.intersect(['singularity', 'docker'])
+    if (runtime_profiles.size() > 1) {
+        error "Select only one runtime profile: use either '-profile singularity' or '-profile docker' (not both)."
+    }
+
+    if (runtime_profiles.contains('singularity')) {
+        def singularity_image = (params.singularity_image ?: '').toString().trim()
+        if (!singularity_image) {
+            error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
+        }
+
+        if (singularity_image.startsWith('docker://')) {
+            def docker_ref = singularity_image.replaceFirst('^docker://', '')
+            def likely_invalid_ref = (!docker_ref.contains('/')) || docker_ref.endsWith('.sif')
+            if (likely_invalid_ref) {
+                error "Invalid singularity_image '${singularity_image}'. Use a valid OCI reference, e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
+            }
+        }
+    }
 
     def stage_aliases = [
         convert         : 'convert',
