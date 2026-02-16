@@ -10,7 +10,7 @@ This page is step-based so you can choose where to start and where to stop.
 | Fresh machine, run with Docker profile | `Step 0` | `Step 8-D` |
 | Java + Nextflow already installed | `Step 3` | `Step 8-S` or `Step 8-D` |
 | Runtime already installed and working | `Step 5` | `Step 8-S` or `Step 8-D` |
-| Repo already cloned and image already built | `Step 7` | `Step 8-S` or `Step 8-D` |
+| Repo already cloned and runtime configured | `Step 7` | `Step 8-S` or `Step 8-D` |
 | Only need UNI-2 token refresh | `Step 7` | `Step 7` |
 
 ## Step 0: Choose your shell environment
@@ -171,44 +171,68 @@ git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
 ```
 
-## Step 6: Prepare container image
+## Step 6: Configure runtime image source
 
-## Step 6-S (Singularity image from GHCR, CPU)
+Use published GHCR images. For Singularity, Nextflow pulls automatically.
 
-Pull the prebuilt CPU image:
+Reference tags:
 
-```bash
-singularity pull singularity-cellphenotyper-0.1.0.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.1.0
-```
+- CPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+
+## Step 6-S (Singularity/Apptainer from GHCR via Nextflow)
+
+No manual pull command is required.
+When you run with `-profile singularity`, Nextflow pulls `params.singularity_image` automatically.
+
+Default CPU image (already set in `pipeline_paramers.yml`):
+
+- `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+
+For GPU, set:
+
+- `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
 If the package is private, authenticate first with a GitHub token that has `read:packages`:
 
 ```bash
 export SINGULARITY_DOCKER_USERNAME="<github_username>"
 export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
-singularity pull singularity-cellphenotyper-0.1.0.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.1.0
 ```
 
-Verify:
+## Step 6-D (Docker image from GHCR)
+
+Pull images with Docker:
 
 ```bash
-ls -lh singularity-cellphenotyper-0.1.0.sif
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
 
-## Step 6-D (Docker images)
+## Step 6-M (Maintainer image publish to GHCR)
 
-Full CPU image:
+Use this only when you need to publish a new container version.
 
 ```bash
-docker build -f docker/Dockerfile.full.cpu -t cellphenotyper:full-cpu .
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
 ```
 
-Full GPU image (Linux x86_64 + NVIDIA hosts):
+GPU publish:
 
 ```bash
-docker build -f docker/Dockerfile.full.gpu -t cellphenotyper:full-gpu .
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0-gpu"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
 ```
 
 ## Step 7: Configure UNI-2 token (required for full UNI-2 run)
@@ -233,9 +257,9 @@ By default the pipeline reads token file/variable from:
 
 First, edit `pipeline_paramers.yml` with your runtime choices (`image_input`, `roi_geojson`, `compute_device`, `singularity_image`, resource caps).
 To control where the pipeline starts/stops, set `start_point` and `end_point` in the same file.
-For the provided project image, keep:
+For CPU default, keep:
 
-- `singularity_image: singularity-cellphenotyper-0.1.0.sif`
+- `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 
 ```bash
 nextflow run main.nf \
@@ -250,7 +274,7 @@ nextflow run main.nf \
 For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
-- `singularity_image: singularity/cellphenotyper_full_gpu.sif` in `pipeline_paramers.yml`
+- `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 
@@ -267,4 +291,4 @@ nextflow run main.nf \
 For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
-- `docker_image: cellphenotyper:full-gpu` in `pipeline_paramers.yml`
+- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`

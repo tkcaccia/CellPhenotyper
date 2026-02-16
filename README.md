@@ -14,7 +14,7 @@ The main entrypoint is always:
 nextflow run main.nf
 ```
 
-## Start here: clone, pull container, run first example
+## Start here: clone, prepare runtime, run first example
 
 Use this first if you want to run immediately with the repository example input files:
 
@@ -33,14 +33,15 @@ git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
 ```
 
-2. Pull runtime image (choose one):
+2. Prepare runtime (choose one):
 
 ```bash
-# Singularity/Apptainer image
-./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-docker
+# Singularity/Apptainer:
+# no manual pull command is needed.
+# Nextflow pulls the image from `singularity_image` automatically on first run.
 
-# Docker image
-./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu --no-singularity
+# Docker (optional pre-pull)
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 ```
 
 3. Add UNI-2 token file:
@@ -99,19 +100,18 @@ Default runtime tags are hosted on GHCR:
 - CPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 - GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
-Pull helpers:
+Runtime behavior:
 
 ```bash
-./docker/pull_runtime_image.sh --tag 0.2.0 --variant cpu
+# Docker profile: optional pre-pull
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
 
-This pulls Docker and, if available, also materializes a Singularity/Apptainer SIF in `singularity/`.
+For Singularity/Apptainer profile, no manual pull script is required:
+Nextflow pulls `params.singularity_image` automatically.
 
-Maintainer publish helper:
-
-```bash
-./docker/publish_ghcr.sh --tag 0.2.0 --variant cpu --latest
-```
+Container publishing is documented in `RELEASE.md`.
 
 Validated tissue GeoJSON example committed in this repository:
 
