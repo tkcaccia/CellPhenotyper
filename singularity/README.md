@@ -25,13 +25,20 @@ Release tag: `vX.Y.Z`
 ## Prerequisites
 
 - `singularity` or `apptainer`
-- `gh` (GitHub CLI) authenticated (`gh auth login`)
+- `gh` (GitHub CLI) authenticated
 - Repository access to `tkcaccia/CellPhenotyper`
 
 If you are on macOS and using Singularity via Lima, enter the VM first:
 
 ```bash
 limactl shell default
+```
+
+Headless `gh` auth inside Lima:
+
+```bash
+BROWSER=false gh auth login
+gh auth status
 ```
 
 ## Standard Release Workflow
@@ -43,6 +50,17 @@ cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 0.2.0 \
   --device cpu \
+  --upload
+```
+
+If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
+
+```bash
+./singularity/publish_sif_release_asset.sh \
+  --version 0.2.0 \
+  --device cpu \
+  --tmpdir /var/tmp/apptainer/tmp \
+  --cachedir /var/tmp/apptainer/cache \
   --upload
 ```
 
@@ -103,6 +121,7 @@ limactl shell default
 
 # inspect usage
 df -h
+df -h /tmp
 du -sh /tmp /var/tmp ~/.singularity ~/.apptainer ~/.cache 2>/dev/null
 
 # clean common temp/cache leftovers
@@ -110,12 +129,14 @@ sudo rm -rf /tmp/build-temp-* /tmp/bundle-temp-* /tmp/nxf-* /tmp/pip-*
 sudo rm -rf /var/tmp/build-temp-* /var/tmp/bundle-temp-* /var/tmp/Rtmp* /var/tmp/pip-*
 rm -rf ~/.singularity/cache ~/.apptainer/cache ~/.cache/pip
 
-# use larger host-mounted dirs for Singularity temp/cache
-mkdir -p /Users/$USER/.singularity-tmp /Users/$USER/.singularity-cache
-export SINGULARITY_TMPDIR=/Users/$USER/.singularity-tmp
-export APPTAINER_TMPDIR=/Users/$USER/.singularity-tmp
-export SINGULARITY_CACHEDIR=/Users/$USER/.singularity-cache
-export APPTAINER_CACHEDIR=/Users/$USER/.singularity-cache
+# use larger on-disk dirs for Apptainer/Singularity temp/cache
+sudo mkdir -p /var/tmp/apptainer/tmp /var/tmp/apptainer/cache
+sudo chown -R "$USER":"$USER" /var/tmp/apptainer
+export APPTAINER_TMPDIR=/var/tmp/apptainer/tmp
+export APPTAINER_CACHEDIR=/var/tmp/apptainer/cache
+export SINGULARITY_TMPDIR=/var/tmp/apptainer/tmp
+export SINGULARITY_CACHEDIR=/var/tmp/apptainer/cache
+export TMPDIR=/var/tmp/apptainer/tmp
 ```
 
 Then rerun:

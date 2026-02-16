@@ -12,6 +12,8 @@ Options:
   --version <semver>             Version string used in asset name (default: 0.2.0)
   --device <cpu|gpu>             Runtime target (default: cpu)
   --source <def|docker>          Build from definition file or pull from docker:// (default: def)
+  --tmpdir <path>                Temp dir for singularity/apptainer build/pull
+  --cachedir <path>              Cache dir for singularity/apptainer build/pull
   --outdir <path>                Output directory for .sif (default: .)
   --repo <owner/repo>            GitHub repository for release upload (default: tkcaccia/CellPhenotyper)
   --release-tag <tag>            GitHub release tag (default: v<version>)
@@ -56,6 +58,8 @@ VERSION="0.2.0"
 DEVICE="cpu"
 SOURCE="def"
 OUTDIR="."
+USER_TMPDIR=""
+USER_CACHEDIR=""
 REPO="tkcaccia/CellPhenotyper"
 RELEASE_TAG=""
 DOCKER_REPO="ghcr.io/tkcaccia/cellphenotyper"
@@ -82,6 +86,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --outdir)
       OUTDIR="$2"
+      shift 2
+      ;;
+    --tmpdir)
+      USER_TMPDIR="$2"
+      shift 2
+      ;;
+    --cachedir)
+      USER_CACHEDIR="$2"
       shift 2
       ;;
     --repo)
@@ -153,24 +165,43 @@ if [[ -z "$SING_BIN" ]]; then
 fi
 
 # Pick sane defaults for build temp/cache when not provided.
-# This avoids filling tiny VM root filesystems during large image builds.
-if [[ -z "${SINGULARITY_TMPDIR:-}" ]]; then
-  if [[ -d "/Users/${USER:-}" && -w "/Users/${USER:-}" ]]; then
-    export SINGULARITY_TMPDIR="/Users/${USER}/.singularity-tmp"
-  else
-    export SINGULARITY_TMPDIR="/var/tmp"
-  fi
+# This avoids filling tiny /tmp tmpfs during OCI->SIF conversion.
+default_tmpdir="/var/tmp/apptainer/tmp"
+default_cachedir="/var/tmp/apptainer/cache"
+tmp_fs_type="$(df -PT /tmp 2>/dev/null | awk 'NR==2 {print $2}')"
+tmp_kb="$(df -Pk /tmp 2>/dev/null | awk 'NR==2 {print $2}')"
+tmp_total_gb=""
+if [[ -n "${tmp_kb:-}" ]]; then
+  tmp_total_gb="$(awk -v kb="$tmp_kb" 'BEGIN { printf "%.1f", kb/1024/1024 }')"
 fi
-if [[ -z "${SINGULARITY_CACHEDIR:-}" ]]; then
-  if [[ -d "/Users/${USER:-}" && -w "/Users/${USER:-}" ]]; then
-    export SINGULARITY_CACHEDIR="/Users/${USER}/.singularity-cache"
-  else
-    export SINGULARITY_CACHEDIR="/var/tmp/.singularity-cache"
-  fi
+
+if [[ -n "$USER_TMPDIR" ]]; then
+  export SINGULARITY_TMPDIR="$USER_TMPDIR"
+elif [[ -n "${SINGULARITY_TMPDIR:-}" ]]; then
+  export SINGULARITY_TMPDIR
+elif [[ "$tmp_fs_type" == "tmpfs" ]]; then
+  export SINGULARITY_TMPDIR="$default_tmpdir"
+else
+  export SINGULARITY_TMPDIR="/var/tmp"
 fi
+
+if [[ -n "$USER_CACHEDIR" ]]; then
+  export SINGULARITY_CACHEDIR="$USER_CACHEDIR"
+elif [[ -n "${SINGULARITY_CACHEDIR:-}" ]]; then
+  export SINGULARITY_CACHEDIR
+elif [[ "$tmp_fs_type" == "tmpfs" ]]; then
+  export SINGULARITY_CACHEDIR="$default_cachedir"
+else
+  export SINGULARITY_CACHEDIR="/var/tmp/.singularity-cache"
+fi
+
 export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$SINGULARITY_TMPDIR}"
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$SINGULARITY_CACHEDIR}"
+export TMPDIR="${TMPDIR:-$APPTAINER_TMPDIR}"
 mkdir -p "$SINGULARITY_TMPDIR" "$SINGULARITY_CACHEDIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+if [[ "$tmp_fs_type" == "tmpfs" ]]; then
+  echo "INFO: /tmp is tmpfs (${tmp_total_gb:-unknown}G). Using APPTAINER_TMPDIR=$APPTAINER_TMPDIR and APPTAINER_CACHEDIR=$APPTAINER_CACHEDIR"
+fi
 
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
 if [[ "$DEVICE" == "gpu" && "$HOST_ARCH" != "amd64" ]]; then
@@ -211,7 +242,7 @@ if [[ "$SOURCE" == "def" ]]; then
   if [[ "$USE_FAKEROOT" == "true" || "$EUID" -eq 0 ]]; then
     "${build_cmd[@]}"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo --preserve-env=SINGULARITY_TMPDIR,SINGULARITY_CACHEDIR,APPTAINER_TMPDIR,APPTAINER_CACHEDIR "${build_cmd[@]}"
+    sudo --preserve-env=SINGULARITY_TMPDIR,SINGULARITY_CACHEDIR,APPTAINER_TMPDIR,APPTAINER_CACHEDIR,TMPDIR "${build_cmd[@]}"
   else
     echo "Definition build requires root/sudo or --fakeroot support." >&2
     exit 1
