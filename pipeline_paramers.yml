@@ -12,7 +12,7 @@ outdir_base: results_full
 # Pipeline mode
 run_full_pipeline: true
 tissue_mask_from_input: false
-compute_device: cpu   # cpu | gpu | auto
+compute_device: auto  # cpu | gpu | auto
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
@@ -20,6 +20,20 @@ end_point: auto
 # kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
+# CPU default image tags from GHCR
+# For GPU, switch both to tag suffix -gpu (example: 0.2.0-gpu)
+#
+# Optional fully-automatic selector (recommended): leave both empty
+# and let Nextflow choose by architecture/device.
+# singularity_image: ""
+# docker_image: ""
+#
+# Optional tag controls used by auto-selection
+# container_repo: ghcr.io/tkcaccia/cellphenotyper
+# container_cpu_tag: 0.2.0
+# container_cpu_tag_amd64: ""
+# container_cpu_tag_arm64: ""
+# container_gpu_tag: 0.2.0-gpu
 singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0
 docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0
 
