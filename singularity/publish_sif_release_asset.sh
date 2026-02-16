@@ -37,7 +37,8 @@ USAGE
 }
 
 normalize_arch() {
-  local raw="${1,,}"
+  local raw
+  raw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   case "$raw" in
     x86_64|amd64|x64|x86-64)
       echo "amd64"
@@ -72,11 +73,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --device)
-      DEVICE="${2,,}"
+      DEVICE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
       shift 2
       ;;
     --source)
-      SOURCE="${2,,}"
+      SOURCE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
       shift 2
       ;;
     --outdir)
