@@ -171,8 +171,12 @@ workflow {
     if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
         auto_singularity_image = auto_release_singularity_image
         auto_singularity_origin = 'release'
-    } else if (runtime_profiles.contains('singularity') && singularity_image_source == 'release') {
-        error "Release-hosted Singularity image is not reachable: ${auto_release_singularity_image}. Upload the ${selected_release_asset} asset (or set --singularity_image_source docker)."
+    } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release']) {
+        auto_singularity_image = auto_docker_singularity_image
+        auto_singularity_origin = 'docker'
+        if (singularity_image_source == 'release') {
+            println "WARN: Release-hosted Singularity image is not reachable (${auto_release_singularity_image}); falling back to ${auto_docker_singularity_image}"
+        }
     }
 
     def raw_singularity_image = (paramOr('singularity_image', '') ?: '').toString().trim()
