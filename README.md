@@ -44,13 +44,20 @@ cd CellPhenotyper
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 ```
 
-3. Add UNI-2 token file:
+3. Get and configure UNI-2 token:
+
+- Create/sign in Hugging Face account: `https://huggingface.co`
+- Request access to model: `https://huggingface.co/MahmoodLab/UNI2-h`
+- Create a read token: `https://huggingface.co/settings/tokens`
+- Save token in `tokens.env`:
 
 ```bash
 printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
 ```
 
 4. Run first full example (choose one profile):
+
+Use only one profile per run. Do not run both `-profile singularity` and `-profile docker` for the same output folder.
 
 ```bash
 # Singularity
@@ -110,6 +117,8 @@ docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 
 For Singularity/Apptainer profile, no manual pull script is required:
 Nextflow pulls `params.singularity_image` automatically.
+
+Use only one runtime profile per execution: either `singularity` or `docker`.
 
 Container publishing is documented in `RELEASE.md`.
 
