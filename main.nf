@@ -28,8 +28,127 @@ workflow {
         error "Select only one runtime profile: use either '-profile singularity' or '-profile docker' (not both)."
     }
 
+    def normalize_arch = { raw_arch ->
+        def value = (raw_arch ?: '').toString().trim().toLowerCase()
+        if (value in ['x86_64', 'amd64', 'x64', 'x86-64']) return 'amd64'
+        if (value in ['aarch64', 'arm64', 'arm64v8', 'arm64/v8', 'armv8', 'armv8l']) return 'arm64'
+        if (value == 'auto') return 'auto'
+        return value ?: 'unknown'
+    }
+
+    def command_output = { String cmd ->
+        try {
+            def proc = ['bash', '-lc', cmd].execute()
+            def finished = proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+                return ''
+            }
+            if (proc.exitValue() != 0) return ''
+            return proc.in.text.trim()
+        } catch (Throwable ignored) {
+            return ''
+        }
+    }
+
+    def command_succeeds = { String cmd ->
+        try {
+            def proc = ['bash', '-lc', cmd].execute()
+            def finished = proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+                return false
+            }
+            return proc.exitValue() == 0
+        } catch (Throwable ignored) {
+            return false
+        }
+    }
+
+    def paramOr = { String key, def fallback ->
+        params.containsKey(key) ? params[key] : fallback
+    }
+
+    def runtime_image_mode = (paramOr('runtime_image_mode', 'auto') ?: 'auto').toString().trim().toLowerCase()
+    if (!(runtime_image_mode in ['auto', 'manual'])) {
+        runtime_image_mode = 'auto'
+    }
+
+    def requested_arch_raw = (paramOr('host_arch', 'auto') ?: 'auto').toString().trim().toLowerCase()
+    def requested_arch = normalize_arch(requested_arch_raw)
+    if (!(requested_arch in ['auto', 'amd64', 'arm64'])) {
+        requested_arch = 'auto'
+    }
+
+    def detected_arch_candidates = [
+        normalize_arch(System.getProperty('os.arch')),
+        normalize_arch(System.getenv('NXF_HOST_ARCH')),
+        normalize_arch(System.getenv('TARGETARCH')),
+        normalize_arch(command_output('uname -m')),
+        normalize_arch(command_output('dpkg --print-architecture'))
+    ].findAll { it && it != 'unknown' && it != 'auto' }
+    def detected_arch = (requested_arch in ['amd64', 'arm64'])
+        ? requested_arch
+        : (detected_arch_candidates ? detected_arch_candidates[0] : 'unknown')
+    if (detected_arch == 'unknown') {
+        error "Could not detect host architecture. Use --host_arch amd64 or --host_arch arm64."
+    }
+
+    def requested_compute_device = (paramOr('compute_device', 'auto') ?: 'auto').toString().trim().toLowerCase()
+    if (!(requested_compute_device in ['cpu', 'gpu', 'auto'])) {
+        requested_compute_device = 'auto'
+    }
+    def detected_nvidia = command_succeeds('command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1')
+    if (!detected_nvidia) {
+        def nvidia_visible = (System.getenv('NVIDIA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
+        def cuda_visible = (System.getenv('CUDA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
+        def is_positive = { String value -> value && !(value in ['none', 'void', 'no', 'false', '-1']) }
+        detected_nvidia = is_positive(nvidia_visible) || is_positive(cuda_visible)
+    }
+    def resolved_compute_device = requested_compute_device == 'auto'
+        ? ((detected_arch == 'amd64' && detected_nvidia) ? 'gpu' : 'cpu')
+        : requested_compute_device
+    if (resolved_compute_device == 'gpu' && detected_arch != 'amd64') {
+        error "compute_device='gpu' is supported only on amd64/x86_64. Detected architecture '${detected_arch}'."
+    }
+
+    def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper') ?: 'ghcr.io/tkcaccia/cellphenotyper').toString().trim()
+    if (!container_repo) container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
+    def container_cpu_tag = (paramOr('container_cpu_tag', '0.2.0') ?: '0.2.0').toString().trim()
+    if (!container_cpu_tag) container_cpu_tag = '0.2.0'
+    def container_cpu_tag_amd64 = (paramOr('container_cpu_tag_amd64', '0.2.0-amd64') ?: '0.2.0-amd64').toString().trim()
+    if (!container_cpu_tag_amd64) container_cpu_tag_amd64 = container_cpu_tag
+    def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0') ?: '0.2.0').toString().trim()
+    if (!container_cpu_tag_arm64) container_cpu_tag_arm64 = container_cpu_tag
+    def container_gpu_tag = (paramOr('container_gpu_tag', '0.2.0-gpu') ?: '0.2.0-gpu').toString().trim()
+    if (!container_gpu_tag) container_gpu_tag = '0.2.0-gpu'
+    def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
+    def selected_container_tag = resolved_compute_device == 'gpu' ? container_gpu_tag : selected_cpu_tag
+    def auto_docker_image = "${container_repo}:${selected_container_tag}"
+    def auto_singularity_image = "docker://${auto_docker_image}"
+
+    def raw_singularity_image = (paramOr('singularity_image', '') ?: '').toString().trim()
+    def resolved_singularity_image = raw_singularity_image
+    if (runtime_image_mode == 'auto' || !raw_singularity_image) {
+        resolved_singularity_image = auto_singularity_image
+    } else if (raw_singularity_image.startsWith('docker://')) {
+        def ref = raw_singularity_image.replaceFirst('^docker://', '')
+        if (!ref.contains('/') || ref.endsWith('.sif')) {
+            resolved_singularity_image = auto_singularity_image
+        }
+    } else if (raw_singularity_image.toLowerCase().endsWith('.sif') && !raw_singularity_image.contains('/')) {
+        resolved_singularity_image = auto_singularity_image
+    }
+    def raw_docker_image = (paramOr('docker_image', '') ?: '').toString().trim()
+    def resolved_docker_image = raw_docker_image
+    if (runtime_image_mode == 'auto' || !raw_docker_image || raw_docker_image == 'cellphenotyper:full-cpu') {
+        resolved_docker_image = auto_docker_image
+    }
+
     if (runtime_profiles.contains('singularity')) {
-        def singularity_image = (params.singularity_image ?: '').toString().trim()
+        def singularity_image = runtime_image_mode == 'manual'
+            ? (paramOr('singularity_image', '') ?: '').toString().trim()
+            : resolved_singularity_image
         if (!singularity_image) {
             error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
         }
@@ -42,7 +161,7 @@ workflow {
             }
         }
 
-        def resolved_arch = (params._detected_arch ?: '').toString().trim().toLowerCase()
+        def resolved_arch = detected_arch
         def image_lc = singularity_image.toLowerCase()
         if (resolved_arch == 'amd64' && image_lc.contains('arm64')) {
             error "Detected host architecture amd64 but singularity_image appears arm64: ${singularity_image}. Set --host_arch amd64 and/or override --singularity_image."
@@ -125,7 +244,7 @@ workflow {
     def run_cluster_geojson = should_run_stage('cluster_geojson')
     def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
 
-    println "Runtime auto-selection: requested_arch=${params.host_arch ?: 'auto'}, detected_arch=${params._detected_arch ?: 'unknown'}, arch_candidates=${params._detected_arch_candidates ?: ''}, requested_compute_device=${params._requested_compute_device ?: params.compute_device}, resolved_compute_device=${params.compute_device}, singularity_image=${params.singularity_image}, docker_image=${params.docker_image}"
+    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     Channel

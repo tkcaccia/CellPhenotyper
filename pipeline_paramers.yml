@@ -14,6 +14,7 @@ run_full_pipeline: true
 tissue_mask_from_input: false
 compute_device: auto  # cpu | gpu | auto
 host_arch: auto      # auto | amd64 | arm64
+runtime_image_mode: auto  # auto | manual
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
