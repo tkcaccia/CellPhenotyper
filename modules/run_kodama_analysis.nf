@@ -10,24 +10,37 @@ process RUN_KODAMA_ANALYSIS {
     time { params.r_time as String }
 
     input:
-    tuple val(sample_id), path(embeddings_dir), path(objects_assigned_csv)
+    tuple val(sample_id), path(tile_embeddings_dir), path(cyto_embeddings_dir), path(inner_square_embeddings_dir), path(nuclei_embeddings_dir), path(objects_assigned_csv)
 
     output:
     tuple val(sample_id), path("kodama_output"), emit: kodama_dir
     tuple val(sample_id), path("KODAMA_${sample_id}.Rout"), emit: kodama_log
 
     script:
+    def r_loader_script = "${projectDir}/${params.r_data_loader_script}"
     def r_script = "${projectDir}/${params.r_script}"
     """
     set -euo pipefail
 
     mkdir -p kodama_output
 
-    Rscript "${r_script}" \\
-      "${embeddings_dir}" \\
-      "${objects_assigned_csv}" \\
-      "kodama_output" \\
-      > "KODAMA_${sample_id}.Rout" 2>&1
+    {
+      Rscript "${r_loader_script}" \\
+        "${tile_embeddings_dir}" \\
+        "${cyto_embeddings_dir}" \\
+        "${inner_square_embeddings_dir}" \\
+        "${nuclei_embeddings_dir}" \\
+        "${objects_assigned_csv}" \\
+        "kodama_output"
+
+      Rscript "${r_script}" \\
+        "kodama_output/rawdata.RData" \\
+        "kodama_output" \\
+        --embedding-mode "${params.kodama_embedding_mode}" \\
+        --dims-to-run ${params.kodama_dims_to_run} \\
+        --spark-top ${params.kodama_spark_top_features} \\
+        --n-cores ${Math.max(1, Math.min(task.cpus as int, params.kodama_n_cores as int))}
+    } > "KODAMA_${sample_id}.Rout" 2>&1
     """
 
     stub:
