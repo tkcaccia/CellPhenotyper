@@ -509,10 +509,11 @@ workflow {
                 uni2_input_ch = uni2_input_ch.mix(uni2_inner_square_input_ch)
             }
             if (include_uni2_nuclei) {
-                def uni2_nuclei_input_ch = crop_roi_ch
-                    .join(labels_tif_ch)
-                    .map { sample_id, crop_roi_tif, labels_tif ->
-                        tuple(sample_id, crop_roi_tif, labels_tif, 'nuclei', true, 'label', 255)
+                // Keep nuclei embeddings in the same full-image coordinate system as tile/cyto/inner_square
+                def uni2_nuclei_input_ch = ome_tif_ch
+                    .join(labels_full_tif_ch)
+                    .map { sample_id, ome_tif, labels_full_tif ->
+                        tuple(sample_id, ome_tif, labels_full_tif, 'nuclei', true, 'label', 255)
                     }
                 uni2_input_ch = uni2_input_ch.mix(uni2_nuclei_input_ch)
             }
