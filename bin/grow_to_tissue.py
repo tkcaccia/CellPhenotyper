@@ -44,10 +44,28 @@ from scipy.ndimage import distance_transform_edt
 # Optional preview deps
 try:
     from PIL import Image
-    from skimage.segmentation import find_boundaries
 except Exception:
     Image = None
-    find_boundaries = None
+
+
+DEFAULT_PALETTE = np.array([
+    [230, 25, 75],
+    [60, 180, 75],
+    [255, 225, 25],
+    [0, 130, 200],
+    [245, 130, 48],
+    [145, 30, 180],
+    [70, 240, 240],
+    [240, 50, 230],
+    [210, 245, 60],
+    [250, 190, 190],
+    [0, 128, 128],
+    [230, 190, 255],
+    [170, 110, 40],
+    [255, 250, 200],
+    [128, 0, 0],
+    [170, 255, 195],
+], dtype=np.uint8)
 
 
 def ensure_2d(arr: np.ndarray, name: str) -> np.ndarray:
@@ -201,38 +219,98 @@ def grow_clusters_with_nearest_seed(seeds: np.ndarray, tissue: np.ndarray) -> np
     return grown
 
 
-def save_preview_png(image_path: str | None, tissue: np.ndarray, grown: np.ndarray,
-                     out_png: str, factor: int = 10):
-    if Image is None or find_boundaries is None:
-        print("[WARN] Preview disabled: pillow/skimage not available.")
+def downsample_nearest(arr: np.ndarray, factor: int) -> np.ndarray:
+    f = int(max(1, factor))
+    if f <= 1:
+        return arr
+    if arr.ndim == 2:
+        return arr[::f, ::f]
+    return arr[::f, ::f, ...]
+
+
+def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3:
+        if arr.shape[0] in (3, 4) and arr.shape[-1] not in (3, 4):
+            arr = np.moveaxis(arr, 0, -1)
+        if arr.shape[-1] not in (3, 4):
+            raise ValueError(f"Unsupported preview image shape: {arr.shape}")
+        arr = arr[..., :3]
+    else:
+        raise ValueError(f"Unsupported preview image shape: {arr.shape}")
+
+    if arr.dtype == np.uint8:
+        return arr
+
+    arr_f = arr.astype(np.float32, copy=False)
+    finite = np.isfinite(arr_f)
+    if not finite.any():
+        return np.zeros(arr.shape[:2] + (3,), dtype=np.uint8)
+    lo = float(np.percentile(arr_f[finite], 1.0))
+    hi = float(np.percentile(arr_f[finite], 99.0))
+    if hi <= lo:
+        hi = lo + 1.0
+    arr_f = (arr_f - lo) * (255.0 / (hi - lo))
+    return np.clip(arr_f, 0, 255).astype(np.uint8)
+
+
+def colorize_label_mask(label_mask: np.ndarray, default_value: int = 0) -> np.ndarray:
+    out = np.zeros(label_mask.shape + (3,), dtype=np.uint8)
+    label_ids = np.unique(label_mask)
+    label_ids = label_ids[label_ids != default_value]
+    for idx, lid in enumerate(label_ids):
+        out[label_mask == lid] = DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
+    return out
+
+
+def save_preview_png(
+    image_path: str | None,
+    grown: np.ndarray,
+    out_png: str,
+    factor: int = 10,
+    size_threshold_mb: float = 100.0,
+    alpha: float = 0.45,
+    default_value: int = 0,
+):
+    if Image is None:
+        print("[WARN] Preview disabled: pillow not available.")
         return
     out_dir = os.path.dirname(out_png)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
     if image_path and os.path.exists(image_path):
-        img = imread(image_path)
-        if img.ndim == 3 and img.shape[-1] >= 3:
-            bg = (0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]).astype(np.float32)
-        else:
-            bg = ensure_2d(img, "image").astype(np.float32)
-        bg = bg - bg.min()
-        bg = bg / (bg.max() + 1e-8)
+        bg = to_uint8_rgb(imread(image_path))
+        if bg.shape[:2] != grown.shape:
+            raise ValueError(
+                f"Preview background shape {bg.shape[:2]} does not match grown mask shape {grown.shape}. "
+                "Expected crop_roi.tif aligned with mask."
+            )
     else:
-        bg = np.ones_like(tissue, dtype=np.float32)
+        bg = np.full(grown.shape + (3,), 255, dtype=np.uint8)
 
-    tb = find_boundaries(tissue, mode="outer")
-    gb = find_boundaries(grown, mode="outer")
+    est_bytes = int(bg.nbytes + grown.nbytes)
+    threshold_bytes = int(float(size_threshold_mb) * 1024 * 1024)
+    use_factor = int(max(1, factor)) if est_bytes > threshold_bytes else 1
 
-    rgb = np.stack([bg, bg, bg], axis=-1)
-    rgb[tb, 1] = 1.0; rgb[tb, 0] = 0.0; rgb[tb, 2] = 0.0  # green
-    rgb[gb, 0] = 1.0; rgb[gb, 1] = 0.0; rgb[gb, 2] = 0.0  # red
+    bg_small = downsample_nearest(bg, use_factor)
+    grown_small = downsample_nearest(grown, use_factor)
+    overlay = colorize_label_mask(grown_small, default_value=default_value)
+    fg = grown_small != default_value
 
-    h, w = tissue.shape
-    hh, ww = max(1, h // factor), max(1, w // factor)
-    im = Image.fromarray((rgb * 255).clip(0, 255).astype(np.uint8))
-    im = im.resize((ww, hh), resample=Image.BILINEAR)
-    im.save(out_png)
+    out = bg_small.astype(np.float32, copy=True)
+    a = float(max(0.0, min(1.0, alpha)))
+    out[fg] = (1.0 - a) * out[fg] + a * overlay[fg].astype(np.float32)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    Image.fromarray(out).save(out_png)
+    print(
+        "[INFO] wrote grown overlay preview: "
+        f"{out_png} (factor={use_factor}, "
+        f"threshold_mb={size_threshold_mb}, "
+        f"estimated_mb={est_bytes / (1024.0 * 1024.0):.1f})"
+    )
 
 
 def pyramidize_with_raw2ometiff(in_tif: str,
@@ -298,6 +376,10 @@ def main():
     ap.add_argument("--out", required=True, help="FINAL output pyramidal OME-TIFF (e.g. grown_mask.ome.tif)")
     ap.add_argument("--preview", default=None, help="Optional preview PNG")
     ap.add_argument("--preview-factor", type=int, default=10)
+    ap.add_argument("--preview-threshold-mb", type=float, default=100.0,
+                    help="Downsample preview only when estimated image+mask size exceeds this threshold (MB).")
+    ap.add_argument("--preview-alpha", type=float, default=0.45,
+                    help="Overlay alpha for colored grown mask preview (0..1).")
 
     # kept for CLI compatibility
     ap.add_argument("--sigma", type=float, default=1.0,
@@ -406,7 +488,15 @@ def main():
 
     # Preview
     if args.preview:
-        save_preview_png(args.image, tissue, grown, args.preview, factor=args.preview_factor)
+        save_preview_png(
+            image_path=args.image,
+            grown=grown,
+            out_png=args.preview,
+            factor=args.preview_factor,
+            size_threshold_mb=args.preview_threshold_mb,
+            alpha=args.preview_alpha,
+            default_value=0,
+        )
 
     # Cleanup temp
     try:

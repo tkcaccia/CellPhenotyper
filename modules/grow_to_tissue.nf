@@ -33,6 +33,8 @@ process GROW_TO_TISSUE {
       --out "${sample_id}_grown_mask.ome.tif" \
       --preview "${sample_id}_grown_qc_preview.png" \
       --preview-factor ${params.grow_preview_factor} \
+      --preview-threshold-mb ${params.grow_preview_threshold_mb} \
+      --preview-alpha ${params.grow_preview_alpha} \
       --sigma ${params.grow_sigma} \
       ${restrict_flag} \
       --min-seed-area ${params.grow_min_seed_area} \

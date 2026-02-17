@@ -9,7 +9,7 @@ process LABELS_TO_CLUSTER_MASK {
     time { params.cluster_mask_time as String }
 
     input:
-    tuple val(sample_id), path(labels_tif), path(cluster_csv)
+    tuple val(sample_id), path(labels_tif), path(cluster_csv), path(preview_image_tif)
 
     output:
     tuple val(sample_id), path("${sample_id}_cluster_mask.tif"), emit: cluster_mask
@@ -27,7 +27,10 @@ process LABELS_TO_CLUSTER_MASK {
       --default ${params.cluster_mask_default_value} \
       --compress "${params.cluster_mask_compression}" \
       --preview "${sample_id}_cluster_mask_preview.png" \
-      --preview-factor ${params.cluster_mask_preview_factor}
+      --preview-factor ${params.cluster_mask_preview_factor} \
+      --preview-threshold-mb ${params.cluster_mask_preview_threshold_mb} \
+      --preview-alpha ${params.cluster_mask_preview_alpha} \
+      --preview-background "${preview_image_tif}"
     """
 
     stub:
