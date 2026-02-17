@@ -594,17 +594,10 @@ workflow {
 
         def cluster_mask_ch = Channel.empty()
         if (run_cluster_mask) {
-            def preview_image_for_cluster_mask_ch = run_stardist
-                ? crop_roi_ch
-                : image_input_ch.map { sample_id, _ ->
-                    tuple(sample_id, file("${params.outdir_base}/02_stardist/stardist_out/crop_roi.tif", checkIfExists: true))
-                }
-
             def cluster_mask_input_ch = labels_for_cluster_ch
                 .join(cluster_csv_ch)
-                .join(preview_image_for_cluster_mask_ch)
-                .map { sample_id, labels_tif, cluster_csv, preview_tif ->
-                    tuple(sample_id, labels_tif, cluster_csv, preview_tif)
+                .map { sample_id, labels_tif, cluster_csv ->
+                    tuple(sample_id, labels_tif, cluster_csv)
                 }
             LABELS_TO_CLUSTER_MASK(cluster_mask_input_ch)
             cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask

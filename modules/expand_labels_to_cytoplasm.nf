@@ -9,10 +9,11 @@ process EXPAND_LABELS_TO_CYTOPLASM {
     time { params.expand_time as String }
 
     input:
-    tuple val(sample_id), path(labels_tif), val(label_kind)
+    tuple val(sample_id), path(labels_tif), val(label_kind), val(preview_background_path)
 
     output:
     tuple val(sample_id), path("${sample_id}_${label_kind}.tif"), val(label_kind), emit: expanded_labels
+    tuple val(sample_id), path("${sample_id}_${label_kind}_preview.png"), val(label_kind), emit: expanded_preview
 
     script:
     def compression_flag = params.expand_compression ? "--compression ${params.expand_compression}" : ''
@@ -27,11 +28,17 @@ process EXPAND_LABELS_TO_CYTOPLASM {
       --mode "${params.expand_mode}" \\
       --tile-size ${params.expand_tile_size} \\
       --auto-threshold-mpix ${params.expand_auto_threshold_mpix} \\
+      --preview "${sample_id}_${label_kind}_preview.png" \\
+      --preview-background "${preview_background_path}" \\
+      --preview-factor ${params.expand_preview_factor} \\
+      --preview-threshold-mb ${params.expand_preview_threshold_mb} \\
+      --preview-alpha ${params.expand_preview_alpha} \\
       ${compression_flag}
     """
 
     stub:
     """
     touch "${sample_id}_${label_kind}.tif"
+    touch "${sample_id}_${label_kind}_preview.png"
     """
 }

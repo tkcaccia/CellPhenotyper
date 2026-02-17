@@ -43,6 +43,31 @@ try:
 except Exception:
     distance_transform_edt = None
 
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+
+DEFAULT_PALETTE = np.array([
+    [230, 25, 75],
+    [60, 180, 75],
+    [255, 225, 25],
+    [0, 130, 200],
+    [245, 130, 48],
+    [145, 30, 180],
+    [70, 240, 240],
+    [240, 50, 230],
+    [210, 245, 60],
+    [250, 190, 190],
+    [0, 128, 128],
+    [230, 190, 255],
+    [170, 110, 40],
+    [255, 250, 200],
+    [128, 0, 0],
+    [170, 255, 195],
+], dtype=np.uint8)
+
 
 def die(msg: str, code: int = 2) -> None:
     print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
@@ -176,6 +201,107 @@ def expand_labels_nonoverlap_tiled(labels: np.ndarray, expand_px: int, tile_size
     return out
 
 
+def downsample_nearest(arr: np.ndarray, factor: int) -> np.ndarray:
+    f = int(max(1, factor))
+    if f <= 1:
+        return arr
+    if arr.ndim == 2:
+        return arr[::f, ::f]
+    return arr[::f, ::f, ...]
+
+
+def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3:
+        if arr.shape[0] in (3, 4) and arr.shape[-1] not in (3, 4):
+            arr = np.moveaxis(arr, 0, -1)
+        if arr.shape[-1] not in (3, 4):
+            raise ValueError(f"Unsupported preview image shape: {arr.shape}")
+        arr = arr[..., :3]
+    else:
+        raise ValueError(f"Unsupported preview image shape: {arr.shape}")
+
+    if arr.dtype == np.uint8:
+        return arr
+
+    arr_f = arr.astype(np.float32, copy=False)
+    finite = np.isfinite(arr_f)
+    if not finite.any():
+        return np.zeros(arr.shape[:2] + (3,), dtype=np.uint8)
+    lo = float(np.percentile(arr_f[finite], 1.0))
+    hi = float(np.percentile(arr_f[finite], 99.0))
+    if hi <= lo:
+        hi = lo + 1.0
+    arr_f = (arr_f - lo) * (255.0 / (hi - lo))
+    return np.clip(arr_f, 0, 255).astype(np.uint8)
+
+
+def colorize_label_mask(label_mask: np.ndarray, default_value: int = 0) -> np.ndarray:
+    out = np.zeros(label_mask.shape + (3,), dtype=np.uint8)
+    label_ids = np.unique(label_mask)
+    label_ids = label_ids[label_ids != default_value]
+    for idx, lid in enumerate(label_ids):
+        out[label_mask == lid] = DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
+    return out
+
+
+def write_preview_overlay_png(
+    label_mask: np.ndarray,
+    out_png: Path,
+    factor_if_large: int,
+    size_threshold_mb: float,
+    default_value: int,
+    preview_background_path: Path | None,
+    alpha: float,
+) -> None:
+    if Image is None:
+        log("Preview requested but pillow is unavailable; skipping preview generation.")
+        return
+
+    threshold_bytes = int(float(size_threshold_mb) * 1024 * 1024)
+    use_factor = 1
+
+    if preview_background_path is not None:
+        bg = tifffile.imread(str(preview_background_path))
+        if bg.ndim > 3:
+            bg = bg[0]
+        bg_rgb = to_uint8_rgb(bg)
+        if bg_rgb.shape[:2] != label_mask.shape:
+            die(
+                f"Preview background shape {bg_rgb.shape[:2]} does not match label mask shape {label_mask.shape}. "
+                "Expected aligned background image."
+            )
+
+        est_bytes = int(bg_rgb.nbytes + label_mask.nbytes)
+        use_factor = int(max(1, factor_if_large)) if est_bytes > threshold_bytes else 1
+        bg_small = downsample_nearest(bg_rgb, use_factor)
+        mask_small = downsample_nearest(label_mask, use_factor)
+    else:
+        # Memory-safe fallback for huge masks: estimate full preview memory and
+        # decide downsample factor before allocating any RGB background.
+        est_bytes = int(label_mask.nbytes * 4)
+        use_factor = int(max(1, factor_if_large)) if est_bytes > threshold_bytes else 1
+        mask_small = downsample_nearest(label_mask, use_factor)
+        bg_small = np.full(mask_small.shape + (3,), 255, dtype=np.uint8)
+
+    overlay = colorize_label_mask(mask_small, default_value=default_value)
+    fg = mask_small != default_value
+
+    out = bg_small.astype(np.float32, copy=True)
+    a = float(max(0.0, min(1.0, alpha)))
+    out[fg] = (1.0 - a) * out[fg] + a * overlay[fg].astype(np.float32)
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(out).save(str(out_png))
+    log(
+        f"Wrote cytoplasm overlay preview: {out_png} "
+        f"(factor={use_factor}, threshold_mb={size_threshold_mb}, "
+        f"estimated_mb={est_bytes / (1024.0 * 1024.0):.1f})"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Expand cell label masks to approximate cytoplasm without overlaps.")
     ap.add_argument("--labels", required=True, help="Input label image (2D), e.g. StarDist labels.tif")
@@ -189,6 +315,15 @@ def main() -> None:
                     help="In auto mode, switch to tiled if image > this megapixel threshold (default: 25).")
     ap.add_argument("--compression", default="zlib",
                     help="TIFF compression (default: zlib; use 'none' for no compression)")
+    ap.add_argument("--preview", default=None, help="Optional output preview PNG path.")
+    ap.add_argument("--preview-background", default=None,
+                    help="Optional background TIFF for overlay preview (must align with labels).")
+    ap.add_argument("--preview-factor", type=int, default=10,
+                    help="Downsample factor used only when preview image is larger than threshold.")
+    ap.add_argument("--preview-threshold-mb", type=float, default=100.0,
+                    help="Downsample preview only when estimated image+mask size exceeds this threshold (MB).")
+    ap.add_argument("--preview-alpha", type=float, default=0.45,
+                    help="Overlay alpha for colored cytoplasm mask preview (0..1).")
     args = ap.parse_args()
 
     labels_path = Path(args.labels)
@@ -228,6 +363,23 @@ def main() -> None:
     tifffile.imwrite(str(out_path), out, compression=comp, bigtiff=bigtiff)
     log(f"Wrote expanded labels: {out_path}")
     log(f"Output n_labels={int(out.max())}; filled_pixels={(out>0).sum()}")
+
+    if args.preview:
+        bg_path = None
+        if args.preview_background:
+            bg_path = Path(args.preview_background)
+            if not bg_path.exists():
+                die(f"Preview background file not found: {bg_path}")
+
+        write_preview_overlay_png(
+            out,
+            Path(args.preview),
+            factor_if_large=int(args.preview_factor),
+            size_threshold_mb=float(args.preview_threshold_mb),
+            default_value=0,
+            preview_background_path=bg_path,
+            alpha=float(args.preview_alpha),
+        )
 
 if __name__ == "__main__":
     main()
