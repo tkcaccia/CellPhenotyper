@@ -8,8 +8,24 @@ Use this page when pipeline container definitions were updated and you need to r
 git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
 # or, if already cloned:
-git pull
+git fetch origin
+git checkout main
+git pull --ff-only
+git rev-parse --short HEAD
+git rev-parse --short origin/main
+git status --short
 ```
+
+`HEAD` and `origin/main` must match. `git status --short` should be empty before running.
+
+## 1.1) Linux prerequisites
+
+```bash
+java -version
+nextflow -version
+```
+
+If `nextflow` is not in PATH, use `/home/<user>/.local/bin/nextflow` in commands below.
 
 ## 2) Set UNI-2 token
 
@@ -79,7 +95,7 @@ nextflow run main.nf \
 
 Final output:
 
-- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+- `results_example/12_cluster_geojson/ROI_grown_mask_smooth_class.geojson`
 
 Execution report:
 
@@ -99,4 +115,17 @@ nextflow run main.nf \
   --image_input Data/ROI.ome.tif \
   --roi_geojson Data/ROI.geojson \
   --outdir_base results_example_lowmem
+```
+
+## 7) Rerun only `10_cluster_mask` and `11_grown_tissue`
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example \
+  --start_point cluster_mask \
+  --end_point grow_tissue
 ```

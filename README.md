@@ -65,6 +65,28 @@ If you get `401 Unauthorized` during UNI-2 download, check token validity and mo
 
 ## Linux quick run
 
+Before every run, sync and verify you are on the latest `main`:
+
+```bash
+git fetch origin
+git checkout main
+git pull --ff-only
+git rev-parse --short HEAD
+git rev-parse --short origin/main
+git status --short
+```
+
+`HEAD` and `origin/main` must match, and `git status --short` should be empty.
+
+Linux runtime precheck:
+
+```bash
+java -version
+nextflow -version
+```
+
+If `nextflow` is not in PATH in your shell, use `/home/<user>/.local/bin/nextflow`.
+
 ```bash
 git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
@@ -92,6 +114,19 @@ nextflow run main.nf \
   --image_input Data/ROI.ome.tif \
   --roi_geojson Data/ROI.geojson \
   --outdir_base results_example
+```
+
+Rerun only `10_cluster_mask` and `11_grown_tissue`:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --image_input Data/ROI.ome.tif \
+  --roi_geojson Data/ROI.geojson \
+  --outdir_base results_example \
+  --start_point cluster_mask \
+  --end_point grow_tissue
 ```
 
 ## macOS quick run
