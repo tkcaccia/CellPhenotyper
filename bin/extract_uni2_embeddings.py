@@ -587,6 +587,45 @@ def cell_subfolder(tile_base: Path, cell_id: int, per_dir: int = 5000) -> Path:
     return p
 
 
+def build_inner_square_mask(
+    tile_size: int,
+    center_x_local: int,
+    center_y_local: int,
+    area_px: int,
+    fixed_px: int,
+    factor: float,
+    min_px: int,
+    max_px: int,
+) -> np.ndarray:
+    """Build a centered square mask in tile coordinates.
+
+    Side length is computed from equivalent diameter unless fixed_px is provided.
+    """
+    if fixed_px > 0:
+        side = int(fixed_px)
+    else:
+        eq_d = math.sqrt(max(1.0, float(area_px)) * 4.0 / math.pi)
+        side = int(round(eq_d * max(0.0, float(factor))))
+    side = max(int(min_px), side)
+    if max_px > 0:
+        side = min(side, int(max_px))
+    side = max(1, min(int(tile_size), side))
+
+    half = side // 2
+    x0 = max(0, center_x_local - half)
+    y0 = max(0, center_y_local - half)
+    x1 = min(tile_size, x0 + side)
+    y1 = min(tile_size, y0 + side)
+
+    # Re-center when clamped at image borders.
+    x0 = max(0, x1 - side)
+    y0 = max(0, y1 - side)
+
+    keep = np.zeros((tile_size, tile_size), dtype=bool)
+    keep[y0:y1, x0:x1] = True
+    return keep
+
+
 # --------------------------
 # Main
 # --------------------------
@@ -613,6 +652,17 @@ def parse_args():
     p.add_argument("--bucket-size", type=int, default=5000, help="cells per subfolder bucket when saving tiles")
 
     p.add_argument("--min-area", type=int, default=0)
+    p.add_argument("--mask-context-mode", type=str, default="label",
+                   choices=["none", "label", "inner_square", "label_and_inner_square"],
+                   help="Masking mode applied when --zero-outside-mask is enabled.")
+    p.add_argument("--inner-square-factor", type=float, default=1.0,
+                   help="Inner-square side as factor of equivalent cell diameter.")
+    p.add_argument("--inner-square-min-px", type=int, default=32,
+                   help="Minimum side for the inner-square mask.")
+    p.add_argument("--inner-square-max-px", type=int, default=0,
+                   help="Maximum side for inner-square mask (0 disables max).")
+    p.add_argument("--inner-square-fixed-px", type=int, default=0,
+                   help="Fixed inner-square side in pixels (overrides factor when >0).")
 
     p.add_argument("--encoder", type=str, default="uni2-h")
     p.add_argument("--backend", type=str, default="auto", choices=["auto", "dinov2_hub", "timm_hf", "hf_transformers"])
@@ -826,7 +876,36 @@ def main():
 
                 if args.zero_outside_mask:
                     m_tile = mask_reader.read(x0, y0, args.tile_size, args.tile_size).astype(np.int64, copy=False)
-                    keep_m = (m_tile == lab)
+                    keep_label = (m_tile == lab)
+                    keep_square = build_inner_square_mask(
+                        tile_size=args.tile_size,
+                        center_x_local=int(x - x0),
+                        center_y_local=int(y - y0),
+                        area_px=int(a),
+                        fixed_px=int(args.inner_square_fixed_px),
+                        factor=float(args.inner_square_factor),
+                        min_px=int(args.inner_square_min_px),
+                        max_px=int(args.inner_square_max_px),
+                    )
+
+                    if args.mask_context_mode == "none":
+                        keep_m = np.ones_like(keep_label, dtype=bool)
+                    elif args.mask_context_mode == "inner_square":
+                        keep_m = keep_square
+                    elif args.mask_context_mode == "label_and_inner_square":
+                        keep_m = keep_label & keep_square
+                    else:
+                        keep_m = keep_label
+
+                    # Avoid generating fully blank tiles due to empty intersections.
+                    if not np.any(keep_m):
+                        if np.any(keep_label):
+                            keep_m = keep_label
+                        elif np.any(keep_square):
+                            keep_m = keep_square
+                        else:
+                            keep_m = np.ones_like(keep_label, dtype=bool)
+
                     fill = int(args.outside_fill)
                     fill = 0 if fill < 0 else (255 if fill > 255 else fill)
                     img_tile = img_tile.copy()
