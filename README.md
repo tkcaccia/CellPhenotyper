@@ -149,6 +149,7 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
 - [Release](RELEASE.md)
+- [Linux update playbook](LINUX_UPDATE.md)
 
 ## Quick start
 
@@ -190,6 +191,41 @@ release `.sif` when available, otherwise `docker://` fallback.
 Use only one runtime profile per execution: either `singularity` or `docker`.
 
 Container publishing is documented in `RELEASE.md`.
+
+## Maintainer: push Docker image to GHCR
+
+Use this when `docker/Dockerfile.full.cpu` or `docker/Dockerfile.full.gpu` changes and you need to publish a new image tag.
+
+```bash
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
+docker push "${IMAGE}"
+```
+
+GPU tag:
+
+```bash
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0-gpu"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
+docker push "${IMAGE}"
+```
+
+If you publish architecture-specific CPU tags:
+
+```bash
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 --push .
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0 --push .
+```
+
+Linux machine update workflow after image/definition changes is documented in `LINUX_UPDATE.md`.
 
 Validated tissue GeoJSON example committed in this repository:
 

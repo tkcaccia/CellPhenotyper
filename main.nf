@@ -67,9 +67,49 @@ workflow {
         }
     }
 
+    def parse_positive_int = { raw_value, fallback ->
+        try {
+            def parsed = (raw_value ?: fallback).toString().trim().toInteger()
+            return parsed > 0 ? parsed : fallback
+        } catch (Throwable ignored) {
+            return fallback
+        }
+    }
+
     def paramOr = { String key, def fallback ->
         params.containsKey(key) ? params[key] : fallback
     }
+
+    // Keep user-facing defaults at 4 CPUs / 8 GB, but auto-cap to host capacity.
+    // This prevents immediate scheduler failures on smaller VMs (e.g. 4 GB Lima).
+    def configured_max_cpus = parse_positive_int(paramOr('max_cpus', 4), 4)
+    def host_available_cpus = Math.max(1, Runtime.runtime.availableProcessors() as int)
+    def effective_max_cpus = Math.max(1, Math.min(configured_max_cpus, host_available_cpus))
+    if (effective_max_cpus != configured_max_cpus) {
+        println "WARN: Reducing max_cpus from ${configured_max_cpus} to ${effective_max_cpus} (host available CPUs: ${host_available_cpus})."
+    }
+    params.max_cpus = effective_max_cpus
+
+    def detect_host_memory_gb = {
+        def candidates = [
+            command_output('awk \'/MemTotal/ {printf "%d", int($2/1024/1024)}\' /proc/meminfo'),
+            command_output('free -g | awk \'/^Mem:/ {print $2}\''),
+            command_output('sysctl -n hw.memsize 2>/dev/null | awk \'{printf "%d", int($1/1024/1024/1024)}\'')
+        ].findAll { it && it ==~ /\\d+/ }
+        if (!candidates) return 8
+        try {
+            return Math.max(1, candidates[0].toInteger())
+        } catch (Throwable ignored) {
+            return 8
+        }
+    }
+    def configured_max_memory_gb = parse_positive_int(paramOr('max_memory_gb', 8), 8)
+    def host_memory_gb = detect_host_memory_gb()
+    def effective_max_memory_gb = Math.max(2, Math.min(configured_max_memory_gb, host_memory_gb))
+    if (effective_max_memory_gb != configured_max_memory_gb) {
+        println "WARN: Reducing max_memory_gb from ${configured_max_memory_gb} to ${effective_max_memory_gb} (host total RAM: ${host_memory_gb} GB)."
+    }
+    params.max_memory_gb = effective_max_memory_gb
 
     def runtime_image_mode = (paramOr('runtime_image_mode', 'auto') ?: 'auto').toString().trim().toLowerCase()
     if (!(runtime_image_mode in ['auto', 'manual'])) {

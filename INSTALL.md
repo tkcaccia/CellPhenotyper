@@ -319,6 +319,8 @@ nextflow run main.nf \
   -resume
 ```
 
+For Linux-side update commands after container/definition changes, see `LINUX_UPDATE.md`.
+
 ## Step 9: Check status and copy results (optional)
 
 Inside Linux/Lima:

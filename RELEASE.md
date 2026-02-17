@@ -26,6 +26,7 @@ Current published Singularity assets on release `v0.2.0`:
 
 - Release tags should follow semantic versioning (`vMAJOR.MINOR.PATCH`).
 - Update `INSTALL.md`, `TUTORIAL.md`, `PARAMETERS.md`, and `OUTPUT.md` whenever behavior or defaults change.
+- Update `LINUX_UPDATE.md` whenever container tags, Singularity assets, or runtime defaults change.
 
 ## Container release workflow (GHCR + Singularity assets)
 
@@ -93,6 +94,17 @@ Important behavior:
 - `--source docker` in `publish_sif_release_asset.sh` pulls an existing OCI image and converts it to `.sif`, then uploads the `.sif` release asset.
 - It does **not** build/push Docker images to GHCR.
 - Docker publish is a separate step (`docker build` + `docker push`).
+
+## After publishing: Linux user update steps
+
+After a new Docker/Singularity release is published, Linux users should:
+
+1. Pull latest repository changes (`git pull`).
+2. Pull the updated Docker image (or clear singularity cache and rerun).
+3. Run pipeline with one profile only (`docker` or `singularity`).
+4. Verify `results_example/12_cluster_geojson/ROI_grown_mask.geojson`.
+
+Use the complete command list in `LINUX_UPDATE.md`.
 
 For Singularity users, no manual pull command is needed.
 Nextflow auto-selects the release-hosted `.sif` by architecture/device when using `-profile singularity`.

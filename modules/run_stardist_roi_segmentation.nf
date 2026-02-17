@@ -5,7 +5,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     publishDir "${params.outdir_base}/02_stardist", mode: 'copy', overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))} GB" }
+    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))} GB" }
     time { params.stardist_time as String }
 
     input:
