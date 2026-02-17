@@ -769,13 +769,6 @@ def main():
 
     half = args.tile_size // 2
 
-    # Keep a consistent folder layout across embedding modes.
-    for tr in range(GR):
-        for tc in range(GC):
-            tile_folder(outdir, tr, tc)
-            if args.save_tiles:
-                tile_folder(tiles_root, tr, tc)
-
     row_parts: List[pd.DataFrame] = []
     row_count = 0
     shard_idx = 0
