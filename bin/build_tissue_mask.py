@@ -53,30 +53,39 @@ def keep_largest_component(mask: np.ndarray, min_area: int = 0):
     out = (lab == biggest.label)
     return out
 
-def build_tissue_mask(rgb: np.ndarray,
+def build_tissue_mask(image: np.ndarray,
                       close_radius: int,
                       min_obj_area: int,
                       hole_area: int,
                       keep_largest: bool) -> np.ndarray:
-    # Ensure RGB uint8
-    if rgb.ndim == 2:
-        rgb = np.stack([rgb]*3, axis=-1)
-    if rgb.shape[-1] > 3:
-        rgb = rgb[..., :3]
-    if rgb.dtype != np.uint8:
-        # safe-ish scaling if it's 16-bit etc.
-        mx = rgb.max()
-        rgb = (rgb.astype(np.float32) / (mx if mx else 1.0) * 255.0).clip(0, 255).astype(np.uint8)
+    # 2D inputs are handled as grayscale directly (no RGB conversion).
+    if image.ndim == 2:
+        gray = image.astype(np.float32, copy=False)
+        gray -= gray.min()
+        mx = gray.max()
+        if mx > 0:
+            gray /= mx
+        inv = 1.0 - gray  # tissue is usually darker than bright background
+        t = threshold_otsu(inv)
+        mask = inv > t
+    else:
+        # RGB branch
+        rgb = image
+        if rgb.shape[-1] > 3:
+            rgb = rgb[..., :3]
+        if rgb.dtype != np.uint8:
+            mx = rgb.max()
+            rgb = (rgb.astype(np.float32) / (mx if mx else 1.0) * 255.0).clip(0, 255).astype(np.uint8)
 
-    # LAB: tissue tends to deviate from white background in a*/b*
-    lab = rgb2lab(rgb)
-    a = lab[..., 1]
-    b = lab[..., 2]
-    chroma = np.sqrt(a*a + b*b)
+        # LAB: tissue tends to deviate from white background in a*/b*
+        lab = rgb2lab(rgb)
+        a = lab[..., 1]
+        b = lab[..., 2]
+        chroma = np.sqrt(a*a + b*b)
 
-    # Otsu threshold on chroma
-    t = threshold_otsu(chroma)
-    mask = chroma > t
+        # Otsu threshold on chroma
+        t = threshold_otsu(chroma)
+        mask = chroma > t
 
     # Clean up
     if close_radius > 0:
@@ -133,6 +142,8 @@ def main():
     ap.add_argument("--preview-factor", type=int, default=10)
     ap.add_argument("--work-downsample", type=int, default=8,
                     help="Downsample factor used during tissue-mask computation (1 = full resolution).")
+    ap.add_argument("--auto-no-downsample-max-side", type=int, default=1024,
+                    help="If max(image_height,image_width) <= this value, force work_downsample=1. Set 0 to disable.")
 
     # Mask cleanup knobs
     ap.add_argument("--close-radius", type=int, default=10,
@@ -152,11 +163,16 @@ def main():
 
     args = ap.parse_args()
 
-    rgb = imread(args.image)  # supports multi-page too; for normal TIFF returns array
-    if isinstance(rgb, list):
-        rgb = rgb[0]
+    image = imread(args.image)  # supports multi-page too; for normal TIFF returns array
+    if isinstance(image, list):
+        image = image[0]
 
     work_downsample = max(1, int(args.work_downsample))
+    if args.auto_no_downsample_max_side > 0:
+        h, w = image.shape[:2]
+        if max(h, w) <= int(args.auto_no_downsample_max_side):
+            work_downsample = 1
+
     close_radius, min_obj_area, hole_area = scaled_cleanup_params(
         args.close_radius,
         args.min_obj_area,
@@ -165,13 +181,13 @@ def main():
     )
 
     if work_downsample > 1:
-        if rgb.ndim == 2:
-            rgb = rgb[::work_downsample, ::work_downsample].copy()
+        if image.ndim == 2:
+            image = image[::work_downsample, ::work_downsample].copy()
         else:
-            rgb = rgb[::work_downsample, ::work_downsample, ...].copy()
+            image = image[::work_downsample, ::work_downsample, ...].copy()
 
     mask = build_tissue_mask(
-        rgb,
+        image,
         close_radius=close_radius,
         min_obj_area=min_obj_area,
         hole_area=hole_area,

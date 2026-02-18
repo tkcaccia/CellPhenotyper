@@ -3,8 +3,11 @@
 #   nextflow run main.nf -profile singularity -params-file pipeline_paramers.yml -resume
 
 # Starting point (inputs)
-image_input: Data/ROI.ome.tif
-roi_geojson: Data/ROI.geojson
+# Multi-sample mode (recommended): set `folder_input` and keep image/roi null.
+# Single-sample mode: set `image_input` (and optionally `roi_geojson`).
+image_input: null
+roi_geojson: null
+folder_input: Data
 
 # Endpoint (outputs)
 outdir_base: results_full

@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libexpat1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -Ls -o /tmp/micromamba.tar.bz2 https://micro.mamba.pm/api/micromamba/linux-64/latest && \
+RUN MM_ARCH="$(uname -m)" && \
+    if [ "${MM_ARCH}" = "x86_64" ]; then MM_PLATFORM="linux-64"; \
+    elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then MM_PLATFORM="linux-aarch64"; \
+    else echo "Unsupported architecture for micromamba: ${MM_ARCH}" >&2; exit 1; fi && \
+    curl -Ls -o /tmp/micromamba.tar.bz2 "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest" && \
     tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba && \
     install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba && \
     rm -rf /tmp/micromamba.tar.bz2 /tmp/bin
@@ -22,8 +26,19 @@ RUN curl -Ls -o /tmp/micromamba.tar.bz2 https://micro.mamba.pm/api/micromamba/li
 ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 COPY stardist.yml /opt/stardist.yml
 
-RUN micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
-    micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff && \
+RUN set -euo pipefail && \
+    export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
+    micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
+    for attempt in 1 2 3; do \
+      if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
+        break; \
+      fi; \
+      echo "Retrying OME tool install (attempt ${attempt}) after cleaning cache..." >&2; \
+      micromamba clean -a -y || true; \
+      if [ "${attempt}" -eq 3 ]; then \
+        exit 1; \
+      fi; \
+    done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
       rasterio affine \

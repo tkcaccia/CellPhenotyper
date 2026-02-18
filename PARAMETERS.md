@@ -22,8 +22,9 @@ nextflow run main.nf -profile singularity \
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `image_input` | `null` | Input image (`.ome.tif` or `.btf`). |
-| `roi_geojson` | `null` | ROI GeoJSON path. |
+| `folder_input` | `null` | Input folder for multi-sample mode. Supported image extensions: `.ome.tif`, `.ome.tiff`, `.btf`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`. |
+| `image_input` | `null` | Single-sample input image (`.ome.tif` or `.btf`). Ignored when `folder_input` is set. |
+| `roi_geojson` | `null` | Single-sample ROI GeoJSON path. Ignored when `folder_input` is set. |
 | `outdir_base` | `results` | Base output directory. |
 | `run_full_pipeline` | `true` | Run complete workflow including UNI-2 and KODAMA. |
 | `start_point` | `convert` | Stage where execution starts. |
@@ -52,6 +53,17 @@ nextflow run main.nf -profile singularity \
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
 
+ROI resolution rules:
+- In `folder_input` mode, each image `<sample>.<supported_extension>` uses `<sample>.geojson` if present in the same folder.
+- If `<sample>.geojson` is missing, the ROI defaults to the full image.
+- In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated.
+
+GPU run notes:
+- GPU mode requires an amd64/x86_64 host with NVIDIA runtime support.
+- Use one of:
+  - `--compute_device gpu --host_arch amd64`
+  - `compute_device: gpu` and `host_arch: amd64` in `pipeline_paramers.yml`.
+
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
 
@@ -72,8 +84,8 @@ nextflow run main.nf -profile singularity \
 | Parameter | Default | Meaning |
 |---|---|---|
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
-| `stardist_prob` | `0.48` | Detection probability threshold. |
-| `stardist_nms` | `0.30` | NMS threshold. |
+| `stardist_prob` | `0.52` | Detection probability threshold. |
+| `stardist_nms` | `0.28` | NMS threshold. |
 | `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
 | `stardist_tensorflow_version` | `2.20.0` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |

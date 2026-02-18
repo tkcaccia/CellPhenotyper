@@ -20,8 +20,12 @@ nextflow run main.nf
 
 ## Example input in this repository
 
-- `Data/ROI.ome.tif`
-- `Data/ROI.geojson`
+- `Data/ROI_A.ome.tif`
+- `Data/ROI_A.geojson`
+- `Data/ROI_B.ome.tif`
+- `Data/ROI_B.geojson`
+
+If `Data/<sample>.geojson` is missing, CellPhenotyper automatically uses the full image as ROI for that sample.
 
 ## Runtime behavior (automatic container selection)
 
@@ -100,9 +104,20 @@ Docker:
 nextflow run main.nf \
   -profile docker \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
+```
+
+Docker (GPU, Linux amd64 + NVIDIA):
+
+```bash
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu \
+  --compute_device gpu \
+  --host_arch amd64
 ```
 
 Singularity/Apptainer:
@@ -111,9 +126,20 @@ Singularity/Apptainer:
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
+```
+
+Singularity/Apptainer (GPU, Linux amd64 + NVIDIA):
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu \
+  --compute_device gpu \
+  --host_arch amd64
 ```
 
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
@@ -122,8 +148,7 @@ Rerun only `10_cluster_mask` and `11_grown_tissue`:
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example \
   --start_point cluster_mask \
   --end_point grow_tissue
@@ -141,8 +166,7 @@ export HF_TOKEN="${HF_UNI2}"
 nextflow run main.nf \
   -profile docker \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
@@ -158,12 +182,12 @@ export HF_TOKEN="${HF_UNI2}"
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
 Important for Lima: run from a writable Linux path (for example `~/CellPhenotyper`), not from `/Users/...` mount paths.
+On Apple Silicon (`arm64`) hosts, run with CPU (`--compute_device cpu`).
 
 ## Check status and outputs
 
@@ -176,7 +200,8 @@ tail -n 50 -f .nextflow.log
 
 Final output:
 
-- `results_example/12_cluster_geojson/ROI_grown_mask_smooth_class.geojson`
+- `results_example/12_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
+- `results_example/12_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
 
 Execution report:
 

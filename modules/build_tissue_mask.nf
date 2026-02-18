@@ -2,7 +2,7 @@ process BUILD_TISSUE_MASK {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/03_tissue_mask", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/03_tissue_mask/${sample_id}", mode: 'copy', overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.tissue_mask_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.tissue_mask_memory_gb as int))} GB" }
@@ -27,6 +27,7 @@ process BUILD_TISSUE_MASK {
       --preview "${sample_id}_tissue_mask_preview.png" \\
       --preview-factor ${params.tissue_preview_factor} \\
       --work-downsample ${params.tissue_work_downsample} \\
+      --auto-no-downsample-max-side ${params.tissue_auto_no_downsample_max_side} \\
       --close-radius ${params.tissue_close_radius} \\
       --min-obj-area ${params.tissue_min_obj_area} \\
       --hole-area ${params.tissue_hole_area} \\

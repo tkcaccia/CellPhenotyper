@@ -2,7 +2,7 @@ process PREPARE_INPUT_OMETIFF {
     tag "${sample_id}"
     label 'io_heavy'
 
-    publishDir "${params.outdir_base}/01_input", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/01_input/${sample_id}", mode: 'copy', overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.convert_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.convert_memory_gb as int))} GB" }
@@ -16,7 +16,10 @@ process PREPARE_INPUT_OMETIFF {
 
     script:
     def image_name = image_file.getName().toLowerCase()
-    def is_ome = image_name.endsWith('.ome.tif')
+    def is_ome = image_name.endsWith('.ome.tif') || image_name.endsWith('.ome.tiff')
+    def is_btf = image_name.endsWith('.btf')
+    def is_tiff_like = image_name.endsWith('.tif') || image_name.endsWith('.tiff')
+    def is_simple_raster = image_name.endsWith('.png') || image_name.endsWith('.jpg') || image_name.endsWith('.jpeg')
     def rgb_flag = params.convert_rgb ? '--rgb' : ''
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
     def btf_converter_script = "${projectDir}/${params.btf_converter_script}"
@@ -30,26 +33,56 @@ process PREPARE_INPUT_OMETIFF {
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
 
-    if [[ "${is_ome}" == "true" ]]; then
-      [[ -s "${image_file}" ]] || { echo "Input OME-TIFF missing or empty: ${image_file}" >&2; exit 1; }
-      exit 0
-    fi
-
     if [[ -s "${sample_id}.ome.tif" ]]; then
       echo "[SKIP] Existing non-empty output: ${sample_id}.ome.tif"
       exit 0
     fi
 
-    bash "${btf_converter_script}" \\
-      --in "${image_file}" \\
-      --out "${sample_id}.ome.tif" \\
-      --compression "${params.convert_compression}" \\
-      --downsample "${params.convert_downsample}" \\
-      --max-workers ${task.cpus} \\
-      ${rgb_flag} \\
-      ${overwrite_flag}
+    if [[ "${is_ome}" == "true" ]]; then
+      [[ -s "${image_file}" ]] || { echo "Input OME-TIFF missing or empty: ${image_file}" >&2; exit 1; }
+      cp -f "${image_file}" "${sample_id}.ome.tif"
+      exit 0
+    fi
 
-    rm -rf "${sample_id}.ome.tif.rawdir"
+    if [[ "${is_btf}" == "true" ]]; then
+      bash "${btf_converter_script}" \\
+        --in "${image_file}" \\
+        --out "${sample_id}.ome.tif" \\
+        --compression "${params.convert_compression}" \\
+        --downsample "${params.convert_downsample}" \\
+        --max-workers ${task.cpus} \\
+        ${rgb_flag} \\
+        ${overwrite_flag}
+
+      rm -rf "${sample_id}.ome.tif.rawdir"
+      exit 0
+    fi
+
+    if [[ "${is_tiff_like}" == "true" ]]; then
+      [[ -s "${image_file}" ]] || { echo "Input TIFF missing or empty: ${image_file}" >&2; exit 1; }
+      cp -f "${image_file}" "${sample_id}.ome.tif"
+      exit 0
+    fi
+
+    if [[ "${is_simple_raster}" == "true" ]]; then
+      python - "${image_file}" "${sample_id}.ome.tif" <<'PY'
+import sys
+from PIL import Image
+
+src = sys.argv[1]
+dst = sys.argv[2]
+
+im = Image.open(src)
+if im.mode not in ("RGB", "RGBA", "L"):
+    im = im.convert("RGB")
+im.save(dst, format="TIFF", compression="tiff_lzw")
+PY
+      exit 0
+    fi
+
+    echo "Unsupported input image format: ${image_file}" >&2
+    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .tif, .tiff, .png, .jpg, .jpeg" >&2
+    exit 2
     """
 
     stub:

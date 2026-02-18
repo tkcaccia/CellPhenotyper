@@ -4,6 +4,7 @@ import groovy.json.JsonOutput
 nextflow.enable.dsl = 2
 
 include { PREPARE_INPUT_OMETIFF } from './modules/prepare_input_ometiff'
+include { PREPARE_ROI_GEOJSON } from './modules/prepare_roi_geojson'
 include { RUN_STARDIST_ROI_SEGMENTATION } from './modules/run_stardist_roi_segmentation'
 include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
@@ -17,7 +18,6 @@ include { GROW_TO_TISSUE } from './modules/grow_to_tissue'
 include { MASK_TO_GEOJSON } from './modules/mask_to_geojson'
 
 workflow {
-    def roi_geojson = file(params.roi_geojson, checkIfExists: true)
     def run_full_pipeline = params.run_full_pipeline as boolean
     def tissue_mask_from_input = params.tissue_mask_from_input as boolean
     def active_profiles = (workflow.profile ?: '')
@@ -359,15 +359,122 @@ workflow {
     println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
+    def supported_image_suffixes = [
+        [suffix: '.ome.tif',  priority: 80],
+        [suffix: '.ome.tiff', priority: 75],
+        [suffix: '.btf',      priority: 70],
+        [suffix: '.tif',      priority: 60],
+        [suffix: '.tiff',     priority: 55],
+        [suffix: '.png',      priority: 50],
+        [suffix: '.jpg',      priority: 45],
+        [suffix: '.jpeg',     priority: 40]
+    ]
+
+    def detectImageSuffix = { String fileName ->
+        def lower = (fileName ?: '').toLowerCase()
+        def hit = supported_image_suffixes.find { lower.endsWith(it.suffix as String) }
+        hit?.suffix ?: ''
+    }
+
+    def imageSuffixPriority = { String suffix ->
+        def hit = supported_image_suffixes.find { it.suffix == suffix }
+        (hit?.priority ?: 0) as int
+    }
+
+    def deriveSampleId = { File imageFile ->
+        def name = imageFile.name
+        def suffix = detectImageSuffix(name)
+        if (suffix) {
+            return name.substring(0, name.length() - suffix.length())
+        }
+        def dot = name.lastIndexOf('.')
+        dot > 0 ? name.substring(0, dot) : name
+    }
+
+    def folder_input = (params.folder_input ?: '').toString().trim()
+    def image_input_param = (params.image_input ?: '').toString().trim()
+    def roi_geojson_param = (params.roi_geojson ?: '').toString().trim()
+    def sample_rows = []
+
+    if (folder_input) {
+        if (image_input_param || roi_geojson_param) {
+            println "WARN: --folder_input is set; --image_input/--roi_geojson are ignored."
+        }
+        def input_dir = new File(folder_input).canonicalFile
+        if (!input_dir.exists()) {
+            error "--folder_input does not exist: ${input_dir}"
+        }
+        if (!input_dir.isDirectory()) {
+            error "--folder_input must be a directory. Got: ${input_dir}"
+        }
+
+        def candidates = []
+        input_dir.eachFile(FileType.FILES) { File f ->
+            def suffix = detectImageSuffix(f.name)
+            if (suffix) {
+                candidates << [file: f, suffix: suffix]
+            }
+        }
+        if (!candidates) {
+            error "No supported image files found in --folder_input ${input_dir}. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
+        }
+
+        def sample_map = [:]
+        candidates.each { def candidate ->
+            def f = candidate.file as File
+            def suffix = candidate.suffix as String
+            def sample_id = deriveSampleId(f)
+            def priority = imageSuffixPriority(suffix)
+            def prev = sample_map[sample_id]
+            if (prev == null || priority > prev.priority) {
+                sample_map[sample_id] = [file: f, priority: priority]
+            }
+        }
+
+        sample_map.keySet().sort().each { sample_id ->
+            def image_file = sample_map[sample_id].file as File
+            def roi_candidate = new File(input_dir, "${sample_id}.geojson")
+            def roi_hint = roi_candidate.exists() ? roi_candidate.absolutePath : ''
+            sample_rows << tuple(sample_id, file(image_file.absolutePath, checkIfExists: true), roi_hint)
+        }
+    } else {
+        if (!image_input_param) {
+            error "Set either --folder_input (directory with images) or --image_input (single image file)."
+        }
+        def image_file = file(image_input_param, checkIfExists: true)
+        def single_suffix = detectImageSuffix(image_file.name)
+        if (!single_suffix) {
+            error "Unsupported image extension for --image_input '${image_file.name}'. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
+        }
+        def sample_id = deriveSampleId(image_file)
+        def roi_hint = ''
+        if (roi_geojson_param) {
+            roi_hint = file(roi_geojson_param, checkIfExists: true).absolutePath
+        } else {
+            def roi_candidate = new File(image_file.parentFile, "${sample_id}.geojson")
+            roi_hint = roi_candidate.exists() ? roi_candidate.absolutePath : ''
+        }
+        sample_rows << tuple(sample_id, image_file, roi_hint)
+    }
+
+    if (!sample_rows) {
+        error "No input samples were resolved."
+    }
+    println "Resolved input samples (${sample_rows.size()}): ${sample_rows.collect { it[0] }.join(', ')}"
+
     Channel
-        .fromPath(params.image_input, checkIfExists: true)
-        .map { image_file ->
-            def sample_id = image_file.name
-                .replaceFirst(/\.ome\.tif$/, '')
-                .replaceFirst(/\.btf$/, '')
+        .fromList(sample_rows)
+        .set { input_spec_ch }
+
+    def image_input_ch = input_spec_ch
+        .map { sample_id, image_file, roi_hint ->
             tuple(sample_id, image_file)
         }
-        .set { image_input_ch }
+
+    def roi_hint_ch = input_spec_ch
+        .map { sample_id, image_file, roi_hint ->
+            tuple(sample_id, roi_hint)
+        }
 
     def ome_tif_ch
     if (run_convert) {
@@ -378,8 +485,23 @@ workflow {
             def is_ome = image_file.name.toLowerCase().endsWith('.ome.tif')
             def ome_tif = is_ome
                 ? image_file
-                : file("${params.outdir_base}/01_input/${sample_id}.ome.tif", checkIfExists: true)
+                : file("${params.outdir_base}/01_input/${sample_id}/${sample_id}.ome.tif", checkIfExists: true)
             tuple(sample_id, ome_tif)
+        }
+    }
+
+    def roi_geojson_ch = Channel.empty()
+    if (run_stardist) {
+        def roi_prepare_input_ch = ome_tif_ch
+            .join(roi_hint_ch)
+            .map { sample_id, ome_tif, roi_hint ->
+                tuple(sample_id, ome_tif, roi_hint ?: '')
+            }
+        PREPARE_ROI_GEOJSON(roi_prepare_input_ch)
+        roi_geojson_ch = PREPARE_ROI_GEOJSON.out.roi_geojson
+    } else if (run_cell_assignment) {
+        roi_geojson_ch = image_input_ch.map { sample_id, _ ->
+            tuple(sample_id, file("${params.outdir_base}/04_roi/${sample_id}/${sample_id}.roi.geojson", checkIfExists: true))
         }
     }
 
@@ -393,9 +515,11 @@ workflow {
 
     if (need_stardist_outputs) {
         if (run_stardist) {
-            def stardist_input_ch = ome_tif_ch.map { sample_id, ome_tif ->
-                tuple(sample_id, ome_tif, roi_geojson)
-            }
+            def stardist_input_ch = ome_tif_ch
+                .join(roi_geojson_ch)
+                .map { sample_id, ome_tif, roi_geojson ->
+                    tuple(sample_id, ome_tif, roi_geojson)
+                }
             RUN_STARDIST_ROI_SEGMENTATION(stardist_input_ch)
             crop_roi_ch = RUN_STARDIST_ROI_SEGMENTATION.out.crop_roi
             labels_tif_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_tif
@@ -403,22 +527,23 @@ workflow {
             objects_csv_ch = RUN_STARDIST_ROI_SEGMENTATION.out.objects_csv
             shift_json_ch = RUN_STARDIST_ROI_SEGMENTATION.out.shift_json
         } else {
-            def stardist_base_dir = "${params.outdir_base}/02_stardist/stardist_out"
-            def crop_roi_existing = file("${stardist_base_dir}/crop_roi.tif", checkIfExists: true)
-            def labels_existing = file("${stardist_base_dir}/labels.tif", checkIfExists: true)
-            def objects_existing = file("${stardist_base_dir}/objects.csv", checkIfExists: true)
-            def shift_existing = file("${stardist_base_dir}/shift.json", checkIfExists: true)
-            def labels_full_existing = file("${stardist_base_dir}/labels_full.tif")
-            if (run_uni2 && !labels_full_existing.exists()) {
-                error "UNI-2 stage requires full-size labels at ${labels_full_existing}. Run StarDist with write_full_labels enabled."
+            def require_labels_full = run_uni2 || (run_cytoplasm && (params.expand_full_labels as boolean))
+            crop_roi_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
             }
-
-            crop_roi_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, crop_roi_existing) }
-            labels_tif_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, labels_existing) }
-            objects_csv_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, objects_existing) }
-            shift_json_ch = image_input_ch.map { sample_id, _ -> tuple(sample_id, shift_existing) }
-            labels_full_tif_ch = labels_full_existing.exists()
-                ? image_input_ch.map { sample_id, _ -> tuple(sample_id, labels_full_existing) }
+            labels_tif_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
+            }
+            objects_csv_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
+            }
+            shift_json_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
+            }
+            labels_full_tif_ch = require_labels_full
+                ? image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/labels_full.tif", checkIfExists: true))
+                }
                 : Channel.empty()
         }
     }
@@ -435,14 +560,15 @@ workflow {
         if (run_cell_assignment) {
             def assign_input_ch = objects_csv_ch
                 .join(shift_json_ch)
-                .map { sample_id, objects_csv, shift_json ->
+                .join(roi_geojson_ch)
+                .map { sample_id, objects_csv, shift_json, roi_geojson ->
                     tuple(sample_id, objects_csv, roi_geojson, shift_json)
                 }
             MAP_CELLS_TO_ROI_POLYGONS(assign_input_ch)
             objects_assigned_ch = MAP_CELLS_TO_ROI_POLYGONS.out.objects_assigned
         } else {
             objects_assigned_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/05_cell_assignments/${sample_id}_objects_assigned.csv", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/05_cell_assignments/${sample_id}/${sample_id}_objects_assigned.csv", checkIfExists: true))
             }
         }
 
@@ -473,10 +599,10 @@ workflow {
                 .map { sample_id, expanded_mask, label_kind -> tuple(sample_id, expanded_mask) }
         } else if (run_uni2) {
             cyto_mask_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_cyto.tif", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}/${sample_id}_labels_cyto.tif", checkIfExists: true))
             }
             cyto_mask_full_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_full_cyto.tif", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}/${sample_id}_labels_full_cyto.tif", checkIfExists: true))
             }
         }
 
@@ -533,16 +659,16 @@ workflow {
                 .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
         } else if (run_kodama) {
             tile_embeddings_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_tile", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/${sample_id}/embeddings_${sample_id}_tile", checkIfExists: true))
             }
             nuclei_embeddings_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_nuclei", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/${sample_id}/embeddings_${sample_id}_nuclei", checkIfExists: true))
             }
             cyto_embeddings_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_cyto", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/${sample_id}/embeddings_${sample_id}_cyto", checkIfExists: true))
             }
             inner_square_embeddings_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/07_embeddings/embeddings_${sample_id}_inner_square", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/07_embeddings/${sample_id}/embeddings_${sample_id}_inner_square", checkIfExists: true))
             }
         }
 
@@ -565,7 +691,7 @@ workflow {
             kodama_dir_ch = RUN_KODAMA_ANALYSIS.out.kodama_dir
         } else if (run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
             kodama_dir_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/08_kodama/kodama_output", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/08_kodama/${sample_id}/kodama_output", checkIfExists: true))
             }
         }
 
@@ -580,7 +706,7 @@ workflow {
             cluster_csv_ch = RUN_RCODE_CLUSTERING.out.cluster_csv
         } else if (run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
             cluster_csv_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/09_clustering/${sample_id}_cluster.csv", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/09_clustering/${sample_id}/${sample_id}_cluster.csv", checkIfExists: true))
             }
         }
 
@@ -589,7 +715,7 @@ workflow {
             labels_for_cluster_ch = run_cytoplasm
                 ? cyto_mask_ch
                 : image_input_ch.map { sample_id, _ ->
-                    tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}_labels_cyto.tif", checkIfExists: true))
+                    tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}/${sample_id}_labels_cyto.tif", checkIfExists: true))
                 }
         }
 
@@ -598,7 +724,7 @@ workflow {
             def preview_image_for_cluster_mask_ch = run_stardist
                 ? crop_roi_ch
                 : image_input_ch.map { sample_id, _ ->
-                    tuple(sample_id, file("${params.outdir_base}/02_stardist/stardist_out/crop_roi.tif", checkIfExists: true))
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
                 }
 
             def cluster_mask_input_ch = labels_for_cluster_ch
@@ -611,7 +737,7 @@ workflow {
             cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask
         } else if (run_grow_tissue || run_cluster_geojson) {
             cluster_mask_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/10_cluster_mask/${sample_id}_cluster_mask.tif", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/10_cluster_mask/${sample_id}/${sample_id}_cluster_mask.tif", checkIfExists: true))
             }
         }
 
@@ -620,12 +746,12 @@ workflow {
             def image_for_growth_ch = run_stardist
                 ? crop_roi_ch
                 : image_input_ch.map { sample_id, _ ->
-                    tuple(sample_id, file("${params.outdir_base}/02_stardist/stardist_out/crop_roi.tif", checkIfExists: true))
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
                 }
             def tissue_mask_for_growth_ch = run_tissue_mask
                 ? tissue_mask_ch
                 : image_input_ch.map { sample_id, _ ->
-                    tuple(sample_id, file("${params.outdir_base}/03_tissue_mask/${sample_id}_tissue_mask.tif", checkIfExists: true))
+                    tuple(sample_id, file("${params.outdir_base}/03_tissue_mask/${sample_id}/${sample_id}_tissue_mask.tif", checkIfExists: true))
                 }
 
             def grow_input_ch = image_for_growth_ch
@@ -638,7 +764,7 @@ workflow {
             grown_mask_ch = GROW_TO_TISSUE.out.grown_mask
         } else if (run_cluster_geojson) {
             grown_mask_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/11_grown_tissue/${sample_id}_grown_mask.ome.tif", checkIfExists: true))
+                tuple(sample_id, file("${params.outdir_base}/11_grown_tissue/${sample_id}/${sample_id}_grown_mask.ome.tif", checkIfExists: true))
             }
         }
 
@@ -657,6 +783,7 @@ workflow.onComplete {
         [folder: '01_input',          title: 'Input Conversion',        expected: ['.ome.tif']],
         [folder: '02_stardist',       title: 'StarDist Segmentation',   expected: ['labels.tif', 'objects.csv']],
         [folder: '03_tissue_mask',    title: 'Tissue Mask',             expected: ['_tissue_mask.tif']],
+        [folder: '04_roi',            title: 'ROI GeoJSON',             expected: ['.roi.geojson']],
         [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
         [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
         [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],

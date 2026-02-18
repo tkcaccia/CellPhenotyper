@@ -222,9 +222,15 @@ export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
 Pull images with Docker:
 
 ```bash
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
+
+Use:
+- `0.2.0-amd64` on Linux x86_64/amd64
+- `0.2.0` on arm64
+- `0.2.0-gpu` only on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -301,11 +307,11 @@ export NXF_HOME=/var/tmp/nextflow_home
 mkdir -p "$NXF_HOME"
 ```
 
-For forced GPU image run, set:
+For GPU runs (Linux amd64 + NVIDIA), use:
 
-- `compute_device: gpu` in `pipeline_paramers.yml`
-- `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`
+- `compute_device: gpu`
+- `host_arch: amd64`
+- keep `runtime_image_mode: auto`
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 
@@ -316,6 +322,20 @@ nextflow run main.nf \
   -with-report results_full/report.html \
   -with-trace results_full/trace.txt \
   -with-timeline results_full/timeline.html \
+  -resume
+```
+
+GPU run (Linux amd64 + NVIDIA):
+
+```bash
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --compute_device gpu \
+  --host_arch amd64 \
+  -with-report results_full_gpu/report.html \
+  -with-trace results_full_gpu/trace.txt \
+  -with-timeline results_full_gpu/timeline.html \
   -resume
 ```
 

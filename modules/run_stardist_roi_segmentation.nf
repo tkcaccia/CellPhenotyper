@@ -2,7 +2,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     tag "${sample_id}"
     label 'compute_heavy'
 
-    publishDir "${params.outdir_base}/02_stardist", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/02_stardist/${sample_id}", mode: 'copy', overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))} GB" }

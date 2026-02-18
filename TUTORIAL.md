@@ -10,8 +10,10 @@ Do not rebuild `.sif` on every test run.
 
 Use the input files already present in this repo:
 
-- `Data/ROI.ome.tif`
-- `Data/ROI.geojson`
+- `Data/ROI_A.ome.tif`
+- `Data/ROI_A.geojson`
+- `Data/ROI_B.ome.tif`
+- `Data/ROI_B.geojson`
 
 Clone and enter repository:
 
@@ -20,15 +22,15 @@ git clone https://github.com/tkcaccia/CellPhenotyper.git
 cd CellPhenotyper
 ```
 
-Prepare CPU runtime:
+Prepare runtime:
 
 ```bash
 # Singularity/Apptainer:
 # no manual pull command is required.
 # Nextflow pulls `singularity_image` automatically on first run.
 
-# Docker (optional pre-pull)
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+# Docker (optional pre-pull, amd64 CPU example)
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 ```
 
 Create UNI-2 token file (required for full pipeline):
@@ -44,22 +46,21 @@ Run full example:
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 
 # Docker
 nextflow run main.nf \
   -profile docker \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
-Final result:
+Final results:
 
-- `results_example/12_cluster_geojson/ROI_grown_mask.geojson`
+- `results_example/12_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
+- `results_example/12_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
 
 ## Lima users: run location matters
 
@@ -100,13 +101,14 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
 
 ## Starting point
 
-- Input image: `image_input` in `pipeline_paramers.yml` (example: `Data/ROI.ome.tif`)
-- ROI polygons: `roi_geojson` in `pipeline_paramers.yml` (example: `Data/ROI.geojson`)
+- Multi-image input folder: `folder_input` in `pipeline_paramers.yml` (example: `Data`)
+- Single-image mode (optional): `image_input` + optional `roi_geojson`
+- If a `<sample>.geojson` file is missing, the full image is used as ROI.
 
 ## Endpoint
 
 - Main output base folder: `outdir_base` in `pipeline_paramers.yml` (example: `results_full`)
-- Final segmentation endpoint: `results_full/12_cluster_geojson/*_grown_mask.geojson`
+- Final segmentation endpoint: `results_full/12_cluster_geojson/<sample_root>/<sample_root>_grown_mask_smooth_class.geojson`
 
 ## Stage window (where to start/stop)
 
@@ -142,8 +144,7 @@ nextflow run main.nf \
 
 ## 2) Run the complete pipeline (Docker + UNI-2)
 
-Default runtime image in `pipeline_paramers.yml` is:
-`docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0`.
+Default image selection is automatic (`runtime_image_mode: auto`), so no manual `docker_image` is required.
 
 ```bash
 nextflow run main.nf \
@@ -161,7 +162,7 @@ nextflow run main.nf \
 - `-profile docker`: pull image with Docker if needed:
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
 
@@ -178,16 +179,34 @@ nextflow run main.nf \
 
 Expected output:
 
-- `results_full/03_tissue_mask/ROI_tissue_mask.tif`
+- `results_full/03_tissue_mask/ROI_A/ROI_A_tissue_mask.tif`
+- `results_full/03_tissue_mask/ROI_B/ROI_B_tissue_mask.tif`
 
 ## 5) GPU execution
 
-For GPU-capable hosts:
+For GPU-capable Linux hosts (amd64 + NVIDIA), run:
 
-- set `compute_device: gpu` in `pipeline_paramers.yml`
-- use a GPU image in `pipeline_paramers.yml`:
-  - Singularity: `singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
-  - Docker: `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+```bash
+# Docker profile
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_gpu \
+  --compute_device gpu \
+  --host_arch amd64
+
+# Singularity profile
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_gpu \
+  --compute_device gpu \
+  --host_arch amd64
+```
+
+Do not use GPU mode on Apple Silicon (`arm64`).
 
 ## 6) macOS M1 note (if StarDist fails with missing TensorFlow)
 

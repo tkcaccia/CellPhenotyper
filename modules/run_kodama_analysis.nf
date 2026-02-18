@@ -2,8 +2,8 @@ process RUN_KODAMA_ANALYSIS {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/08_kodama", mode: 'copy', overwrite: true
-    publishDir "${params.outdir_base}/08_kodama_logs", mode: 'copy', overwrite: true, pattern: "*.Rout"
+    publishDir "${params.outdir_base}/08_kodama/${sample_id}", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/08_kodama_logs/${sample_id}", mode: 'copy', overwrite: true, pattern: "*.Rout"
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.r_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.r_memory_gb as int))} GB" }

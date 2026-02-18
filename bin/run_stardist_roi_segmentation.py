@@ -413,10 +413,10 @@ def get_class_color(props: Dict[str, Any]) -> Optional[str]:
                 return None
     return None
 
-def compute_crop_bbox_from_largest_polygon(geo: Dict[str, Any], W: int, H: int, pad_min: int = 64) -> Tuple[int, int, int, int, int]:
+def compute_crop_bbox_from_largest_polygon(geo: Dict[str, Any], W: int, H: int, pad_pixels: int = 200) -> Tuple[int, int, int, int, int]:
     """
-    Pick the largest polygon by area, then crop to its bbox expanded by a small padding.
-    Padding = max(pad_min, 5% of the largest bbox side), clamped to image bounds.
+    Pick the largest polygon by area, then crop to its bbox expanded by a fixed padding.
+    Padding is exactly `pad_pixels` on each side (clamped to image bounds).
     Returns (x0, y0, x1, y1, pad_used).
     """
     polys = extract_polygons_with_properties(geo)
@@ -432,9 +432,7 @@ def compute_crop_bbox_from_largest_polygon(geo: Dict[str, Any], W: int, H: int, 
 
     imax = int(np.argmax(np.array(areas, dtype=float)))
     minx, miny, maxx, maxy = bbs[imax]
-    w = maxx - minx
-    h = maxy - miny
-    pad_used = int(max(pad_min, round(0.05 * max(w, h))))
+    pad_used = int(max(0, pad_pixels))
 
     x0 = int(math.floor(minx - pad_used))
     y0 = int(math.floor(miny - pad_used))
@@ -450,10 +448,10 @@ def compute_crop_bbox_from_largest_polygon(geo: Dict[str, Any], W: int, H: int, 
     return x0, y0, x1, y1, pad_used
 
 
-def compute_crop_bbox_from_all_polygons(geo: Dict[str, Any], W: int, H: int, pad_min: int = 64) -> Tuple[int, int, int, int, int]:
+def compute_crop_bbox_from_all_polygons(geo: Dict[str, Any], W: int, H: int, pad_pixels: int = 200) -> Tuple[int, int, int, int, int]:
     """
-    Crop bbox that encloses ALL polygons in the GeoJSON, expanded by a small padding.
-    Padding = max(pad_min, 5% of the largest bbox side), clamped to image bounds.
+    Crop bbox that encloses ALL polygons in the GeoJSON, expanded by a fixed padding.
+    Padding is exactly `pad_pixels` on each side (clamped to image bounds).
     Returns (x0, y0, x1, y1, pad_used).
     """
     polys = extract_polygons_with_properties(geo)
@@ -466,9 +464,7 @@ def compute_crop_bbox_from_all_polygons(geo: Dict[str, Any], W: int, H: int, pad
         minx = min(minx, bb[0]); miny = min(miny, bb[1])
         maxx = max(maxx, bb[2]); maxy = max(maxy, bb[3])
 
-    w = maxx - minx
-    h = maxy - miny
-    pad_used = int(max(pad_min, round(0.05 * max(w, h))))
+    pad_used = int(max(0, pad_pixels))
 
     x0 = int(math.floor(minx - pad_used))
     y0 = int(math.floor(miny - pad_used))
@@ -627,6 +623,7 @@ def _masked_normalize(img_yxc: np.ndarray, model_name: str, roi_mask: np.ndarray
 
 def stardist_segment_roi(img_yxc: np.ndarray, roi_mask: np.ndarray,
                          model_name: str, prob_thresh: float, nms_thresh: float,
+                         min_area: int = 0,
                          tiles: tuple[int,int] | None = None,
                          no_tiles: bool = False,
                          tile_progress: bool = True) -> tuple[np.ndarray, dict[str, Any]]:
@@ -684,6 +681,25 @@ def stardist_segment_roi(img_yxc: np.ndarray, roi_mask: np.ndarray,
             labels = (labels * m).astype(np.uint32)
         else:
             labels[:] = 0
+
+    # Remove very small objects after ROI filtering.
+    min_area_use = int(max(0, min_area))
+    if min_area_use > 0:
+        aprops = regionprops_table(labels, properties=("label", "area"))
+        if len(aprops.get("label", [])) > 0:
+            keep = set()
+            removed = 0
+            for lab, area in zip(aprops["label"], aprops["area"]):
+                if float(area) >= float(min_area_use):
+                    keep.add(int(lab))
+                else:
+                    removed += 1
+            if keep:
+                m = np.isin(labels, list(keep))
+                labels = (labels * m).astype(np.uint32)
+            else:
+                labels[:] = 0
+            log(f"Applied min-area filter: min_area={min_area_use}px, removed_objects={removed}")
 
     # relabel sequentially for nicer IDs
     if relabel_sequential is not None:
@@ -880,6 +896,8 @@ def main() -> None:
                     help="auto | 2D_versatile_he | 2D_versatile_fluo | 2D_paper_dsb2018 | 2D_demo")
     ap.add_argument("--prob", type=float, default=0.48, help="StarDist prob_thresh (higher = fewer objects)")
     ap.add_argument("--nms", type=float, default=0.30, help="StarDist nms_thresh")
+    ap.add_argument("--min-area", type=int, default=0,
+                    help="Remove segmented objects with area < min-area pixels after ROI filtering.")
     # StarDist built-in tiling controls (handled internally by StarDist)
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--tiles", type=int, nargs=2, metavar=("NY","NX"), default=None,
@@ -908,7 +926,7 @@ def main() -> None:
                     help="Write segmentation polygons GeoJSON (VERY slow on large WSIs). Default: off.")
     ap.add_argument("--max-polygons", type=int, default=0,
                     help="Limit polygons written when --write-polygons (0 = no limit)")
-    ap.add_argument("--pad", type=int, default=64, help="Padding (pixels) added around the largest ROI bbox for cropping (default 64; final pad is max(this, 5% of ROI size)).")
+    ap.add_argument("--pad", type=int, default=200, help="Fixed padding (pixels) added on each side of the ROI crop bbox (default 200).")
 
     args = ap.parse_args()
 
@@ -942,7 +960,7 @@ def main() -> None:
         H0 = int(shape[ydim]); W0 = int(shape[xdim])
         log(f"Level0 size: {W0}x{H0}")
 
-        x0, y0, x1, y1, pad_used = compute_crop_bbox_from_all_polygons(roi_geo, W0, H0, pad_min=args.pad)
+        x0, y0, x1, y1, pad_used = compute_crop_bbox_from_all_polygons(roi_geo, W0, H0, pad_pixels=args.pad)
         log(f"Crop bbox from ALL polygons: origin=({x0},{y0}) size={x1-x0}x{y1-y0} pad={pad_used}px")
 
         slicer = [slice(None)] * len(shape)
@@ -991,6 +1009,7 @@ def main() -> None:
             model_name=args.model,
             prob_thresh=args.prob,
             nms_thresh=args.nms,
+            min_area=args.min_area,
             tiles=args.tiles,
             no_tiles=args.no_tiles,
             tile_progress=args.tile_progress,
@@ -1007,6 +1026,22 @@ def main() -> None:
         )
         labels = load_precomputed_labels_crop(args.precomputed_labels_full, x0, y0, x1, y1)
         labels[~roi_mask] = 0
+        if int(max(0, args.min_area)) > 0:
+            aprops = regionprops_table(labels, properties=("label", "area"))
+            if len(aprops.get("label", [])) > 0:
+                keep = set()
+                removed = 0
+                for lab, area in zip(aprops["label"], aprops["area"]):
+                    if float(area) >= float(int(max(0, args.min_area))):
+                        keep.add(int(lab))
+                    else:
+                        removed += 1
+                if keep:
+                    m = np.isin(labels, list(keep))
+                    labels = (labels * m).astype(np.uint32)
+                else:
+                    labels[:] = 0
+                log(f"Applied min-area filter on precomputed labels: min_area={int(max(0, args.min_area))}px, removed_objects={removed}")
         if relabel_sequential is not None:
             labels, _, _ = relabel_sequential(labels)
         details = {

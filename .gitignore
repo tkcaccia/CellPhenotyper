@@ -19,7 +19,8 @@ GHCRtoken.env
 # large local inputs
 Data/*.ome.tif
 Data/*.btf
-!Data/ROI.ome.tif
+!Data/ROI_A.ome.tif
+!Data/ROI_B.ome.tif
 
 # local container artifacts
 singularity/*.sif
