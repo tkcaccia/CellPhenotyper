@@ -30,7 +30,7 @@ nextflow run main.nf -profile singularity \
 | `start_point` | `convert` | Stage where execution starts. |
 | `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_mask`). |
 | `tissue_mask_from_input` | `false` | Build tissue mask from input image directly. |
-| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto` (auto picks GPU only on amd64 + NVIDIA). |
+| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto` (auto picks GPU on amd64/arm64 when NVIDIA runtime is detected). |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
@@ -55,6 +55,9 @@ nextflow run main.nf -profile singularity \
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
+
+Note:
+- The repository `pipeline_paramers.yml` overrides these defaults to `hf_token_env_file: tokens.env` and `hf_token_env_var_name: HF_UNI2`.
 
 ROI resolution rules:
 - In `folder_input` mode, each image `<sample>.<supported_extension>` uses `<sample>.geojson` if present in the same folder.
@@ -91,7 +94,7 @@ GPU run notes:
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
 | `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
-| `stardist_tensorflow_version` | `2.20.0` | TensorFlow version used by StarDist runtime auto-install fallback. |
+| `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |

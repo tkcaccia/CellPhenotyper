@@ -6,6 +6,9 @@ This folder contains:
 - `cellphenotyper_full_gpu.def`: GPU definition (amd64 + NVIDIA)
 - `publish_sif_release_asset.sh`: build/upload helper
 
+Note:
+- ARM64/aarch64 GPU builds (NVIDIA Spark) should use `publish_sif_release_asset.sh --source docker --docker-tag <version>-gpu-arm64`.
+
 Important:
 
 - Do **not** commit `.sif` files to git.

@@ -37,6 +37,8 @@ Create UNI-2 token file (required for full pipeline):
 
 ```bash
 printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
 ```
 
 Run full example:
@@ -129,8 +131,7 @@ This runs from StarDist and stops after UNI-2 embeddings.
 
 UNI-2 requires a valid Hugging Face token with access to `MahmoodLab/UNI2-h`.
 By default the pipeline loads the token from `tokens.env` using `hf_token_env_file` + `hf_token_env_var_name` in `pipeline_paramers.yml`.
-Default runtime image in `pipeline_paramers.yml` is:
-`singularity_image: docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0`.
+Default runtime image mode in `pipeline_paramers.yml` is automatic (`runtime_image_mode: auto`), so `singularity_image` stays empty unless you want manual override.
 
 ```bash
 nextflow run main.nf \
@@ -158,7 +159,7 @@ nextflow run main.nf \
 
 ## 3) Runtime image behavior
 
-- `-profile singularity`: Nextflow pulls `singularity_image` automatically.
+- `-profile singularity`: Nextflow resolves image automatically (local `.sif` -> release asset -> `docker://` fallback).
 - `-profile docker`: pull image with Docker if needed:
 
 ```bash
@@ -214,8 +215,8 @@ For Linux arm64/aarch64 Spark, use `--host_arch arm64` (same commands).
 If your ARM `.sif` does not include TensorFlow, install it once into a writable host path and pass that path via `stardist_pythonpath`.
 
 ```bash
-apptainer exec singularity/cellphenotyper_0.2.0_cpu.sif \
-  python -m pip install --no-cache-dir --target /var/tmp/tfdeps tensorflow==2.16.1
+apptainer exec /path/to/cellphenotyper-0.2.0-arm64.sif \
+  python -m pip install --no-cache-dir --target /var/tmp/tfdeps tensorflow==2.16.2
 ```
 
 Then run:

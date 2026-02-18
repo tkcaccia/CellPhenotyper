@@ -168,6 +168,11 @@ nextflow run main.nf \
   --host_arch arm64
 ```
 
+CPU control:
+
+- Set CPU count with `--max_cpus <N>` (for example `--max_cpus 4`).
+- You can also set `max_cpus` in `pipeline_paramers.yml`.
+
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
 
 ```bash

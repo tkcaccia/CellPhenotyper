@@ -57,8 +57,7 @@ Run:
 nextflow run main.nf \
   -profile docker \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
@@ -77,8 +76,7 @@ Run (auto-selects matching architecture image):
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
@@ -89,8 +87,7 @@ nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
   --singularity_image_source docker \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example
 ```
 
@@ -98,7 +95,7 @@ nextflow run main.nf \
 
 Final output:
 
-- `results_example/12_cluster_geojson/ROI_grown_mask_smooth_class.geojson`
+- `results_example/12_cluster_geojson/<sample_root>/<sample_root>_grown_mask_smooth_class.geojson`
 
 Execution report:
 
@@ -115,8 +112,7 @@ nextflow run main.nf \
   -params-file pipeline_paramers.yml \
   --max_cpus 2 \
   --max_memory_gb 3 \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example_lowmem
 ```
 
@@ -126,8 +122,7 @@ nextflow run main.nf \
 nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
-  --image_input Data/ROI.ome.tif \
-  --roi_geojson Data/ROI.geojson \
+  --folder_input Data \
   --outdir_base results_example \
   --start_point cluster_mask \
   --end_point grow_tissue

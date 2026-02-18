@@ -293,9 +293,9 @@ By default the pipeline reads token file/variable from:
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
-First, edit `pipeline_paramers.yml` with your runtime choices (`image_input`, `roi_geojson`, `compute_device`, `runtime_image_mode`, resource caps).
+First, edit `pipeline_paramers.yml` with your runtime choices (`folder_input` or `image_input`/`roi_geojson`, `compute_device`, `runtime_image_mode`, resource caps).
 To control where the pipeline starts/stops, set `start_point` and `end_point` in the same file.
-For automatic architecture-aware CPU/GPU selection, keep:
+For automatic architecture-aware CPU/GPU selection, set:
 
 - `runtime_image_mode: auto`
 - `compute_device: auto`
@@ -322,10 +322,10 @@ export NXF_HOME=/var/tmp/nextflow_home
 mkdir -p "$NXF_HOME"
 ```
 
-For GPU runs (Linux amd64 + NVIDIA), use:
+For GPU runs (Linux amd64/arm64 + NVIDIA), use:
 
 - `compute_device: gpu`
-- `host_arch: amd64`
+- `host_arch: amd64` or `host_arch: arm64`
 - keep `runtime_image_mode: auto`
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
@@ -354,6 +354,20 @@ nextflow run main.nf \
   -resume
 ```
 
+GPU run (Linux arm64/aarch64 + NVIDIA Spark):
+
+```bash
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --compute_device gpu \
+  --host_arch arm64 \
+  -with-report results_full_gpu_arm64/report.html \
+  -with-trace results_full_gpu_arm64/trace.txt \
+  -with-timeline results_full_gpu_arm64/timeline.html \
+  -resume
+```
+
 For Linux-side update commands after container/definition changes, see `LINUX_UPDATE.md`.
 
 ## Step 9: Check status and copy results (optional)
@@ -375,5 +389,6 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_full \
 For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
-- `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` (amd64) or `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64` (arm64) in `pipeline_paramers.yml`
+- `host_arch: amd64` (or `host_arch: arm64` on Spark) in `pipeline_paramers.yml`
+- keep `runtime_image_mode: auto` (recommended)
+- optional manual override: set `runtime_image_mode: manual` and `docker_image`/`singularity_image` explicitly

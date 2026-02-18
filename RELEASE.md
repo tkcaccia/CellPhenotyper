@@ -92,7 +92,7 @@ singularity/publish_sif_release_asset.sh \
   --upload
 ```
 
-Optional GPU Singularity asset (amd64 only):
+Optional GPU Singularity asset (amd64):
 
 ```bash
 singularity/publish_sif_release_asset.sh \
