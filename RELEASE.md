@@ -14,13 +14,15 @@ Current published runtime tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 
 Current published Singularity assets on release `v0.2.0`:
 
 - `cellphenotyper-0.2.0-amd64.sif`
 - `cellphenotyper-0.2.0-arm64.sif`
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
+- `cellphenotyper-0.2.0-gpu-arm64.sif`
 
 ## Versioning policy
 
@@ -47,7 +49,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-3. Publish GPU image (Linux x86_64 + NVIDIA only):
+3. Publish GPU image (Linux x86_64 + NVIDIA):
 
 ```bash
 export TAG="0.2.0-gpu"
@@ -57,14 +59,24 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-4. Verify pull:
+4. Publish GPU image (Linux arm64/aarch64 + NVIDIA Spark):
+
+```bash
+export TAG="0.2.0-gpu-arm64"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t "${IMAGE}" --push .
+```
+
+5. Verify pull:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
-5. Build/upload Singularity release assets (run on each architecture host):
+6. Build/upload Singularity release assets (run on each architecture host):
 
 ```bash
 # On arm64 host (Mac M1/M2 or Linux arm64)
@@ -86,6 +98,17 @@ Optional GPU Singularity asset (amd64 only):
 singularity/publish_sif_release_asset.sh \
   --version 0.2.0 \
   --device gpu \
+  --upload
+```
+
+Optional GPU Singularity asset (arm64/aarch64 Spark):
+
+```bash
+singularity/publish_sif_release_asset.sh \
+  --version 0.2.0 \
+  --device gpu \
+  --source docker \
+  --docker-tag 0.2.0-gpu-arm64 \
   --upload
 ```
 

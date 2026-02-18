@@ -46,7 +46,10 @@ Pull fresh image tag(s):
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
+
+Use `0.2.0-gpu` on amd64 and `0.2.0-gpu-arm64` on arm64/aarch64 Spark.
 
 Run:
 

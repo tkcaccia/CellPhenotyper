@@ -164,6 +164,7 @@ nextflow run main.nf \
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
 ## 4) Run only tissue mask stage (fast validation)
@@ -184,7 +185,7 @@ Expected output:
 
 ## 5) GPU execution
 
-For GPU-capable Linux hosts (amd64 + NVIDIA), run:
+For GPU-capable Linux hosts (amd64/arm64 + NVIDIA), run:
 
 ```bash
 # Docker profile
@@ -206,7 +207,7 @@ nextflow run main.nf \
   --host_arch amd64
 ```
 
-Do not use GPU mode on Apple Silicon (`arm64`).
+For Linux arm64/aarch64 Spark, use `--host_arch arm64` (same commands).
 
 ## 6) macOS M1 note (if StarDist fails with missing TensorFlow)
 

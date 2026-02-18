@@ -33,12 +33,15 @@ container_cpu_tag: 0.2.0   # legacy generic fallback; use arch-specific tags bel
 container_cpu_tag_amd64: 0.2.0-amd64
 container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 0.2.0-gpu
+container_gpu_tag_amd64: 0.2.0-gpu
+container_gpu_tag_arm64: 0.2.0-gpu-arm64
 singularity_image_source: auto   # auto | release | docker
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v0.2.0
 singularity_cpu_asset_amd64: cellphenotyper-0.2.0-amd64.sif
 singularity_cpu_asset_arm64: cellphenotyper-0.2.0-arm64.sif
 singularity_gpu_asset_amd64: cellphenotyper-0.2.0-gpu-amd64.sif
+singularity_gpu_asset_arm64: cellphenotyper-0.2.0-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_image: ""
 docker_image: ""

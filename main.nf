@@ -151,10 +151,10 @@ workflow {
     }
 
     def resolved_compute_device = requested_compute_device == 'auto'
-        ? ((detected_arch == 'amd64' && detected_nvidia) ? 'gpu' : 'cpu')
+        ? (((detected_arch in ['amd64', 'arm64']) && detected_nvidia) ? 'gpu' : 'cpu')
         : requested_compute_device
-    if (resolved_compute_device == 'gpu' && detected_arch != 'amd64') {
-        error "compute_device='gpu' is supported only on amd64/x86_64. Detected architecture '${detected_arch}'."
+    if (resolved_compute_device == 'gpu' && !(detected_arch in ['amd64', 'arm64'])) {
+        error "compute_device='gpu' is supported only on amd64/x86_64 or arm64/aarch64. Detected architecture '${detected_arch}'."
     }
 
     def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper') ?: 'ghcr.io/tkcaccia/cellphenotyper').toString().trim()
@@ -178,9 +178,18 @@ workflow {
     if (!container_gpu_tag) {
         container_gpu_tag = '0.2.0-gpu'
     }
+    def container_gpu_tag_amd64 = (paramOr('container_gpu_tag_amd64', container_gpu_tag) ?: container_gpu_tag).toString().trim()
+    if (!container_gpu_tag_amd64) {
+        container_gpu_tag_amd64 = '0.2.0-gpu'
+    }
+    def container_gpu_tag_arm64 = (paramOr('container_gpu_tag_arm64', '0.2.0-gpu-arm64') ?: '0.2.0-gpu-arm64').toString().trim()
+    if (!container_gpu_tag_arm64) {
+        container_gpu_tag_arm64 = '0.2.0-gpu-arm64'
+    }
 
     def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
-    def selected_container_tag = resolved_compute_device == 'gpu' ? container_gpu_tag : selected_cpu_tag
+    def selected_gpu_tag = detected_arch == 'amd64' ? container_gpu_tag_amd64 : container_gpu_tag_arm64
+    def selected_container_tag = resolved_compute_device == 'gpu' ? selected_gpu_tag : selected_cpu_tag
     def auto_docker_image = "${container_repo}:${selected_container_tag}"
     def auto_docker_singularity_image = "docker://${auto_docker_image}"
 
@@ -193,10 +202,11 @@ workflow {
     def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-0.2.0-amd64.sif') ?: 'cellphenotyper-0.2.0-amd64.sif').toString().trim()
     def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-0.2.0-arm64.sif') ?: 'cellphenotyper-0.2.0-arm64.sif').toString().trim()
     def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-0.2.0-gpu-amd64.sif') ?: 'cellphenotyper-0.2.0-gpu-amd64.sif').toString().trim()
+    def singularity_gpu_asset_arm64 = (paramOr('singularity_gpu_asset_arm64', 'cellphenotyper-0.2.0-gpu-arm64.sif') ?: 'cellphenotyper-0.2.0-gpu-arm64.sif').toString().trim()
     def singularity_local_dir = (paramOr('singularity_local_dir', '') ?: '').toString().trim()
 
     def selected_release_asset = resolved_compute_device == 'gpu'
-        ? singularity_gpu_asset_amd64
+        ? (detected_arch == 'amd64' ? singularity_gpu_asset_amd64 : singularity_gpu_asset_arm64)
         : (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
     def local_sif_candidates = []
     if (selected_release_asset) {
@@ -252,6 +262,16 @@ workflow {
     if (runtime_image_mode == 'auto' || !raw_docker_image || raw_docker_image == 'cellphenotyper:full-cpu') {
         resolved_docker_image = auto_docker_image
     }
+
+    // Propagate resolved runtime context so module/config logic uses the same values.
+    params.compute_device = resolved_compute_device
+    params.host_arch = detected_arch
+    params.container_repo = container_repo
+    params.container_cpu_tag_amd64 = container_cpu_tag_amd64
+    params.container_cpu_tag_arm64 = container_cpu_tag_arm64
+    params.container_gpu_tag_amd64 = container_gpu_tag_amd64
+    params.container_gpu_tag_arm64 = container_gpu_tag_arm64
+    params.singularity_gpu_asset_arm64 = singularity_gpu_asset_arm64
 
     if (runtime_profiles.contains('singularity')) {
         def singularity_image = runtime_image_mode == 'manual'

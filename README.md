@@ -46,9 +46,11 @@ Current tags/assets (`v0.2.0`):
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 - Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- Docker GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 - Singularity CPU amd64: `cellphenotyper-0.2.0-amd64.sif`
 - Singularity CPU arm64: `cellphenotyper-0.2.0-arm64.sif`
 - Singularity GPU amd64: `cellphenotyper-0.2.0-gpu-amd64.sif`
+- Singularity GPU arm64: `cellphenotyper-0.2.0-gpu-arm64.sif`
 
 ## UNI-2 token setup (required)
 
@@ -120,6 +122,18 @@ nextflow run main.nf \
   --host_arch amd64
 ```
 
+Docker (GPU, Linux arm64/aarch64 + NVIDIA Spark):
+
+```bash
+nextflow run main.nf \
+  -profile docker \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu_arm64 \
+  --compute_device gpu \
+  --host_arch arm64
+```
+
 Singularity/Apptainer:
 
 ```bash
@@ -140,6 +154,18 @@ nextflow run main.nf \
   --outdir_base results_example_gpu \
   --compute_device gpu \
   --host_arch amd64
+```
+
+Singularity/Apptainer (GPU, Linux arm64/aarch64 + NVIDIA Spark):
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu_arm64 \
+  --compute_device gpu \
+  --host_arch arm64
 ```
 
 Rerun only `10_cluster_mask` and `11_grown_tissue`:

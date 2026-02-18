@@ -179,13 +179,15 @@ Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 
 Reference Singularity assets (GitHub release `v0.2.0`):
 
 - `cellphenotyper-0.2.0-amd64.sif`
 - `cellphenotyper-0.2.0-arm64.sif`
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
+- `cellphenotyper-0.2.0-gpu-arm64.sif`
 
 ## Step 6-S (Singularity/Apptainer via Nextflow)
 
@@ -225,12 +227,14 @@ Pull images with Docker:
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
 Use:
 - `0.2.0-amd64` on Linux x86_64/amd64
 - `0.2.0` on arm64
-- `0.2.0-gpu` only on Linux amd64 with NVIDIA
+- `0.2.0-gpu` on Linux amd64 with NVIDIA
+- `0.2.0-gpu-arm64` on Linux arm64/aarch64 with NVIDIA (Spark)
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -256,6 +260,17 @@ export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
+```
+
+GPU publish (arm64/aarch64 Spark):
+
+```bash
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0-gpu-arm64"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t "${IMAGE}" --push .
 ```
 
 ## Step 7: Configure UNI-2 token (required for full UNI-2 run)
@@ -361,4 +376,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`
+- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` (amd64) or `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64` (arm64) in `pipeline_paramers.yml`

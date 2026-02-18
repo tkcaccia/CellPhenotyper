@@ -38,13 +38,16 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag` | `0.2.0` | Legacy generic fallback; architecture-specific CPU tags below are authoritative. |
 | `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `0.2.0-gpu` | GPU tag used when `compute_device` resolves to GPU. |
+| `container_gpu_tag` | `0.2.0-gpu` | Legacy generic GPU tag fallback. |
+| `container_gpu_tag_amd64` | `0.2.0-gpu` | GPU tag for amd64 hosts. |
+| `container_gpu_tag_arm64` | `0.2.0-gpu-arm64` | GPU tag for arm64/aarch64 hosts. |
 | `singularity_image_source` | `auto` | `auto` and `release` both try release `.sif` first and fall back to `docker://` if missing; `docker` forces `docker://`. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v0.2.0` | GitHub release tag containing `.sif` assets. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-0.2.0-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
 | `singularity_gpu_asset_amd64` | `cellphenotyper-0.2.0-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_arm64` | `cellphenotyper-0.2.0-gpu-arm64.sif` | GPU Singularity asset name for arm64/aarch64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
@@ -59,10 +62,11 @@ ROI resolution rules:
 - In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated.
 
 GPU run notes:
-- GPU mode requires an amd64/x86_64 host with NVIDIA runtime support.
+- GPU mode requires an NVIDIA runtime and either amd64/x86_64 or arm64/aarch64 host architecture.
 - Use one of:
   - `--compute_device gpu --host_arch amd64`
-  - `compute_device: gpu` and `host_arch: amd64` in `pipeline_paramers.yml`.
+  - `--compute_device gpu --host_arch arm64`
+  - `compute_device: gpu` with `host_arch: amd64` or `host_arch: arm64` in `pipeline_paramers.yml`.
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.

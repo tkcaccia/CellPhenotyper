@@ -19,6 +19,7 @@ For version `X.Y.Z`, expected asset names are:
 - CPU arm64: `cellphenotyper-X.Y.Z-arm64.sif`
 - CPU amd64: `cellphenotyper-X.Y.Z-amd64.sif`
 - GPU amd64 (optional): `cellphenotyper-X.Y.Z-gpu-amd64.sif`
+- GPU arm64/aarch64 (optional): `cellphenotyper-X.Y.Z-gpu-arm64.sif`
 
 Release tag: `vX.Y.Z`
 
@@ -82,6 +83,18 @@ cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 0.2.0 \
   --device gpu \
+  --upload
+```
+
+### 4) Optional: build/upload arm64/aarch64 GPU asset (NVIDIA Spark)
+
+```bash
+cd /path/to/CellPhenotyper
+./singularity/publish_sif_release_asset.sh \
+  --version 0.2.0 \
+  --device gpu \
+  --source docker \
+  --docker-tag 0.2.0-gpu-arm64 \
   --upload
 ```
 
@@ -175,6 +188,7 @@ Fields to update include:
 - `singularity_cpu_asset_amd64`
 - `singularity_cpu_asset_arm64`
 - `singularity_gpu_asset_amd64`
+- `singularity_gpu_asset_arm64`
 - container tags (`container_cpu_tag*`, `container_gpu_tag`) if changed
 
 Then commit and push.
