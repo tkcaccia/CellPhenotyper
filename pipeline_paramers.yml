@@ -47,7 +47,7 @@ singularity_image: ""
 docker_image: ""
 
 # Global resource caps
-max_cpus: 4
+max_cpus: 1
 max_memory_gb: 8
 stardist_pythonpath: ""
 stardist_prob: 0.52

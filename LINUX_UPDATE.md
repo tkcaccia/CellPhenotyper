@@ -107,7 +107,7 @@ Execution report:
 
 ## 6) If host has low resources
 
-The defaults target 4 CPU / 8 GB RAM. On smaller systems, reduce at runtime:
+The defaults target 1 CPU / 8 GB RAM. Increase or tune at runtime if needed:
 
 ```bash
 nextflow run main.nf \

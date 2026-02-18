@@ -13,7 +13,7 @@ Example:
 ```bash
 nextflow run main.nf -profile singularity \
   -params-file pipeline_paramers.yml \
-  --max_cpus 4 \
+  --max_cpus 2 \
   --max_memory_gb 8 \
   --uni2_batch 32
 ```
@@ -51,7 +51,7 @@ nextflow run main.nf -profile singularity \
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
-| `max_cpus` | `4` | Global CPU cap. |
+| `max_cpus` | `1` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
