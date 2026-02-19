@@ -71,6 +71,10 @@ expand_preview_alpha: 0.45
 # UNI-2 token variable name
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
+hf_hub_download_timeout: 120
+hf_hub_etag_timeout: 30
+uni2_hf_load_retries: 4
+uni2_hf_load_retry_delay_sec: 10
 uni2_include_nuclei: true
 uni2_include_cyto: true
 uni2_include_inner_square: true

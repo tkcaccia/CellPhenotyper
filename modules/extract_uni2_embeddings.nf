@@ -65,6 +65,11 @@ process EXTRACT_UNI2_EMBEDDINGS {
 
     export HF_HOME="${params.hf_home}"
     export HF_HUB_CACHE="${params.hf_hub_cache}"
+    export HF_HUB_DOWNLOAD_TIMEOUT="${params.hf_hub_download_timeout}"
+    export HF_HUB_ETAG_TIMEOUT="${params.hf_hub_etag_timeout}"
+    export HF_HUB_DISABLE_TELEMETRY=1
+    export UNI2_HF_LOAD_RETRIES="${params.uni2_hf_load_retries}"
+    export UNI2_HF_LOAD_RETRY_DELAY_SEC="${params.uni2_hf_load_retry_delay_sec}"
     export HF_TOKEN="\$(printenv "\$TOKEN_VAR_NAME" || true)"
     if [[ -z "\$HF_TOKEN" ]]; then
       export HF_TOKEN="\$(printenv HF_TOKEN || true)"

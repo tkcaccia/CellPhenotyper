@@ -18,6 +18,7 @@ import sys
 import math
 import random
 import shutil
+import time
 from pathlib import Path
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -130,6 +131,68 @@ def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str) -> Any:
     return model
 
 
+def _is_transient_hf_error(msg: str) -> bool:
+    lowered = (msg or "").lower()
+    transient_markers = [
+        "cannot send a request, as the client has been closed",
+        "connection timed out",
+        "timed out",
+        "timeout",
+        "temporary failure in name resolution",
+        "connection reset by peer",
+        "remote end closed connection",
+        "connection aborted",
+        "connection refused",
+        "read timed out",
+        "name or service not known",
+        "service unavailable",
+        "too many requests",
+    ]
+    return any(marker in lowered for marker in transient_markers)
+
+
+def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], repo_id: Optional[str]):
+    import timm
+
+    legacy_weights_msg = "weights_only=True"  # torch>=2.6 + legacy .tar checkpoint
+    legacy_tar_msg = "legacy .tar format"
+    try:
+        return timm.create_model(enc_id, pretrained=True, **timm_kwargs)
+    except (RuntimeError, OSError) as e:
+        msg = str(e)
+        corrupted = (
+            "PytorchStreamReader failed reading file" in msg
+            or "archive is corrupted" in msg
+            or "invalid header" in msg
+        )
+        if repo_id and corrupted:
+            print(
+                f"[WARN] Corrupted cached weights detected for '{repo_id}'. Clearing cache and retrying once.",
+                file=sys.stderr,
+            )
+            _clear_hf_repo_cache(repo_id)
+            try:
+                return timm.create_model(enc_id, pretrained=True, **timm_kwargs)
+            except (RuntimeError, OSError) as e2:
+                msg2 = str(e2)
+                if legacy_weights_msg in msg2 and legacy_tar_msg in msg2:
+                    print(
+                        f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
+                        file=sys.stderr,
+                    )
+                    model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+                    return _load_timm_hf_legacy_checkpoint(model, repo_id)
+                raise
+        if repo_id and legacy_weights_msg in msg and legacy_tar_msg in msg:
+            print(
+                f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
+                file=sys.stderr,
+            )
+            model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+            return _load_timm_hf_legacy_checkpoint(model, repo_id)
+        raise
+
+
 def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_token: Optional[str]):
     presets: Dict[str, Dict[str, Any]] = {
         "dinov2_vitb14": {"backend": "dinov2_hub", "id": "dinov2_vitb14", "pooling": "cls", "tag": "dinov2_vitb14"},
@@ -200,45 +263,29 @@ def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_tok
             timm_kwargs.setdefault("act_layer", torch.nn.SiLU)
 
         repo_id = enc_id.split("hf-hub:", 1)[1] if enc_id.startswith("hf-hub:") else None
-        legacy_weights_msg = "weights_only=True"  # torch>=2.6 + legacy .tar checkpoint
-        legacy_tar_msg = "legacy .tar format"
-        try:
-            model = timm.create_model(enc_id, pretrained=True, **timm_kwargs)
-        except (RuntimeError, OSError) as e:
-            msg = str(e)
-            corrupted = (
-                "PytorchStreamReader failed reading file" in msg
-                or "archive is corrupted" in msg
-                or "invalid header" in msg
-            )
-            if repo_id and corrupted:
-                print(
-                    f"[WARN] Corrupted cached weights detected for '{repo_id}'. Clearing cache and retrying once.",
-                    file=sys.stderr,
-                )
-                _clear_hf_repo_cache(repo_id)
-                try:
-                    model = timm.create_model(enc_id, pretrained=True, **timm_kwargs)
-                except (RuntimeError, OSError) as e2:
-                    msg2 = str(e2)
-                    if legacy_weights_msg in msg2 and legacy_tar_msg in msg2:
-                        print(
-                            f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
-                            file=sys.stderr,
-                        )
-                        model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-                        model = _load_timm_hf_legacy_checkpoint(model, repo_id)
-                    else:
-                        raise
-            elif repo_id and legacy_weights_msg in msg and legacy_tar_msg in msg:
-                print(
-                    f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
-                    file=sys.stderr,
-                )
-                model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-                model = _load_timm_hf_legacy_checkpoint(model, repo_id)
-            else:
+        max_attempts = max(1, int(os.environ.get("UNI2_HF_LOAD_RETRIES", "4")))
+        retry_delay = max(1.0, float(os.environ.get("UNI2_HF_LOAD_RETRY_DELAY_SEC", "10")))
+        model = None
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                model = _create_timm_model_with_fallback(enc_id, timm_kwargs, repo_id)
+                break
+            except Exception as e:
+                last_err = e
+                msg = str(e)
+                if attempt < max_attempts and _is_transient_hf_error(msg):
+                    sleep_s = retry_delay * attempt
+                    print(
+                        f"[WARN] UNI2 model load transient failure (attempt {attempt}/{max_attempts}): {e}",
+                        file=sys.stderr,
+                    )
+                    print(f"[WARN] Retrying UNI2 model load in {sleep_s:.1f}s...", file=sys.stderr)
+                    time.sleep(sleep_s)
+                    continue
                 raise
+        if model is None and last_err is not None:
+            raise last_err
         model.eval()
 
         cfg = resolve_data_config(getattr(model, "pretrained_cfg", {}), model=model)
