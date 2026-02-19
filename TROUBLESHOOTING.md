@@ -118,6 +118,20 @@ source tokens.env
 export HF_TOKEN="${HF_UNI2}"
 ```
 
+Quick validation:
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import whoami
+print(whoami(token=os.environ["HF_TOKEN"].strip()))
+PY
+```
+
+If this fails, your token is wrong or the account is not approved for `MahmoodLab/UNI2-h`.
+
 ## 6) UNI-2 transient HF client/network errors
 
 Error:
@@ -134,6 +148,39 @@ Fix:
   - `uni2_hf_load_retry_delay_sec`
   - `hf_hub_download_timeout`
   - `hf_hub_etag_timeout`
+
+## 6b) UNI-2 works manually but fails inside Nextflow on HPC
+
+Cause: compute tasks run in restricted network context; downloading inside each task is fragile.
+
+Fix:
+
+1. Pre-cache once:
+
+```bash
+export HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export HF_HUB_CACHE=$HF_HOME/hub
+mkdir -p "$HF_HUB_CACHE"
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+print("UNI2 cache ready")
+PY
+```
+
+2. Run with offline cache env:
+
+```bash
+export APPTAINERENV_HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export APPTAINERENV_HF_HUB_CACHE=/scratch/<project>/CellPhenotyper/.hf_cache/hub
+export APPTAINERENV_HF_HUB_OFFLINE=1
+export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
+export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
+export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
+export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
+export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
+```
 
 ## 7) `nextflow: command not found` on HPC GPU nodes
 
@@ -175,4 +222,3 @@ singularity exec <image.sif> \
 ```
 
 If this command fails, rebuild/pull the correct image tag.
-

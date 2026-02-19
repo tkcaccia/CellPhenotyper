@@ -180,8 +180,8 @@ Use published runtime images. For Singularity, the default is release-hosted `.s
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
 - GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 
 Reference Singularity assets (GitHub release `v0.2.0`):
@@ -239,15 +239,15 @@ Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
 Use:
 - `0.2.0-amd64` on Linux x86_64/amd64
-- `0.2.0` on arm64
-- `0.2.0-gpu` on Linux amd64 with NVIDIA
+- `0.2.0-arm64` on arm64
+- `0.2.0-gpu-amd64` on Linux amd64 with NVIDIA
 - `0.2.0-gpu-arm64` on Linux arm64/aarch64 with NVIDIA (Spark)
 - All runtime images are built with StarDist dependencies preinstalled, including `tensorflow==2.16.2` and `imagecodecs`.
 
@@ -265,45 +265,43 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 CPU publish (arm64 host: macOS Apple Silicon via Docker Desktop or Linux arm64):
 
 ```bash
-export TAG="0.2.0"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
-docker push "${IMAGE}"
+docker build -f docker/Dockerfile.full.cpu \
+  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64 .
+docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
 ```
 
 CPU publish (amd64 host: Linux x86_64):
 
 ```bash
-export TAG="0.2.0-amd64"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
-docker push "${IMAGE}"
+docker build -f docker/Dockerfile.full.cpu \
+  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 .
+docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 ```
 
 GPU publish (amd64 host with NVIDIA):
 
 ```bash
-export TAG="0.2.0-gpu"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
-docker push "${IMAGE}"
+docker build -f docker/Dockerfile.full.gpu \
+  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 .
+docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 ```
 
 GPU publish (arm64/aarch64 host with NVIDIA Spark):
 
 ```bash
-export TAG="0.2.0-gpu-arm64"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
-docker push "${IMAGE}"
+docker build -f docker/Dockerfile.full.gpu \
+  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64 .
+docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
 Optional cross-build (buildx):
 
 ```bash
 docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-amd64 --push .
-docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-gpu-arm64 --push .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 --push .
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64 --push .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.gpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 --push .
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64 --push .
 ```
 
 ## Step 7: Configure UNI-2 token (required for full UNI-2 run)
@@ -323,6 +321,37 @@ By default the pipeline reads token file/variable from:
 
 - `hf_token_env_file: tokens.env`
 - `hf_token_env_var_name: HF_UNI2`
+
+Optional but recommended on HPC:
+
+Validate token + access before starting Nextflow:
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import whoami
+print(whoami(token=os.environ["HF_TOKEN"].strip()))
+PY
+```
+
+Pre-cache UNI-2 weights once on an internet-enabled node:
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+export HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export HF_HUB_CACHE=$HF_HOME/hub
+mkdir -p "$HF_HUB_CACHE"
+
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+print("UNI2 cache ready")
+PY
+```
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
@@ -360,6 +389,19 @@ For GPU runs (Linux amd64/arm64 + NVIDIA), use:
 - `compute_device: gpu`
 - `host_arch: amd64` or `host_arch: arm64`
 - keep `runtime_image_mode: auto`
+
+For offline/restricted compute nodes, export HF cache env before running:
+
+```bash
+export APPTAINERENV_HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export APPTAINERENV_HF_HUB_CACHE=/scratch/<project>/CellPhenotyper/.hf_cache/hub
+export APPTAINERENV_HF_HUB_OFFLINE=1
+export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
+export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
+export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
+export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
+export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
+```
 
 If your scheduler node has limited outbound network, pre-cache StarDist model once:
 

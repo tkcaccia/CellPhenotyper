@@ -161,7 +161,7 @@ workflow {
     if (!container_repo) {
         container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
     }
-    def default_cpu_tag_generic = detected_arch == 'amd64' ? '0.2.0-amd64' : '0.2.0'
+    def default_cpu_tag_generic = detected_arch == 'amd64' ? '0.2.0-amd64' : '0.2.0-arm64'
     def container_cpu_tag = (paramOr('container_cpu_tag', default_cpu_tag_generic) ?: default_cpu_tag_generic).toString().trim()
     if (!container_cpu_tag) {
         container_cpu_tag = default_cpu_tag_generic
@@ -170,17 +170,18 @@ workflow {
     if (!container_cpu_tag_amd64) {
         container_cpu_tag_amd64 = '0.2.0-amd64'
     }
-    def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0') ?: '0.2.0').toString().trim()
+    def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0-arm64') ?: '0.2.0-arm64').toString().trim()
     if (!container_cpu_tag_arm64) {
-        container_cpu_tag_arm64 = '0.2.0'
+        container_cpu_tag_arm64 = '0.2.0-arm64'
     }
-    def container_gpu_tag = (paramOr('container_gpu_tag', '0.2.0-gpu') ?: '0.2.0-gpu').toString().trim()
+    def default_gpu_tag_generic = detected_arch == 'amd64' ? '0.2.0-gpu-amd64' : '0.2.0-gpu-arm64'
+    def container_gpu_tag = (paramOr('container_gpu_tag', default_gpu_tag_generic) ?: default_gpu_tag_generic).toString().trim()
     if (!container_gpu_tag) {
-        container_gpu_tag = '0.2.0-gpu'
+        container_gpu_tag = default_gpu_tag_generic
     }
-    def container_gpu_tag_amd64 = (paramOr('container_gpu_tag_amd64', container_gpu_tag) ?: container_gpu_tag).toString().trim()
+    def container_gpu_tag_amd64 = (paramOr('container_gpu_tag_amd64', '0.2.0-gpu-amd64') ?: '0.2.0-gpu-amd64').toString().trim()
     if (!container_gpu_tag_amd64) {
-        container_gpu_tag_amd64 = '0.2.0-gpu'
+        container_gpu_tag_amd64 = '0.2.0-gpu-amd64'
     }
     def container_gpu_tag_arm64 = (paramOr('container_gpu_tag_arm64', '0.2.0-gpu-arm64') ?: '0.2.0-gpu-arm64').toString().trim()
     if (!container_gpu_tag_arm64) {
@@ -278,14 +279,14 @@ workflow {
             ? (paramOr('singularity_image', '') ?: '').toString().trim()
             : resolved_singularity_image
         if (!singularity_image) {
-            error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
+            error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64"
         }
 
         if (singularity_image.startsWith('docker://')) {
             def docker_ref = singularity_image.replaceFirst('^docker://', '')
             def likely_invalid_ref = (!docker_ref.contains('/')) || docker_ref.endsWith('.sif')
             if (likely_invalid_ref) {
-                error "Invalid singularity_image '${singularity_image}'. Use a valid OCI reference, e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
+                error "Invalid singularity_image '${singularity_image}'. Use a valid OCI reference, e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64"
             }
         }
 

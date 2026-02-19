@@ -37,6 +37,30 @@ source tokens.env
 export HF_TOKEN="$HF_UNI2"
 ```
 
+Validate token and model access:
+
+```bash
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import whoami
+print(whoami(token=os.environ["HF_TOKEN"].strip()))
+PY
+```
+
+Pre-cache UNI-2 once (recommended):
+
+```bash
+export HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export HF_HUB_CACHE=$HF_HOME/hub
+mkdir -p "$HF_HUB_CACHE"
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+print("UNI2 cache ready")
+PY
+```
+
 ## 3) Choose only one runtime
 
 Do not use both profiles in the same run.
@@ -47,11 +71,12 @@ Pull fresh image tag(s):
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
-Use `0.2.0-gpu` on amd64 and `0.2.0-gpu-arm64` on arm64/aarch64 Spark.
+Use `0.2.0-gpu-amd64` on amd64 and `0.2.0-gpu-arm64` on arm64/aarch64 Spark.
 
 Run:
 
@@ -109,7 +134,7 @@ If you want to see pull progress explicitly, pre-pull image once:
 
 ```bash
 singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 ```
 
 Then run with manual image path:
@@ -122,6 +147,19 @@ nextflow run main.nf \
   --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
   --folder_input Data \
   --outdir_base results_example
+```
+
+If compute nodes have restricted internet, export offline HF cache env before Nextflow:
+
+```bash
+export APPTAINERENV_HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export APPTAINERENV_HF_HUB_CACHE=/scratch/<project>/CellPhenotyper/.hf_cache/hub
+export APPTAINERENV_HF_HUB_OFFLINE=1
+export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
+export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
+export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
+export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
+export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
 ```
 
 ## 4C) Optional: pre-cache StarDist model for offline/slow nodes

@@ -35,11 +35,11 @@ nextflow run main.nf -profile singularity \
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
-| `container_cpu_tag` | `0.2.0` | Legacy generic fallback; architecture-specific CPU tags below are authoritative. |
+| `container_cpu_tag` | `0.2.0-amd64` | Legacy fallback; explicit architecture tags below are authoritative. |
 | `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
-| `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `0.2.0-gpu` | Legacy generic GPU tag fallback. |
-| `container_gpu_tag_amd64` | `0.2.0-gpu` | GPU tag for amd64 hosts. |
+| `container_cpu_tag_arm64` | `0.2.0-arm64` | CPU tag for arm64 hosts. |
+| `container_gpu_tag` | `0.2.0-gpu-amd64` | Legacy fallback; explicit architecture tags below are authoritative. |
+| `container_gpu_tag_amd64` | `0.2.0-gpu-amd64` | GPU tag for amd64 hosts. |
 | `container_gpu_tag_arm64` | `0.2.0-gpu-arm64` | GPU tag for arm64/aarch64 hosts. |
 | `singularity_image_source` | `auto` | `auto` and `release` both try release `.sif` first and fall back to `docker://` if missing; `docker` forces `docker://`. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |

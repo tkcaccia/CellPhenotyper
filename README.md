@@ -58,8 +58,8 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 Current tags/assets (`v0.2.0`):
 
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64`
+- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
 - Docker GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 - Singularity CPU amd64: `cellphenotyper-0.2.0-amd64.sif`
 - Singularity CPU arm64: `cellphenotyper-0.2.0-arm64.sif`
@@ -88,6 +88,50 @@ Run these `source/export` commands in every new shell before starting Nextflow.
 
 If you get `401 Unauthorized` during UNI-2 download, check token validity and model access approval.
 
+HPC recommended flow for UNI-2:
+
+1. Validate token once (before pipeline run):
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import whoami
+print(whoami(token=os.environ["HF_TOKEN"].strip()))
+PY
+```
+
+2. Pre-cache UNI-2 once on a node with internet:
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+export HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export HF_HUB_CACHE=$HF_HOME/hub
+mkdir -p "$HF_HUB_CACHE"
+
+singularity exec <image.sif> python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+print("UNI2 cache ready")
+PY
+```
+
+3. Run Nextflow with cached offline HF mode:
+
+```bash
+export APPTAINERENV_HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
+export APPTAINERENV_HF_HUB_CACHE=/scratch/<project>/CellPhenotyper/.hf_cache/hub
+export APPTAINERENV_HF_HUB_OFFLINE=1
+export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
+export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
+export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
+export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
+export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
+```
+
 ## Common issues (summary)
 
 - Wrong container architecture (`arm64` image on `amd64` host): set `--host_arch` explicitly and clear old singularity cache.
@@ -96,6 +140,7 @@ If you get `401 Unauthorized` during UNI-2 download, check token validity and mo
 - StarDist model timeout on compute nodes: pre-download `python_2D_versatile_he.zip` and set `--stardist_keras_home` + `--stardist_pretrained_zip`.
 - UNI-2 gated model errors (`401`): source `tokens.env` and verify access to `MahmoodLab/UNI2-h`.
 - UNI-2 transient HF client/network errors: retry is now built-in (`uni2_hf_load_retries`, `uni2_hf_load_retry_delay_sec`).
+- UNI-2 can fail on HPC nodes without internet: pre-cache UNI-2 once and run with `HF_HUB_OFFLINE=1`.
 
 Full details and exact commands are in [Troubleshooting](TROUBLESHOOTING.md).
 
@@ -289,9 +334,7 @@ Minimal Docker publish example:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="0.2.0"
-export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
-docker push "${IMAGE}"
+docker build -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 .
+docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 ```
