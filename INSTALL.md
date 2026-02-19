@@ -2,6 +2,8 @@
 
 This page is step-based so you can choose where to start and where to stop.
 
+If you hit runtime errors, see [Troubleshooting](TROUBLESHOOTING.md) for exact fixes collected during real Mac/Linux/HPC validation.
+
 ## Step map (choose your start and end)
 
 | Your situation | Start | End |
@@ -219,6 +221,18 @@ export SINGULARITY_DOCKER_USERNAME="<github_username>"
 export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
 ```
 
+For HPC stability (large images), set cache/tmp before running:
+
+```bash
+mkdir -p /scratch/<project>/{tmp,cache,singularity}
+export APPTAINER_TMPDIR=/scratch/<project>/tmp
+export APPTAINER_CACHEDIR=/scratch/<project>/cache
+export SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
+export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
+export TMPDIR=$APPTAINER_TMPDIR
+export NXF_SINGULARITY_CACHEDIR=/scratch/<project>/cache
+```
+
 ## Step 6-D (Docker image from GHCR)
 
 Pull images with Docker:
@@ -346,6 +360,22 @@ For GPU runs (Linux amd64/arm64 + NVIDIA), use:
 - `compute_device: gpu`
 - `host_arch: amd64` or `host_arch: arm64`
 - keep `runtime_image_mode: auto`
+
+If your scheduler node has limited outbound network, pre-cache StarDist model once:
+
+```bash
+mkdir -p /scratch/<project>/keras/models
+curl -L --retry 5 --connect-timeout 30 \
+  -o /scratch/<project>/keras/models/python_2D_versatile_he.zip \
+  https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_he.zip
+```
+
+and add runtime flags:
+
+```bash
+--stardist_keras_home /scratch/<project>/keras \
+--stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
+```
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 

@@ -6,6 +6,8 @@ For `-profile docker`, you can pre-pull image from GHCR.
 For `-profile singularity`, Nextflow pulls automatically from `singularity_image`.
 Do not rebuild `.sif` on every test run.
 
+For frequent runtime issues and fixes, see [Troubleshooting](TROUBLESHOOTING.md).
+
 ## Easy example from repository data
 
 Use the input files already present in this repo:
@@ -73,7 +75,7 @@ Use a writable Linux path:
 
 ```bash
 cd ~
-rsync -a --delete /Users/<your-user>/Documents/test/CellPhenotyper/ ~/CellPhenotyper/
+rsync -a --delete <host_project_dir>/CellPhenotyper/ ~/CellPhenotyper/
 cd ~/CellPhenotyper
 ```
 
@@ -98,7 +100,7 @@ From macOS terminal:
 
 ```bash
 limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
-  /Users/<your-user>/Documents/test/CellPhenotyper/
+  <host_project_dir>/
 ```
 
 ## Starting point
@@ -209,6 +211,27 @@ nextflow run main.nf \
 ```
 
 For Linux arm64/aarch64 Spark, use `--host_arch arm64` (same commands).
+
+If singularity pull is slow or appears stuck, pre-pull once to monitor progress:
+
+```bash
+singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+```
+
+Then run in manual image mode:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_gpu \
+  --compute_device gpu \
+  --host_arch amd64 \
+  --runtime_image_mode manual \
+  --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif
+```
 
 ## 6) TensorFlow in runtime images
 

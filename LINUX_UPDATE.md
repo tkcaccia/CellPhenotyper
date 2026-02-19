@@ -2,6 +2,8 @@
 
 Use this page when pipeline container definitions were updated and you need to run the new release on a Linux machine.
 
+For full error catalog and fixes, see [Troubleshooting](TROUBLESHOOTING.md).
+
 ## 1) Pull latest pipeline code
 
 ```bash
@@ -70,6 +72,18 @@ rm -rf work/singularity
 apptainer cache clean -f || true
 ```
 
+On HPC, always set writable large tmp/cache:
+
+```bash
+mkdir -p /scratch/<project>/{tmp,cache,singularity}
+export APPTAINER_TMPDIR=/scratch/<project>/tmp
+export APPTAINER_CACHEDIR=/scratch/<project>/cache
+export SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
+export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
+export TMPDIR=$APPTAINER_TMPDIR
+export NXF_SINGULARITY_CACHEDIR=/scratch/<project>/cache
+```
+
 Run (auto-selects matching architecture image):
 
 ```bash
@@ -89,6 +103,41 @@ nextflow run main.nf \
   --singularity_image_source docker \
   --folder_input Data \
   --outdir_base results_example
+```
+
+If you want to see pull progress explicitly, pre-pull image once:
+
+```bash
+singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+```
+
+Then run with manual image path:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --runtime_image_mode manual \
+  --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
+  --folder_input Data \
+  --outdir_base results_example
+```
+
+## 4C) Optional: pre-cache StarDist model for offline/slow nodes
+
+```bash
+mkdir -p /scratch/<project>/keras/models
+curl -L --retry 5 --connect-timeout 30 \
+  -o /scratch/<project>/keras/models/python_2D_versatile_he.zip \
+  https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_he.zip
+```
+
+Add to run command:
+
+```bash
+--stardist_keras_home /scratch/<project>/keras \
+--stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
 ```
 
 ## 5) Verify run output

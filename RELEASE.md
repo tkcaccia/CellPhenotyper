@@ -28,6 +28,11 @@ Current published Singularity assets on release `v0.2.0`:
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
 - `cellphenotyper-0.2.0-gpu-arm64.sif`
 
+Operational notes:
+
+- GPU SIF files can be large; if GitHub Release asset upload limits are hit, keep Docker images on GHCR as authoritative source and document manual pre-pull + `runtime_image_mode: manual`.
+- For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
+
 ## Versioning policy
 
 - Release tags should follow semantic versioning (`vMAJOR.MINOR.PATCH`).

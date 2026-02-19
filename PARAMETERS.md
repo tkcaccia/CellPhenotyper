@@ -55,6 +55,10 @@ nextflow run main.nf -profile singularity \
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
+| `hf_hub_download_timeout` | `120` | Hugging Face download timeout (seconds) for UNI-2 model files. |
+| `hf_hub_etag_timeout` | `30` | Hugging Face metadata timeout (seconds). |
+| `uni2_hf_load_retries` | `4` | Retries for transient UNI-2 Hugging Face model loading failures. |
+| `uni2_hf_load_retry_delay_sec` | `10` | Base retry delay (seconds, backoff is automatic). |
 
 Note:
 - The repository `pipeline_paramers.yml` overrides these defaults to `hf_token_env_file: tokens.env` and `hf_token_env_var_name: HF_UNI2`.
@@ -93,11 +97,15 @@ GPU run notes:
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
+| `stardist_min_area` | `120` | Minimum nuclear object area retained after segmentation. |
+| `stardist_crop_pad` | `0` | Extra ROI crop padding (pixels) applied before StarDist. |
 | `stardist_autoinstall_runtime` | `true` | Emergency fallback only: if StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. Official images already include these deps. |
 | `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for custom StarDist runtime dependency paths. Usually not needed with official images. |
+| `stardist_keras_home` | `''` | Optional persistent Keras/StarDist cache root (recommended on HPC to avoid online download during jobs). |
+| `stardist_pretrained_zip` | `''` | Optional local path to pre-downloaded `python_2D_versatile_he.zip`. |
 | `write_full_labels` | `true` | Write full labels TIFF. |
 | `full_format` | `tif` | Full label file format. |
 | `allow_huge_tif` | `true` | Allow huge TIFF writes. |

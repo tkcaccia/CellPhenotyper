@@ -16,7 +16,21 @@ nextflow run main.nf
 - [Output](OUTPUT.md)
 - [Release](RELEASE.md)
 - [Linux update playbook](LINUX_UPDATE.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
 - [Singularity maintainer guide](singularity/README.md)
+
+## Quick start (recommended)
+
+```bash
+git clone https://github.com/tkcaccia/CellPhenotyper.git
+cd CellPhenotyper
+printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+nextflow run main.nf -profile singularity -params-file pipeline_paramers.yml --folder_input Data --outdir_base results_example
+```
+
+Use `-profile docker` instead of `-profile singularity` if Docker is your runtime.
 
 ## Example input in this repository
 
@@ -73,6 +87,17 @@ export HF_TOKEN="${HF_UNI2}"
 Run these `source/export` commands in every new shell before starting Nextflow.
 
 If you get `401 Unauthorized` during UNI-2 download, check token validity and model access approval.
+
+## Common issues (summary)
+
+- Wrong container architecture (`arm64` image on `amd64` host): set `--host_arch` explicitly and clear old singularity cache.
+- Singularity pull/build fails with `No space left on device`: move tmp/cache to large writable storage (`APPTAINER_TMPDIR`, `APPTAINER_CACHEDIR`).
+- `.nextflow/history.lock` error in Lima: run from writable Linux path (for example `~/CellPhenotyper`), not read-only host mount.
+- StarDist model timeout on compute nodes: pre-download `python_2D_versatile_he.zip` and set `--stardist_keras_home` + `--stardist_pretrained_zip`.
+- UNI-2 gated model errors (`401`): source `tokens.env` and verify access to `MahmoodLab/UNI2-h`.
+- UNI-2 transient HF client/network errors: retry is now built-in (`uni2_hf_load_retries`, `uni2_hf_load_retry_delay_sec`).
+
+Full details and exact commands are in [Troubleshooting](TROUBLESHOOTING.md).
 
 ## Linux quick run
 
@@ -211,7 +236,7 @@ Singularity (via Lima Linux VM):
 ```bash
 limactl shell default
 mkdir -p ~/CellPhenotyper
-rsync -a --delete /Users/<your-user>/Documents/CellPhenotyper/ ~/CellPhenotyper/
+rsync -a --delete <host_project_dir>/CellPhenotyper/ ~/CellPhenotyper/
 cd ~/CellPhenotyper
 source tokens.env
 export HF_TOKEN="${HF_UNI2}"
@@ -248,7 +273,7 @@ Copy results from Lima to macOS host:
 
 ```bash
 limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
-  /Users/<your-user>/Documents/CellPhenotyper/
+  <host_project_dir>/
 ```
 
 ## Maintainer: publish updated containers

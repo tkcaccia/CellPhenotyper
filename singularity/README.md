@@ -15,6 +15,7 @@ Important:
 - Do **not** commit `.sif` files to git.
 - Upload `.sif` files as **GitHub Release assets**.
 - Pipeline users pull automatically with `-profile singularity`.
+- For runtime user issues, refer to `../TROUBLESHOOTING.md` in the repository root.
 
 ## Naming Convention
 
@@ -156,6 +157,14 @@ export SINGULARITY_TMPDIR=/var/tmp/apptainer/tmp
 export SINGULARITY_CACHEDIR=/var/tmp/apptainer/cache
 export TMPDIR=/var/tmp/apptainer/tmp
 ```
+
+If Nextflow pull times out (`Failed to pull singularity image`, status 143/255), increase timeout in params:
+
+```yaml
+singularity_pull_timeout: 120m
+```
+
+or pre-pull manually with the same tmp/cache env.
 
 Then rerun:
 
