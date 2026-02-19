@@ -210,24 +210,14 @@ nextflow run main.nf \
 
 For Linux arm64/aarch64 Spark, use `--host_arch arm64` (same commands).
 
-## 6) macOS M1 note (if StarDist fails with missing TensorFlow)
+## 6) TensorFlow in runtime images
 
-If your ARM `.sif` does not include TensorFlow, install it once into a writable host path and pass that path via `stardist_pythonpath`.
+StarDist runtime dependencies are already preinstalled in the official Docker and Singularity images/assets, including:
 
-```bash
-apptainer exec /path/to/cellphenotyper-0.2.0-arm64.sif \
-  python -m pip install --no-cache-dir --target /var/tmp/tfdeps tensorflow==2.16.2
-```
+- `tensorflow==2.16.2`
+- `imagecodecs`
 
-Then run:
-
-```bash
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --stardist_pythonpath /var/tmp/tfdeps \
-  -resume
-```
+You should not install TensorFlow manually before running the pipeline.
 
 ## 7) Resume and rerun
 

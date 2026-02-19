@@ -17,6 +17,10 @@ Current published runtime tags:
 - GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 - GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
 
+Runtime dependency note:
+
+- Official runtime images are built with StarDist dependencies preinstalled, including `tensorflow==2.16.2` and `imagecodecs`.
+
 Current published Singularity assets on release `v0.2.0`:
 
 - `cellphenotyper-0.2.0-amd64.sif`
@@ -39,7 +43,7 @@ export GHCR_USER="tkcaccia"
 source GHCRtoken.env
 ```
 
-2. Publish CPU image for a new version:
+2. Publish CPU image for a new version (arm64 host):
 
 ```bash
 export TAG="0.2.0"
@@ -49,7 +53,17 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-3. Publish GPU image (Linux x86_64 + NVIDIA):
+3. Publish CPU image for Linux amd64:
+
+```bash
+export TAG="0.2.0-amd64"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
+```
+
+4. Publish GPU image (Linux x86_64 + NVIDIA):
 
 ```bash
 export TAG="0.2.0-gpu"
@@ -59,16 +73,17 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-4. Publish GPU image (Linux arm64/aarch64 + NVIDIA Spark):
+5. Publish GPU image (Linux arm64/aarch64 + NVIDIA Spark):
 
 ```bash
 export TAG="0.2.0-gpu-arm64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
-docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
-docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t "${IMAGE}" --push .
+docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
 ```
 
-5. Verify pull:
+6. Verify pull:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64

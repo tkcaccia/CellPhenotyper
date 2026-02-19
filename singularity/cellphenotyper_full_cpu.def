@@ -71,9 +71,9 @@ sys.exit(0 if not missing else 1)
 PY
     micromamba run -n stardist pip install --no-cache-dir stardist csbdeep
   fi
-  # StarDist requires TensorFlow backend. On ARM, install via pip if missing.
+  # StarDist requires TensorFlow backend. Install it at build time if missing.
   if ! micromamba run -n stardist python -c "from stardist.models import StarDist2D" >/dev/null 2>&1; then
-    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.20.0
+    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.16.2
   fi
   if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then
     micromamba run -n stardist pip install --no-cache-dir imagecodecs

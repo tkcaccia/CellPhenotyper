@@ -93,11 +93,11 @@ GPU run notes:
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
-| `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
+| `stardist_autoinstall_runtime` | `true` | Emergency fallback only: if StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. Official images already include these deps. |
 | `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
-| `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
+| `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for custom StarDist runtime dependency paths. Usually not needed with official images. |
 | `write_full_labels` | `true` | Write full labels TIFF. |
 | `full_format` | `tif` | Full label file format. |
 | `allow_huge_tif` | `true` | Allow huge TIFF writes. |

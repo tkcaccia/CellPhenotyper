@@ -43,6 +43,7 @@ singularity_cpu_asset_arm64: cellphenotyper-0.2.0-arm64.sif
 singularity_gpu_asset_amd64: cellphenotyper-0.2.0-gpu-amd64.sif
 singularity_gpu_asset_arm64: cellphenotyper-0.2.0-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
+singularity_pull_timeout: 120m   # increase when docker:// image conversion to .sif is slow
 singularity_image: ""
 docker_image: ""
 

@@ -3,11 +3,12 @@
 This folder contains:
 
 - `cellphenotyper_full_cpu.def`: CPU definition
-- `cellphenotyper_full_gpu.def`: GPU definition (amd64 + NVIDIA)
+- `cellphenotyper_full_gpu.def`: GPU definition (amd64 and arm64)
 - `publish_sif_release_asset.sh`: build/upload helper
 
 Note:
 - ARM64/aarch64 GPU builds (NVIDIA Spark) should use `publish_sif_release_asset.sh --source docker --docker-tag <version>-gpu-arm64`.
+- Both definition files preinstall StarDist runtime dependencies, including `tensorflow==2.16.2` and `imagecodecs`.
 
 Important:
 

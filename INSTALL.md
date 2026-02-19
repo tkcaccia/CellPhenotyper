@@ -235,42 +235,61 @@ Use:
 - `0.2.0` on arm64
 - `0.2.0-gpu` on Linux amd64 with NVIDIA
 - `0.2.0-gpu-arm64` on Linux arm64/aarch64 with NVIDIA (Spark)
+- All runtime images are built with StarDist dependencies preinstalled, including `tensorflow==2.16.2` and `imagecodecs`.
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
 Use this only when you need to publish a new container version.
+Recommended: build each tag on its native architecture host.
 
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+```
+
+CPU publish (arm64 host: macOS Apple Silicon via Docker Desktop or Linux arm64):
+
+```bash
 export TAG="0.2.0"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-GPU publish:
+CPU publish (amd64 host: Linux x86_64):
 
 ```bash
-export GHCR_USER="tkcaccia"
-source GHCRtoken.env
+export TAG="0.2.0-amd64"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
+docker push "${IMAGE}"
+```
+
+GPU publish (amd64 host with NVIDIA):
+
+```bash
 export TAG="0.2.0-gpu"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-GPU publish (arm64/aarch64 Spark):
+GPU publish (arm64/aarch64 host with NVIDIA Spark):
 
 ```bash
-export GHCR_USER="tkcaccia"
-source GHCRtoken.env
 export TAG="0.2.0-gpu-arm64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
+docker push "${IMAGE}"
+```
+
+Optional cross-build (buildx):
+
+```bash
 docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
-docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t "${IMAGE}" --push .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-amd64 --push .
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t ghcr.io/${GHCR_USER}/cellphenotyper:0.2.0-gpu-arm64 --push .
 ```
 
 ## Step 7: Configure UNI-2 token (required for full UNI-2 run)

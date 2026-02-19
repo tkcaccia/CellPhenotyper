@@ -2,6 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG STARDIST_TF_VERSION=2.16.2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git build-essential pkg-config \
@@ -16,7 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN MM_ARCH="$(uname -m)" && \
     if [ "${MM_ARCH}" = "x86_64" ]; then MM_PLATFORM="linux-64"; \
-    else echo "GPU image build is supported on Linux x86_64 hosts with NVIDIA CUDA only. Detected: ${MM_ARCH}" >&2; exit 1; fi && \
+    elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then MM_PLATFORM="linux-aarch64"; \
+    else echo "Unsupported architecture for micromamba: ${MM_ARCH}" >&2; exit 1; fi && \
     curl -Ls -o /tmp/micromamba.tar.bz2 "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest" && \
     tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba && \
     install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba && \
@@ -26,9 +28,27 @@ ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 COPY stardist.yml /opt/stardist.yml
 
 RUN set -euo pipefail && \
+    export TMPDIR=/var/tmp PIP_CACHE_DIR=/var/tmp/pip-cache && \
+    mkdir -p "${PIP_CACHE_DIR}" && \
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
     micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
-    micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge pytorch torchvision pytorch-cuda=12.4 && \
+    export STARDIST_ENV_LIB=/opt/micromamba/envs/stardist/lib && \
+    export LD_LIBRARY_PATH="${STARDIST_ENV_LIB}:${LD_LIBRARY_PATH:-}" && \
+    if ! micromamba run -n stardist python -c "import importlib.util, sys; mods=('stardist','csbdeep'); missing=[m for m in mods if importlib.util.find_spec(m) is None]; sys.exit(0 if not missing else 1)" >/dev/null 2>&1; then \
+      micromamba run -n stardist pip install --no-cache-dir stardist csbdeep ; \
+    fi && \
+    if ! micromamba run -n stardist python -c "import tensorflow" >/dev/null 2>&1; then \
+      micromamba run -n stardist pip install --no-cache-dir "tensorflow==${STARDIST_TF_VERSION}" ; \
+    fi && \
+    if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then \
+      micromamba run -n stardist pip install --no-cache-dir imagecodecs ; \
+    fi && \
+    MM_ARCH="$(uname -m)" && \
+    if [ "${MM_ARCH}" = "x86_64" ]; then \
+      micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge pytorch torchvision pytorch-cuda=12.4 ; \
+    else \
+      micromamba install -y -n stardist -c conda-forge pytorch torchvision ; \
+    fi && \
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \
@@ -44,6 +64,7 @@ RUN set -euo pipefail && \
       rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
       bioconductor-bluster && \
+    micromamba run -n stardist python -c "import importlib; mods=['tensorflow','stardist','csbdeep','torch','timm','imagecodecs','tifffile']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \

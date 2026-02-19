@@ -52,6 +52,11 @@ Current tags/assets (`v0.2.0`):
 - Singularity GPU amd64: `cellphenotyper-0.2.0-gpu-amd64.sif`
 - Singularity GPU arm64: `cellphenotyper-0.2.0-gpu-arm64.sif`
 
+TensorFlow note:
+
+- StarDist runtime dependencies are preinstalled in these images/assets, including `tensorflow==2.16.2` and `imagecodecs`.
+- Do not run extra `pip install tensorflow` before pipeline execution.
+
 ## UNI-2 token setup (required)
 
 1. Create/sign in at [Hugging Face](https://huggingface.co).
