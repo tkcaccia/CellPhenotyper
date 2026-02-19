@@ -60,6 +60,9 @@ if missing:
     target = os.environ.get("STARDIST_PYDEPS", ".pydeps")
     tf_version = os.environ.get("STARDIST_TF_VERSION", "").strip()
     req = []
+    # Keep TensorFlow-compatible NumPy for task-local fallback installs.
+    if any(m in missing for m in ("tensorflow", "stardist", "csbdeep")):
+        req.append("numpy<2")
     if "tensorflow" in missing:
         req.append(f"tensorflow=={tf_version}" if tf_version else "tensorflow")
     if "stardist" in missing:
