@@ -179,20 +179,21 @@ Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
 Reference Singularity assets (GitHub release `v0.2.0`):
 
 - `cellphenotyper-0.2.0-amd64.sif`
 - `cellphenotyper-0.2.0-arm64.sif`
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
+- `cellphenotyper-0.2.0-gpu-arm64.sif` (optional)
 
 ## Step 6-S (Singularity/Apptainer via Nextflow)
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
 Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`
-(release `.sif` first, then automatic `docker://` fallback if missing).
+(release/local `.sif` first; on arm64 GPU runs, missing GPU assets fall back to CPU containers).
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
@@ -312,6 +313,13 @@ For GPU runs (Linux amd64 + NVIDIA), use:
 - `compute_device: gpu`
 - `host_arch: amd64`
 - keep `runtime_image_mode: auto`
+
+For GPU runs (Linux arm64 + NVIDIA), use:
+
+- `compute_device: gpu`
+- `host_arch: arm64`
+- `enable_gpu_on_arm64: true`
+- either provide `singularity_gpu_asset_arm64` (release/local) or set `gpu_container_image` explicitly
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 

@@ -1,6 +1,7 @@
 process RUN_STARDIST_ROI_SEGMENTATION {
     tag "${sample_id}"
     label 'compute_heavy'
+    label 'gpu_capable'
 
     publishDir "${params.outdir_base}/02_stardist/${sample_id}", mode: 'copy', overwrite: true
 
@@ -77,6 +78,19 @@ PY
     fi
 
     mkdir -p stardist_out
+
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+      echo "[DEBUG] StarDist GPU diagnostics"
+      nvidia-smi -L || true
+      python - <<'PY'
+try:
+    import tensorflow as tf
+    gpus = tf.config.list_physical_devices('GPU')
+    print(f"[DEBUG] tensorflow={tf.__version__} built_with_cuda={tf.test.is_built_with_cuda()} gpus={len(gpus)}")
+except Exception as exc:
+    print(f"[DEBUG] TensorFlow diagnostics unavailable: {exc}")
+PY
+    fi
 
     MIN_AREA_FLAG=""
     if python "${stardist_script}" --help 2>&1 | grep -q -- "--min-area"; then

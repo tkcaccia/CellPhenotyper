@@ -21,8 +21,10 @@ From: ubuntu:22.04
   MM_ARCH="$(uname -m)"
   if [ "${MM_ARCH}" = "x86_64" ]; then
     MM_PLATFORM="linux-64"
+  elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then
+    MM_PLATFORM="linux-aarch64"
   else
-    echo "GPU image build is supported on Linux x86_64 hosts with NVIDIA CUDA only. Detected: ${MM_ARCH}" >&2
+    echo "Unsupported architecture for GPU image build: ${MM_ARCH}" >&2
     exit 1
   fi
 
@@ -73,9 +75,23 @@ PY
   fi
 
   # CUDA-enabled PyTorch for GPU embeddings path.
-  # Build this on a Linux x86_64 host with NVIDIA stack.
-  micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge \
-    pytorch torchvision pytorch-cuda=12.4
+  # amd64: conda CUDA runtime path.
+  # arm64: prefer cu126 PyTorch wheels (fallback to CPU wheels if unavailable).
+  if [ "${MM_ARCH}" = "x86_64" ]; then
+    micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge \
+      pytorch torchvision pytorch-cuda=12.4
+  else
+    micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip
+    if ! micromamba run -n stardist pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch torchvision; then
+      echo "[WARN] Could not install arm64 CUDA PyTorch wheels from cu126 index; falling back to conda-forge CPU wheels." >&2
+      micromamba install -y -n stardist -c conda-forge pytorch torchvision
+    fi
+  fi
+
+  micromamba run -n stardist python - <<'PY'
+import torch
+print(f"[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}")
+PY
 
   # OME tools
   micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff

@@ -1,6 +1,7 @@
 process EXTRACT_UNI2_EMBEDDINGS {
     tag "${sample_id}:${embedding_mode}"
     label 'compute_heavy'
+    label 'gpu_capable'
     maxForks 1
 
     publishDir "${params.outdir_base}/07_embeddings/${sample_id}", mode: 'copy', overwrite: true
@@ -79,6 +80,20 @@ process EXTRACT_UNI2_EMBEDDINGS {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
+
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+      echo "[DEBUG] UNI-2 GPU diagnostics"
+      nvidia-smi -L || true
+      python - <<'PY'
+try:
+    import torch
+    print(f"[DEBUG] torch={torch.__version__} cuda={torch.version.cuda} cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"[DEBUG] cuda_device_0={torch.cuda.get_device_name(0)}")
+except Exception as exc:
+    print(f"[DEBUG] Torch diagnostics unavailable: {exc}")
+PY
+    fi
 
     OUTDIR="embeddings_${sample_id}_${embedding_mode}"
     ATTEMPT_BATCH=${initial_batch}

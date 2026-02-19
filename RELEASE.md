@@ -14,13 +14,14 @@ Current published runtime tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
 Current published Singularity assets on release `v0.2.0`:
 
 - `cellphenotyper-0.2.0-amd64.sif`
 - `cellphenotyper-0.2.0-arm64.sif`
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
+- `cellphenotyper-0.2.0-gpu-arm64.sif` (optional)
 
 ## Versioning policy
 
@@ -47,7 +48,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-3. Publish GPU image (Linux x86_64 + NVIDIA only):
+3. Publish GPU image (amd64 by default; arm64 requires a CUDA-capable arm64 build path):
 
 ```bash
 export TAG="0.2.0-gpu"
@@ -80,7 +81,7 @@ singularity/publish_sif_release_asset.sh \
   --upload
 ```
 
-Optional GPU Singularity asset (amd64 only):
+Optional GPU Singularity asset:
 
 ```bash
 singularity/publish_sif_release_asset.sh \

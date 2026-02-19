@@ -204,10 +204,6 @@ if [[ "$tmp_fs_type" == "tmpfs" ]]; then
 fi
 
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
-if [[ "$DEVICE" == "gpu" && "$HOST_ARCH" != "amd64" ]]; then
-  echo "GPU SIF publishing is supported only on amd64 hosts. Detected: $HOST_ARCH" >&2
-  exit 1
-fi
 
 mkdir -p "$OUTDIR"
 if [[ ! -w "$OUTDIR" ]]; then
@@ -262,7 +258,11 @@ if [[ "$SOURCE" == "def" ]]; then
 else
   if [[ -z "$DOCKER_TAG" ]]; then
     if [[ "$DEVICE" == "gpu" ]]; then
-      DOCKER_TAG="${VERSION}-gpu"
+      if [[ "$HOST_ARCH" == "amd64" ]]; then
+        DOCKER_TAG="${VERSION}-gpu"
+      else
+        DOCKER_TAG="${VERSION}-gpu-${HOST_ARCH}"
+      fi
     elif [[ "$HOST_ARCH" == "amd64" ]]; then
       DOCKER_TAG="${VERSION}-amd64"
     else

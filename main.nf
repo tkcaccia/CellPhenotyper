@@ -141,6 +141,7 @@ workflow {
     if (!(requested_compute_device in ['cpu', 'gpu', 'auto'])) {
         requested_compute_device = 'auto'
     }
+    def enable_gpu_on_arm64 = ((paramOr('enable_gpu_on_arm64', false) ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on']
 
     def nvidia_visible = (System.getenv('NVIDIA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
     def cuda_visible = (System.getenv('CUDA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
@@ -150,11 +151,15 @@ workflow {
         detected_nvidia = command_succeeds('command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1')
     }
 
+    def gpu_allowed_on_arch = (detected_arch == 'amd64') || (detected_arch == 'arm64' && enable_gpu_on_arm64)
     def resolved_compute_device = requested_compute_device == 'auto'
-        ? ((detected_arch == 'amd64' && detected_nvidia) ? 'gpu' : 'cpu')
+        ? ((gpu_allowed_on_arch && detected_nvidia) ? 'gpu' : 'cpu')
         : requested_compute_device
-    if (resolved_compute_device == 'gpu' && detected_arch != 'amd64') {
-        error "compute_device='gpu' is supported only on amd64/x86_64. Detected architecture '${detected_arch}'."
+    if (resolved_compute_device == 'gpu' && !gpu_allowed_on_arch) {
+        log.warn "compute_device='gpu' requested on ${detected_arch} but enable_gpu_on_arm64=${enable_gpu_on_arm64}. Falling back to CPU."
+        resolved_compute_device = 'cpu'
+    } else if (resolved_compute_device == 'gpu' && detected_arch == 'arm64') {
+        log.warn "compute_device='gpu' enabled on arm64. GPU processes will run only if an arm64-compatible GPU container is available."
     }
 
     def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper') ?: 'ghcr.io/tkcaccia/cellphenotyper').toString().trim()
@@ -180,8 +185,11 @@ workflow {
     }
 
     def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
-    def selected_container_tag = resolved_compute_device == 'gpu' ? container_gpu_tag : selected_cpu_tag
-    def auto_docker_image = "${container_repo}:${selected_container_tag}"
+    def auto_cpu_docker_image = "${container_repo}:${selected_cpu_tag}"
+    def auto_gpu_docker_image = "${container_repo}:${container_gpu_tag}"
+    def auto_docker_image = resolved_compute_device == 'gpu'
+        ? (detected_arch == 'amd64' ? auto_gpu_docker_image : auto_cpu_docker_image)
+        : auto_cpu_docker_image
     def auto_docker_singularity_image = "docker://${auto_docker_image}"
 
     def singularity_image_source = (paramOr('singularity_image_source', 'auto') ?: 'auto').toString().trim().toLowerCase()
@@ -193,11 +201,23 @@ workflow {
     def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-0.2.0-amd64.sif') ?: 'cellphenotyper-0.2.0-amd64.sif').toString().trim()
     def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-0.2.0-arm64.sif') ?: 'cellphenotyper-0.2.0-arm64.sif').toString().trim()
     def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-0.2.0-gpu-amd64.sif') ?: 'cellphenotyper-0.2.0-gpu-amd64.sif').toString().trim()
+    def singularity_gpu_asset_arm64 = (paramOr('singularity_gpu_asset_arm64', 'cellphenotyper-0.2.0-gpu-arm64.sif') ?: 'cellphenotyper-0.2.0-gpu-arm64.sif').toString().trim()
     def singularity_local_dir = (paramOr('singularity_local_dir', '') ?: '').toString().trim()
+    def cpu_container_image = (paramOr('cpu_container_image', '') ?: '').toString().trim()
+    def gpu_container_image = (paramOr('gpu_container_image', '') ?: '').toString().trim()
 
-    def selected_release_asset = resolved_compute_device == 'gpu'
-        ? singularity_gpu_asset_amd64
-        : (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
+    def selected_release_asset = ''
+    if (resolved_compute_device == 'gpu') {
+        if (detected_arch == 'amd64') {
+            selected_release_asset = singularity_gpu_asset_amd64
+        } else if (detected_arch == 'arm64') {
+            selected_release_asset = singularity_gpu_asset_arm64 ?: ''
+        } else {
+            selected_release_asset = singularity_gpu_asset_amd64
+        }
+    } else {
+        selected_release_asset = (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
+    }
     def local_sif_candidates = []
     if (selected_release_asset) {
         if (singularity_local_dir) {
@@ -233,11 +253,24 @@ workflow {
             println "WARN: Release-hosted Singularity image is not reachable (${auto_release_singularity_image}); falling back to ${auto_docker_singularity_image}"
         }
     }
+    if (resolved_compute_device == 'gpu' && detected_arch == 'arm64' && auto_singularity_origin == 'docker') {
+        log.warn "No arm64 GPU Singularity asset was found/reachable. Auto-selected fallback container is CPU-oriented (${auto_singularity_image})."
+    }
 
     def raw_singularity_image = (paramOr('singularity_image', '') ?: '').toString().trim()
     def resolved_singularity_image = raw_singularity_image
     if (runtime_image_mode == 'auto' || !raw_singularity_image) {
-        resolved_singularity_image = auto_singularity_image
+        if (resolved_compute_device == 'gpu' && gpu_container_image) {
+            resolved_singularity_image = gpu_container_image
+        } else if (cpu_container_image) {
+            resolved_singularity_image = cpu_container_image
+        } else {
+            resolved_singularity_image = auto_singularity_image
+        }
+    } else if (runtime_image_mode == 'manual' && resolved_compute_device == 'gpu' && gpu_container_image) {
+        resolved_singularity_image = gpu_container_image
+    } else if (runtime_image_mode == 'manual' && cpu_container_image) {
+        resolved_singularity_image = cpu_container_image
     } else if (raw_singularity_image.startsWith('docker://')) {
         def ref = raw_singularity_image.replaceFirst('^docker://', '')
         if (!ref.contains('/') || ref.endsWith('.sif')) {
@@ -250,13 +283,17 @@ workflow {
     def raw_docker_image = (paramOr('docker_image', '') ?: '').toString().trim()
     def resolved_docker_image = raw_docker_image
     if (runtime_image_mode == 'auto' || !raw_docker_image || raw_docker_image == 'cellphenotyper:full-cpu') {
-        resolved_docker_image = auto_docker_image
+        if (resolved_compute_device == 'gpu' && gpu_container_image) {
+            resolved_docker_image = gpu_container_image.replaceFirst('^docker://', '')
+        } else if (cpu_container_image) {
+            resolved_docker_image = cpu_container_image.replaceFirst('^docker://', '')
+        } else {
+            resolved_docker_image = auto_docker_image
+        }
     }
 
     if (runtime_profiles.contains('singularity')) {
-        def singularity_image = runtime_image_mode == 'manual'
-            ? (paramOr('singularity_image', '') ?: '').toString().trim()
-            : resolved_singularity_image
+        def singularity_image = resolved_singularity_image
         if (!singularity_image) {
             error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0"
         }
@@ -356,7 +393,7 @@ workflow {
         error "KODAMA stage requires all embedding families from UNI-2. Set uni2_include_nuclei=true, uni2_include_cyto=true and uni2_include_inner_square=true."
     }
 
-    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
+    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     def supported_image_suffixes = [

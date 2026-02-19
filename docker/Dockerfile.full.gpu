@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN MM_ARCH="$(uname -m)" && \
     if [ "${MM_ARCH}" = "x86_64" ]; then MM_PLATFORM="linux-64"; \
-    else echo "GPU image build is supported on Linux x86_64 hosts with NVIDIA CUDA only. Detected: ${MM_ARCH}" >&2; exit 1; fi && \
+    elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then MM_PLATFORM="linux-aarch64"; \
+    else echo "Unsupported architecture for GPU image build: ${MM_ARCH}" >&2; exit 1; fi && \
     curl -Ls -o /tmp/micromamba.tar.bz2 "https://micro.mamba.pm/api/micromamba/${MM_PLATFORM}/latest" && \
     tar -xvjf /tmp/micromamba.tar.bz2 -C /tmp bin/micromamba && \
     install -m 0755 /tmp/bin/micromamba /usr/local/bin/micromamba && \
@@ -28,7 +29,20 @@ COPY stardist.yml /opt/stardist.yml
 RUN set -euo pipefail && \
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
     micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
-    micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge pytorch torchvision pytorch-cuda=12.4 && \
+    MM_ARCH="$(uname -m)" && \
+    if [ "${MM_ARCH}" = "x86_64" ]; then \
+      micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge pytorch torchvision pytorch-cuda=12.4; \
+    else \
+      micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip && \
+      if ! micromamba run -n stardist pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch torchvision; then \
+        echo "[WARN] Could not install arm64 CUDA PyTorch wheels from cu126 index; falling back to conda-forge CPU wheels." >&2; \
+        micromamba install -y -n stardist -c conda-forge pytorch torchvision; \
+      fi; \
+    fi && \
+    micromamba run -n stardist python - <<'PY' && \
+import torch
+print(f"[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}")
+PY
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \

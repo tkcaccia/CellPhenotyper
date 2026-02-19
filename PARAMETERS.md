@@ -30,8 +30,9 @@ nextflow run main.nf -profile singularity \
 | `start_point` | `convert` | Stage where execution starts. |
 | `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_mask`). |
 | `tissue_mask_from_input` | `false` | Build tissue mask from input image directly. |
-| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto` (auto picks GPU only on amd64 + NVIDIA). |
+| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto`. |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
+| `enable_gpu_on_arm64` | `false` | Allow GPU selection on arm64 hosts when a compatible GPU container exists. |
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
@@ -39,15 +40,20 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
 | `container_gpu_tag` | `0.2.0-gpu` | GPU tag used when `compute_device` resolves to GPU. |
-| `singularity_image_source` | `auto` | `auto` and `release` both try release `.sif` first and fall back to `docker://` if missing; `docker` forces `docker://`. |
+| `singularity_image_source` | `auto` | `auto` and `release` try release/local `.sif` first. On arm64 GPU runs, missing GPU assets fall back to CPU (not amd64 docker GPU). |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v0.2.0` | GitHub release tag containing `.sif` assets. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-0.2.0-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
 | `singularity_gpu_asset_amd64` | `cellphenotyper-0.2.0-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_arm64` | `cellphenotyper-0.2.0-gpu-arm64.sif` | GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
+| `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |
+| `cpu_container_image` | `''` | Optional explicit CPU container URI/path. |
+| `gpu_container_image` | `''` | Optional explicit GPU container URI/path. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
+| `gpu_debug_diagnostics` | `false` | When true, GPU-capable processes print `nvidia-smi` and framework CUDA diagnostics. |
 | `max_cpus` | `4` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
@@ -59,10 +65,9 @@ ROI resolution rules:
 - In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated.
 
 GPU run notes:
-- GPU mode requires an amd64/x86_64 host with NVIDIA runtime support.
-- Use one of:
-  - `--compute_device gpu --host_arch amd64`
-  - `compute_device: gpu` and `host_arch: amd64` in `pipeline_paramers.yml`.
+- amd64: use `--compute_device gpu --host_arch amd64`.
+- arm64: set `--compute_device gpu --host_arch arm64 --enable_gpu_on_arm64 true` and provide an arm64 GPU container (`singularity_gpu_asset_arm64` or `gpu_container_image`).
+- If no arm64 GPU container is available, GPU-capable processes fall back to CPU containers with warnings.
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.

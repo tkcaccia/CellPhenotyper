@@ -39,7 +39,9 @@ Do not use both profiles in the same run.
 Default image selection is automatic (`runtime_image_mode: auto`):
 
 - Docker profile uses GHCR images.
-- Singularity profile auto-resolves architecture-specific `.sif` release assets when available and falls back to `docker://` when needed.
+- Singularity profile auto-resolves architecture-specific `.sif` assets when available.
+- In GPU mode, only GPU-capable steps (StarDist, UNI-2 embeddings) use the GPU container; other steps stay on the CPU container.
+- On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 
 Current tags/assets (`v0.2.0`):
 
@@ -49,6 +51,7 @@ Current tags/assets (`v0.2.0`):
 - Singularity CPU amd64: `cellphenotyper-0.2.0-amd64.sif`
 - Singularity CPU arm64: `cellphenotyper-0.2.0-arm64.sif`
 - Singularity GPU amd64: `cellphenotyper-0.2.0-gpu-amd64.sif`
+- Singularity GPU arm64 (optional): `cellphenotyper-0.2.0-gpu-arm64.sif`
 
 ## UNI-2 token setup (required)
 
@@ -142,6 +145,19 @@ nextflow run main.nf \
   --host_arch amd64
 ```
 
+Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu_arm64 \
+  --compute_device gpu \
+  --host_arch arm64 \
+  --enable_gpu_on_arm64 true
+```
+
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
 
 ```bash
@@ -187,7 +203,7 @@ nextflow run main.nf \
 ```
 
 Important for Lima: run from a writable Linux path (for example `~/CellPhenotyper`), not from `/Users/...` mount paths.
-On Apple Silicon (`arm64`) hosts, run with CPU (`--compute_device cpu`).
+On Apple Silicon/Linux arm64, GPU mode requires an arm64-compatible GPU container asset (`singularity_gpu_asset_arm64` or `gpu_container_image`).
 
 ## Check status and outputs
 
