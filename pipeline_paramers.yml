@@ -18,6 +18,7 @@ tissue_mask_from_input: false
 compute_device: cpu    # cpu | gpu | auto
 host_arch: auto        # auto | amd64 | arm64
 enable_gpu_on_arm64: false   # set true only when an arm64-compatible GPU container is available
+enable_stardist_gpu_on_arm64: false   # optional override: run StarDist in GPU container on arm64
 runtime_image_mode: auto   # auto | manual
 start_point: convert
 end_point: auto

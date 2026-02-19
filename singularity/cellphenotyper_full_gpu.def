@@ -76,21 +76,30 @@ PY
 
   # CUDA-enabled PyTorch for GPU embeddings path.
   # amd64: conda CUDA runtime path.
-  # arm64: prefer cu126 PyTorch wheels (fallback to CPU wheels if unavailable).
+  # arm64 (e.g. GB10 / sm_121): use nightly cu130 wheels because
+  # stable cu126 arm64 wheels are built only for sm_80/sm_90.
   if [ "${MM_ARCH}" = "x86_64" ]; then
     micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge \
       pytorch torchvision pytorch-cuda=12.4
   else
+    micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true
     micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip
-    if ! micromamba run -n stardist pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu126 torch torchvision; then
-      echo "[WARN] Could not install arm64 CUDA PyTorch wheels from cu126 index; falling back to conda-forge CPU wheels." >&2
-      micromamba install -y -n stardist -c conda-forge pytorch torchvision
-    fi
+    micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre \
+      --index-url https://download.pytorch.org/whl/nightly/cu130 \
+      torch torchvision
+    # Re-install UNI-2 runtime deps that can be removed together with conda pytorch.
+    micromamba run -n stardist pip install --no-cache-dir --upgrade \
+      timm==1.0.24 accelerate==1.12.0
   fi
 
   micromamba run -n stardist python - <<'PY'
 import torch
 print(f"[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}")
+if not torch.backends.cuda.is_built():
+    raise SystemExit("FATAL: GPU image build produced CPU-only PyTorch")
+if not torch.version.cuda:
+    raise SystemExit("FATAL: GPU image build has no CUDA runtime tag in PyTorch")
+print(f"[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}")
 PY
 
   # OME tools

@@ -33,6 +33,7 @@ nextflow run main.nf -profile singularity \
 | `compute_device` | `cpu` | `cpu`, `gpu`, or `auto`. |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
 | `enable_gpu_on_arm64` | `false` | Allow GPU selection on arm64 hosts when a compatible GPU container exists. |
+| `enable_stardist_gpu_on_arm64` | `false` | On arm64, keep StarDist on CPU container by default; set `true` to force StarDist into GPU container. |
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
@@ -68,6 +69,8 @@ GPU run notes:
 - amd64: use `--compute_device gpu --host_arch amd64`.
 - arm64: set `--compute_device gpu --host_arch arm64 --enable_gpu_on_arm64 true` and provide an arm64 GPU container (`singularity_gpu_asset_arm64` or `gpu_container_image`).
 - If no arm64 GPU container is available, GPU-capable processes fall back to CPU containers with warnings.
+- On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
+- On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v0.2.0` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.

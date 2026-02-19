@@ -142,6 +142,7 @@ workflow {
         requested_compute_device = 'auto'
     }
     def enable_gpu_on_arm64 = ((paramOr('enable_gpu_on_arm64', false) ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on']
+    def enable_stardist_gpu_on_arm64 = ((paramOr('enable_stardist_gpu_on_arm64', false) ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on']
 
     def nvidia_visible = (System.getenv('NVIDIA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
     def cuda_visible = (System.getenv('CUDA_VISIBLE_DEVICES') ?: '').toString().trim().toLowerCase()
@@ -393,7 +394,7 @@ workflow {
         error "KODAMA stage requires all embedding families from UNI-2. Set uni2_include_nuclei=true, uni2_include_cyto=true and uni2_include_inner_square=true."
     }
 
-    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
+    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, enable_stardist_gpu_on_arm64=${enable_stardist_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     def supported_image_suffixes = [

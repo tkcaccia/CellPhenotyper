@@ -42,6 +42,7 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
 - In GPU mode, only GPU-capable steps (StarDist, UNI-2 embeddings) use the GPU container; other steps stay on the CPU container.
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
+- On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
 Current tags/assets (`v0.2.0`):
 
@@ -157,6 +158,8 @@ nextflow run main.nf \
   --host_arch arm64 \
   --enable_gpu_on_arm64 true
 ```
+
+Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v0.2.0` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
 
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
 

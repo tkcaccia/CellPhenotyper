@@ -96,6 +96,12 @@ cd /path/to/CellPhenotyper
   --upload
 ```
 
+Notes for arm64 GPU builds:
+
+- The GPU definition now enforces CUDA-enabled PyTorch (`torch.backends.cuda.is_built()==True`) and fails the build if only CPU wheels are installed.
+- For GB10-class GPUs (`sm_121`), the arm64 GPU definition installs nightly `cu130` PyTorch wheels (stable `cu126` arm64 wheels are not sufficient).
+- TensorFlow GPU availability on generic Linux arm64 may still be limited; UNI-2 (PyTorch) is the primary GPU path.
+
 ## Verify Release Assets
 
 ```bash

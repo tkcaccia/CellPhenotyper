@@ -320,6 +320,9 @@ For GPU runs (Linux arm64 + NVIDIA), use:
 - `host_arch: arm64`
 - `enable_gpu_on_arm64: true`
 - either provide `singularity_gpu_asset_arm64` (release/local) or set `gpu_container_image` explicitly
+- optional: `enable_stardist_gpu_on_arm64: true` to force StarDist into the GPU container on arm64
+
+On GB10-class arm64 GPUs (`sm_121`), build the GPU SIF locally from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch path). Older arm64 GPU assets can report CUDA visible but fail at kernel launch.
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 

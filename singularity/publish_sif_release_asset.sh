@@ -230,6 +230,9 @@ if [[ -e "$OUT_SIF" && "$FORCE" != "true" ]]; then
   echo "Output already exists: $OUT_SIF (use --force to overwrite)" >&2
   exit 1
 fi
+if [[ -e "$OUT_SIF" && "$FORCE" == "true" ]]; then
+  rm -f "$OUT_SIF"
+fi
 
 if [[ "$SOURCE" == "def" ]]; then
   DEF_FILE="$CPU_DEF"
