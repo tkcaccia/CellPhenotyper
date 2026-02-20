@@ -1,6 +1,7 @@
 process EXTRACT_UNI2_EMBEDDINGS {
     tag "${sample_id}:${embedding_mode}"
     label 'compute_heavy'
+    label 'gpu_capable'
     maxForks 1
 
     publishDir "${params.outdir_base}/07_embeddings/${sample_id}", mode: 'copy', overwrite: true
@@ -65,11 +66,6 @@ process EXTRACT_UNI2_EMBEDDINGS {
 
     export HF_HOME="${params.hf_home}"
     export HF_HUB_CACHE="${params.hf_hub_cache}"
-    export HF_HUB_DOWNLOAD_TIMEOUT="${params.hf_hub_download_timeout}"
-    export HF_HUB_ETAG_TIMEOUT="${params.hf_hub_etag_timeout}"
-    export HF_HUB_DISABLE_TELEMETRY=1
-    export UNI2_HF_LOAD_RETRIES="${params.uni2_hf_load_retries}"
-    export UNI2_HF_LOAD_RETRY_DELAY_SEC="${params.uni2_hf_load_retry_delay_sec}"
     export HF_TOKEN="\$(printenv "\$TOKEN_VAR_NAME" || true)"
     if [[ -z "\$HF_TOKEN" ]]; then
       export HF_TOKEN="\$(printenv HF_TOKEN || true)"
@@ -84,6 +80,20 @@ process EXTRACT_UNI2_EMBEDDINGS {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
+
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+      echo "[DEBUG] UNI-2 GPU diagnostics"
+      nvidia-smi -L || true
+      python - <<'PY'
+try:
+    import torch
+    print(f"[DEBUG] torch={torch.__version__} cuda={torch.version.cuda} cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"[DEBUG] cuda_device_0={torch.cuda.get_device_name(0)}")
+except Exception as exc:
+    print(f"[DEBUG] Torch diagnostics unavailable: {exc}")
+PY
+    fi
 
     OUTDIR="embeddings_${sample_id}_${embedding_mode}"
     ATTEMPT_BATCH=${initial_batch}

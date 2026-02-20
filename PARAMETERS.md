@@ -13,7 +13,7 @@ Example:
 ```bash
 nextflow run main.nf -profile singularity \
   -params-file pipeline_paramers.yml \
-  --max_cpus 2 \
+  --max_cpus 4 \
   --max_memory_gb 8 \
   --uni2_batch 32
 ```
@@ -30,38 +30,35 @@ nextflow run main.nf -profile singularity \
 | `start_point` | `convert` | Stage where execution starts. |
 | `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_mask`). |
 | `tissue_mask_from_input` | `false` | Build tissue mask from input image directly. |
-| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto` (auto picks GPU on amd64/arm64 when NVIDIA runtime is detected). |
+| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto`. |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
+| `enable_gpu_on_arm64` | `false` | Allow GPU selection on arm64 hosts when a compatible GPU container exists. |
+| `enable_stardist_gpu_on_arm64` | `false` | On arm64, keep StarDist on CPU container by default; set `true` to force StarDist into GPU container. |
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
-| `container_cpu_tag` | `0.2.0-amd64` | Legacy fallback; explicit architecture tags below are authoritative. |
+| `container_cpu_tag` | `0.2.0` | Legacy generic fallback; architecture-specific CPU tags below are authoritative. |
 | `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
-| `container_cpu_tag_arm64` | `0.2.0-arm64` | CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `0.2.0-gpu-amd64` | Legacy fallback; explicit architecture tags below are authoritative. |
-| `container_gpu_tag_amd64` | `0.2.0-gpu-amd64` | GPU tag for amd64 hosts. |
-| `container_gpu_tag_arm64` | `0.2.0-gpu-arm64` | GPU tag for arm64/aarch64 hosts. |
-| `singularity_image_source` | `auto` | `auto` and `release` both try release `.sif` first and fall back to `docker://` if missing; `docker` forces `docker://`. |
+| `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
+| `container_gpu_tag` | `0.2.0-gpu` | GPU tag used when `compute_device` resolves to GPU. |
+| `singularity_image_source` | `auto` | `auto` and `release` try release/local `.sif` first. On arm64 GPU runs, missing GPU assets fall back to CPU (not amd64 docker GPU). |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v0.2.0` | GitHub release tag containing `.sif` assets. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-0.2.0-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
 | `singularity_gpu_asset_amd64` | `cellphenotyper-0.2.0-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
-| `singularity_gpu_asset_arm64` | `cellphenotyper-0.2.0-gpu-arm64.sif` | GPU Singularity asset name for arm64/aarch64 hosts. |
+| `singularity_gpu_asset_arm64` | `cellphenotyper-0.2.0-gpu-arm64.sif` | GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
+| `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |
+| `cpu_container_image` | `''` | Optional explicit CPU container URI/path. |
+| `gpu_container_image` | `''` | Optional explicit GPU container URI/path. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
-| `max_cpus` | `1` | Global CPU cap. |
+| `gpu_debug_diagnostics` | `false` | When true, GPU-capable processes print `nvidia-smi` and framework CUDA diagnostics. |
+| `max_cpus` | `4` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
-| `hf_hub_download_timeout` | `120` | Hugging Face download timeout (seconds) for UNI-2 model files. |
-| `hf_hub_etag_timeout` | `30` | Hugging Face metadata timeout (seconds). |
-| `uni2_hf_load_retries` | `4` | Retries for transient UNI-2 Hugging Face model loading failures. |
-| `uni2_hf_load_retry_delay_sec` | `10` | Base retry delay (seconds, backoff is automatic). |
-
-Note:
-- The repository `pipeline_paramers.yml` overrides these defaults to `hf_token_env_file: tokens.env` and `hf_token_env_var_name: HF_UNI2`.
 
 ROI resolution rules:
 - In `folder_input` mode, each image `<sample>.<supported_extension>` uses `<sample>.geojson` if present in the same folder.
@@ -69,11 +66,11 @@ ROI resolution rules:
 - In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated.
 
 GPU run notes:
-- GPU mode requires an NVIDIA runtime and either amd64/x86_64 or arm64/aarch64 host architecture.
-- Use one of:
-  - `--compute_device gpu --host_arch amd64`
-  - `--compute_device gpu --host_arch arm64`
-  - `compute_device: gpu` with `host_arch: amd64` or `host_arch: arm64` in `pipeline_paramers.yml`.
+- amd64: use `--compute_device gpu --host_arch amd64`.
+- arm64: set `--compute_device gpu --host_arch arm64 --enable_gpu_on_arm64 true` and provide an arm64 GPU container (`singularity_gpu_asset_arm64` or `gpu_container_image`).
+- If no arm64 GPU container is available, GPU-capable processes fall back to CPU containers with warnings.
+- On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
+- On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v0.2.0` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
@@ -97,15 +94,11 @@ GPU run notes:
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
-| `stardist_min_area` | `120` | Minimum nuclear object area retained after segmentation. |
-| `stardist_crop_pad` | `0` | Extra ROI crop padding (pixels) applied before StarDist. |
-| `stardist_autoinstall_runtime` | `true` | Emergency fallback only: if StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. Official images already include these deps. |
-| `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
+| `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
+| `stardist_tensorflow_version` | `2.20.0` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
-| `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for custom StarDist runtime dependency paths. Usually not needed with official images. |
-| `stardist_keras_home` | `''` | Optional persistent Keras/StarDist cache root (recommended on HPC to avoid online download during jobs). |
-| `stardist_pretrained_zip` | `''` | Optional local path to pre-downloaded `python_2D_versatile_he.zip`. |
+| `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
 | `write_full_labels` | `true` | Write full labels TIFF. |
 | `full_format` | `tif` | Full label file format. |
 | `allow_huge_tif` | `true` | Allow huge TIFF writes. |

@@ -2,8 +2,6 @@
 
 This page is step-based so you can choose where to start and where to stop.
 
-If you hit runtime errors, see [Troubleshooting](TROUBLESHOOTING.md) for exact fixes collected during real Mac/Linux/HPC validation.
-
 ## Step map (choose your start and end)
 
 | Your situation | Start | End |
@@ -180,23 +178,22 @@ Use published runtime images. For Singularity, the default is release-hosted `.s
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
-- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
 
 Reference Singularity assets (GitHub release `v0.2.0`):
 
 - `cellphenotyper-0.2.0-amd64.sif`
 - `cellphenotyper-0.2.0-arm64.sif`
 - `cellphenotyper-0.2.0-gpu-amd64.sif`
-- `cellphenotyper-0.2.0-gpu-arm64.sif`
+- `cellphenotyper-0.2.0-gpu-arm64.sif` (optional)
 
 ## Step 6-S (Singularity/Apptainer via Nextflow)
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
 Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`
-(release `.sif` first, then automatic `docker://` fallback if missing).
+(release/local `.sif` first; on arm64 GPU runs, missing GPU assets fall back to CPU containers).
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
@@ -221,87 +218,45 @@ export SINGULARITY_DOCKER_USERNAME="<github_username>"
 export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
 ```
 
-For HPC stability (large images), set cache/tmp before running:
-
-```bash
-mkdir -p /scratch/<project>/{tmp,cache,singularity}
-export APPTAINER_TMPDIR=/scratch/<project>/tmp
-export APPTAINER_CACHEDIR=/scratch/<project>/cache
-export SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
-export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
-export TMPDIR=$APPTAINER_TMPDIR
-export NXF_SINGULARITY_CACHEDIR=/scratch/<project>/cache
-```
-
 ## Step 6-D (Docker image from GHCR)
 
 Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
 ```
 
 Use:
 - `0.2.0-amd64` on Linux x86_64/amd64
-- `0.2.0-arm64` on arm64
-- `0.2.0-gpu-amd64` on Linux amd64 with NVIDIA
-- `0.2.0-gpu-arm64` on Linux arm64/aarch64 with NVIDIA (Spark)
-- All runtime images are built with StarDist dependencies preinstalled, including `tensorflow==2.16.2` and `imagecodecs`.
+- `0.2.0` on arm64
+- `0.2.0-gpu` only on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
 Use this only when you need to publish a new container version.
-Recommended: build each tag on its native architecture host.
 
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
+export TAG="0.2.0"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
 ```
 
-CPU publish (arm64 host: macOS Apple Silicon via Docker Desktop or Linux arm64):
+GPU publish:
 
 ```bash
-docker build -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64 .
-docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
-```
-
-CPU publish (amd64 host: Linux x86_64):
-
-```bash
-docker build -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 .
-docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-```
-
-GPU publish (amd64 host with NVIDIA):
-
-```bash
-docker build -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 .
-docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-```
-
-GPU publish (arm64/aarch64 host with NVIDIA Spark):
-
-```bash
-docker build -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64 .
-docker push ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
-```
-
-Optional cross-build (buildx):
-
-```bash
-docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 --push .
-docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.cpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64 --push .
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.full.gpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 --push .
-docker buildx build --platform linux/arm64 -f docker/Dockerfile.full.gpu -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64 --push .
+export GHCR_USER="tkcaccia"
+source GHCRtoken.env
+export TAG="0.2.0-gpu"
+export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
+docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+docker push "${IMAGE}"
 ```
 
 ## Step 7: Configure UNI-2 token (required for full UNI-2 run)
@@ -322,42 +277,11 @@ By default the pipeline reads token file/variable from:
 - `hf_token_env_file: tokens.env`
 - `hf_token_env_var_name: HF_UNI2`
 
-Optional but recommended on HPC:
-
-Validate token + access before starting Nextflow:
-
-```bash
-source tokens.env
-export HF_TOKEN="${HF_UNI2}"
-singularity exec <image.sif> python - <<'PY'
-import os
-from huggingface_hub import whoami
-print(whoami(token=os.environ["HF_TOKEN"].strip()))
-PY
-```
-
-Pre-cache UNI-2 weights once on an internet-enabled node:
-
-```bash
-source tokens.env
-export HF_TOKEN="${HF_UNI2}"
-export HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
-export HF_HUB_CACHE=$HF_HOME/hub
-mkdir -p "$HF_HUB_CACHE"
-
-singularity exec <image.sif> python - <<'PY'
-import os
-from huggingface_hub import snapshot_download
-snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
-print("UNI2 cache ready")
-PY
-```
-
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
-First, edit `pipeline_paramers.yml` with your runtime choices (`folder_input` or `image_input`/`roi_geojson`, `compute_device`, `runtime_image_mode`, resource caps).
+First, edit `pipeline_paramers.yml` with your runtime choices (`image_input`, `roi_geojson`, `compute_device`, `runtime_image_mode`, resource caps).
 To control where the pipeline starts/stops, set `start_point` and `end_point` in the same file.
-For automatic architecture-aware CPU/GPU selection, set:
+For automatic architecture-aware CPU/GPU selection, keep:
 
 - `runtime_image_mode: auto`
 - `compute_device: auto`
@@ -384,40 +308,21 @@ export NXF_HOME=/var/tmp/nextflow_home
 mkdir -p "$NXF_HOME"
 ```
 
-For GPU runs (Linux amd64/arm64 + NVIDIA), use:
+For GPU runs (Linux amd64 + NVIDIA), use:
 
 - `compute_device: gpu`
-- `host_arch: amd64` or `host_arch: arm64`
+- `host_arch: amd64`
 - keep `runtime_image_mode: auto`
 
-For offline/restricted compute nodes, export HF cache env before running:
+For GPU runs (Linux arm64 + NVIDIA), use:
 
-```bash
-export APPTAINERENV_HF_HOME=/scratch/<project>/CellPhenotyper/.hf_cache
-export APPTAINERENV_HF_HUB_CACHE=/scratch/<project>/CellPhenotyper/.hf_cache/hub
-export APPTAINERENV_HF_HUB_OFFLINE=1
-export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
-export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
-export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
-export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
-export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
-```
+- `compute_device: gpu`
+- `host_arch: arm64`
+- `enable_gpu_on_arm64: true`
+- either provide `singularity_gpu_asset_arm64` (release/local) or set `gpu_container_image` explicitly
+- optional: `enable_stardist_gpu_on_arm64: true` to force StarDist into the GPU container on arm64
 
-If your scheduler node has limited outbound network, pre-cache StarDist model once:
-
-```bash
-mkdir -p /scratch/<project>/keras/models
-curl -L --retry 5 --connect-timeout 30 \
-  -o /scratch/<project>/keras/models/python_2D_versatile_he.zip \
-  https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_he.zip
-```
-
-and add runtime flags:
-
-```bash
---stardist_keras_home /scratch/<project>/keras \
---stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
-```
+On GB10-class arm64 GPUs (`sm_121`), build the GPU SIF locally from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch path). Older arm64 GPU assets can report CUDA visible but fail at kernel launch.
 
 ## Step 8-D: Run complete pipeline with Docker (end step)
 
@@ -445,20 +350,6 @@ nextflow run main.nf \
   -resume
 ```
 
-GPU run (Linux arm64/aarch64 + NVIDIA Spark):
-
-```bash
-nextflow run main.nf \
-  -profile docker \
-  -params-file pipeline_paramers.yml \
-  --compute_device gpu \
-  --host_arch arm64 \
-  -with-report results_full_gpu_arm64/report.html \
-  -with-trace results_full_gpu_arm64/trace.txt \
-  -with-timeline results_full_gpu_arm64/timeline.html \
-  -resume
-```
-
 For Linux-side update commands after container/definition changes, see `LINUX_UPDATE.md`.
 
 ## Step 9: Check status and copy results (optional)
@@ -480,6 +371,5 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_full \
 For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
-- `host_arch: amd64` (or `host_arch: arm64` on Spark) in `pipeline_paramers.yml`
-- keep `runtime_image_mode: auto` (recommended)
-- optional manual override: set `runtime_image_mode: manual` and `docker_image`/`singularity_image` explicitly
+- `runtime_image_mode: manual` in `pipeline_paramers.yml`
+- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`

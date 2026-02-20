@@ -3,19 +3,14 @@
 This folder contains:
 
 - `cellphenotyper_full_cpu.def`: CPU definition
-- `cellphenotyper_full_gpu.def`: GPU definition (amd64 and arm64)
+- `cellphenotyper_full_gpu.def`: GPU definition (amd64 + NVIDIA)
 - `publish_sif_release_asset.sh`: build/upload helper
-
-Note:
-- ARM64/aarch64 GPU builds (NVIDIA Spark) should use `publish_sif_release_asset.sh --source docker --docker-tag <version>-gpu-arm64`.
-- Both definition files preinstall StarDist runtime dependencies, including `tensorflow==2.16.2` and `imagecodecs`.
 
 Important:
 
 - Do **not** commit `.sif` files to git.
 - Upload `.sif` files as **GitHub Release assets**.
 - Pipeline users pull automatically with `-profile singularity`.
-- For runtime user issues, refer to `../TROUBLESHOOTING.md` in the repository root.
 
 ## Naming Convention
 
@@ -24,7 +19,7 @@ For version `X.Y.Z`, expected asset names are:
 - CPU arm64: `cellphenotyper-X.Y.Z-arm64.sif`
 - CPU amd64: `cellphenotyper-X.Y.Z-amd64.sif`
 - GPU amd64 (optional): `cellphenotyper-X.Y.Z-gpu-amd64.sif`
-- GPU arm64/aarch64 (optional): `cellphenotyper-X.Y.Z-gpu-arm64.sif`
+- GPU arm64 (optional): `cellphenotyper-X.Y.Z-gpu-arm64.sif`
 
 Release tag: `vX.Y.Z`
 
@@ -91,17 +86,21 @@ cd /path/to/CellPhenotyper
   --upload
 ```
 
-### 4) Optional: build/upload arm64/aarch64 GPU asset (NVIDIA Spark)
+### 4) Optional: build/upload arm64 GPU asset
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 0.2.0 \
   --device gpu \
-  --source docker \
-  --docker-tag 0.2.0-gpu-arm64 \
   --upload
 ```
+
+Notes for arm64 GPU builds:
+
+- The GPU definition now enforces CUDA-enabled PyTorch (`torch.backends.cuda.is_built()==True`) and fails the build if only CPU wheels are installed.
+- For GB10-class GPUs (`sm_121`), the arm64 GPU definition installs nightly `cu130` PyTorch wheels (stable `cu126` arm64 wheels are not sufficient).
+- TensorFlow GPU availability on generic Linux arm64 may still be limited; UNI-2 (PyTorch) is the primary GPU path.
 
 ## Verify Release Assets
 
@@ -157,14 +156,6 @@ export SINGULARITY_TMPDIR=/var/tmp/apptainer/tmp
 export SINGULARITY_CACHEDIR=/var/tmp/apptainer/cache
 export TMPDIR=/var/tmp/apptainer/tmp
 ```
-
-If Nextflow pull times out (`Failed to pull singularity image`, status 143/255), increase timeout in params:
-
-```yaml
-singularity_pull_timeout: 120m
-```
-
-or pre-pull manually with the same tmp/cache env.
 
 Then rerun:
 

@@ -24,7 +24,7 @@ From: ubuntu:22.04
   elif [ "${MM_ARCH}" = "aarch64" ] || [ "${MM_ARCH}" = "arm64" ]; then
     MM_PLATFORM="linux-aarch64"
   else
-    echo "Unsupported architecture for micromamba: ${MM_ARCH}" >&2
+    echo "Unsupported architecture for GPU image build: ${MM_ARCH}" >&2
     exit 1
   fi
 
@@ -68,20 +68,39 @@ PY
     micromamba run -n stardist pip install --no-cache-dir stardist csbdeep
   fi
   if ! micromamba run -n stardist python -c "import tensorflow" >/dev/null 2>&1; then
-    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.16.2
+    micromamba run -n stardist pip install --no-cache-dir tensorflow==2.20.0
   fi
   if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then
     micromamba run -n stardist pip install --no-cache-dir imagecodecs
   fi
 
   # CUDA-enabled PyTorch for GPU embeddings path.
-  # Use CUDA-enabled builds on amd64; arm64 falls back to conda-forge pytorch/torchvision.
+  # amd64: conda CUDA runtime path.
+  # arm64 (e.g. GB10 / sm_121): use nightly cu130 wheels because
+  # stable cu126 arm64 wheels are built only for sm_80/sm_90.
   if [ "${MM_ARCH}" = "x86_64" ]; then
     micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge \
       pytorch torchvision pytorch-cuda=12.4
   else
-    micromamba install -y -n stardist -c conda-forge pytorch torchvision
+    micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true
+    micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip
+    micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre \
+      --index-url https://download.pytorch.org/whl/nightly/cu130 \
+      torch torchvision
+    # Re-install UNI-2 runtime deps that can be removed together with conda pytorch.
+    micromamba run -n stardist pip install --no-cache-dir --upgrade \
+      timm==1.0.24 accelerate==1.12.0
   fi
+
+  micromamba run -n stardist python - <<'PY'
+import torch
+print(f"[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}")
+if not torch.backends.cuda.is_built():
+    raise SystemExit("FATAL: GPU image build produced CPU-only PyTorch")
+if not torch.version.cuda:
+    raise SystemExit("FATAL: GPU image build has no CUDA runtime tag in PyTorch")
+print(f"[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}")
+PY
 
   # OME tools
   micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff
@@ -92,21 +111,6 @@ PY
     rasterio affine \
     r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
     bioconductor-bluster
-
-  # Final hard check for required runtime modules.
-  micromamba run -n stardist python - <<'PY'
-import importlib
-mods = ["tensorflow", "stardist", "csbdeep", "torch", "timm", "imagecodecs", "tifffile"]
-missing = []
-for m in mods:
-    try:
-        importlib.import_module(m)
-    except Exception as e:
-        missing.append(f"{m}: {e}")
-if missing:
-    raise SystemExit("Missing runtime modules:\n" + "\n".join(missing))
-print("Container runtime module check passed")
-PY
 
   # Bioconductor / GitHub packages
   micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'

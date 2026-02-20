@@ -1,6 +1,7 @@
 process RUN_STARDIST_ROI_SEGMENTATION {
     tag "${sample_id}"
     label 'compute_heavy'
+    label 'gpu_capable'
 
     publishDir "${params.outdir_base}/02_stardist/${sample_id}", mode: 'copy', overwrite: true
 
@@ -35,35 +36,8 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     export TF_NUM_INTEROP_THREADS=1
     export LOKY_MAX_CPU_COUNT=${task.cpus}
     export MPLCONFIGDIR="\$PWD/.mplconfig"
-    STARDIST_KERAS_HOME="${params.stardist_keras_home}"
-    if [[ -n "\$STARDIST_KERAS_HOME" ]]; then
-      export KERAS_HOME="\$STARDIST_KERAS_HOME"
-    fi
-    if [[ -z "\${KERAS_HOME:-}" ]]; then
-      export KERAS_HOME="\$PWD/.keras"
-    fi
-    if [[ -z "\${XDG_CACHE_HOME:-}" ]]; then
-      export XDG_CACHE_HOME="\${KERAS_HOME}"
-    fi
-    mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME" "\$KERAS_HOME/models/StarDist2D"
-
-    MODEL_CACHE_ID="${params.stardist_model}"
-    if [[ "\$MODEL_CACHE_ID" == "auto" ]]; then
-      MODEL_CACHE_ID="2D_versatile_he"
-    fi
-    if [[ -n "${params.stardist_pretrained_zip}" ]]; then
-      if [[ -f "${params.stardist_pretrained_zip}" ]]; then
-        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip"
-      else
-        echo "[WARN] stardist_pretrained_zip not found: ${params.stardist_pretrained_zip}"
-      fi
-    fi
-    # Backward-compatible fallback: allow cached zip saved as python_<model>.zip.
-    if [[ -f "\$KERAS_HOME/models/python_\${MODEL_CACHE_ID}.zip" && ! -f "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip" ]]; then
-      cp -f "\$KERAS_HOME/models/python_\${MODEL_CACHE_ID}.zip" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip"
-    fi
-    echo "[INFO] StarDist cache env: KERAS_HOME=\$KERAS_HOME XDG_CACHE_HOME=\$XDG_CACHE_HOME model_cache_id=\$MODEL_CACHE_ID"
-
+    export XDG_CACHE_HOME="\$PWD/.cache"
+    mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME"
     if [[ "${params.stardist_autoinstall_runtime}" == "true" ]]; then
       export STARDIST_PYDEPS="\$PWD/.pydeps"
       export STARDIST_TF_VERSION="${params.stardist_tensorflow_version}"
@@ -86,6 +60,9 @@ if missing:
     target = os.environ.get("STARDIST_PYDEPS", ".pydeps")
     tf_version = os.environ.get("STARDIST_TF_VERSION", "").strip()
     req = []
+    # Keep TensorFlow-compatible NumPy for task-local fallback installs.
+    if any(m in missing for m in ("tensorflow", "stardist", "csbdeep")):
+        req.append("numpy<2")
     if "tensorflow" in missing:
         req.append(f"tensorflow=={tf_version}" if tf_version else "tensorflow")
     if "stardist" in missing:
@@ -104,6 +81,19 @@ PY
     fi
 
     mkdir -p stardist_out
+
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+      echo "[DEBUG] StarDist GPU diagnostics"
+      nvidia-smi -L || true
+      python - <<'PY'
+try:
+    import tensorflow as tf
+    gpus = tf.config.list_physical_devices('GPU')
+    print(f"[DEBUG] tensorflow={tf.__version__} built_with_cuda={tf.test.is_built_with_cuda()} gpus={len(gpus)}")
+except Exception as exc:
+    print(f"[DEBUG] TensorFlow diagnostics unavailable: {exc}")
+PY
+    fi
 
     MIN_AREA_FLAG=""
     if python "${stardist_script}" --help 2>&1 | grep -q -- "--min-area"; then

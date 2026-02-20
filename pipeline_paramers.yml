@@ -17,6 +17,8 @@ run_full_pipeline: true
 tissue_mask_from_input: false
 compute_device: cpu    # cpu | gpu | auto
 host_arch: auto        # auto | amd64 | arm64
+enable_gpu_on_arm64: false   # set true only when an arm64-compatible GPU container is available
+enable_stardist_gpu_on_arm64: false   # optional override: run StarDist in GPU container on arm64
 runtime_image_mode: auto   # auto | manual
 start_point: convert
 end_point: auto
@@ -26,15 +28,14 @@ end_point: auto
 
 # Runtime image selection
 # In `runtime_image_mode: auto`, singularity tries release-hosted .sif first,
-# then automatically falls back to docker:// when the release asset is missing.
+# then falls back to docker:// for amd64. On arm64 GPU requests, missing GPU assets
+# fall back to CPU containers unless `gpu_container_image` is explicitly provided.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
-container_cpu_tag: 0.2.0-amd64   # legacy fallback; explicit arch tags below are authoritative
+container_cpu_tag: 0.2.0   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 0.2.0-amd64
-container_cpu_tag_arm64: 0.2.0-arm64
-container_gpu_tag: 0.2.0-gpu-amd64   # legacy fallback; explicit arch tags below are authoritative
-container_gpu_tag_amd64: 0.2.0-gpu-amd64
-container_gpu_tag_arm64: 0.2.0-gpu-arm64
+container_cpu_tag_arm64: 0.2.0
+container_gpu_tag: 0.2.0-gpu
 singularity_image_source: auto   # auto | release | docker
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v0.2.0
@@ -43,20 +44,21 @@ singularity_cpu_asset_arm64: cellphenotyper-0.2.0-arm64.sif
 singularity_gpu_asset_amd64: cellphenotyper-0.2.0-gpu-amd64.sif
 singularity_gpu_asset_arm64: cellphenotyper-0.2.0-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
-singularity_pull_timeout: 120m   # increase when docker:// image conversion to .sif is slow
+singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
+cpu_container_image: ""     # optional explicit CPU container path/URI
+gpu_container_image: ""     # optional explicit GPU container path/URI
 singularity_image: ""
 docker_image: ""
+gpu_debug_diagnostics: false
 
 # Global resource caps
-max_cpus: 1
+max_cpus: 4
 max_memory_gb: 8
 stardist_pythonpath: ""
 stardist_prob: 0.52
 stardist_nms: 0.28
 stardist_min_area: 120
 stardist_crop_pad: 0
-stardist_keras_home: ""      # optional persistent cache (e.g. /scratch/.../keras) for StarDist pretrained models
-stardist_pretrained_zip: ""  # optional local zip (e.g. .../python_2D_versatile_he.zip) copied into cache
 stardist_autoinstall_runtime: true
 stardist_tensorflow_version: "2.16.2"
 tissue_auto_no_downsample_max_side: 1024
@@ -71,10 +73,6 @@ expand_preview_alpha: 0.45
 # UNI-2 token variable name
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
-hf_hub_download_timeout: 120
-hf_hub_etag_timeout: 30
-uni2_hf_load_retries: 4
-uni2_hf_load_retry_delay_sec: 10
 uni2_include_nuclei: true
 uni2_include_cyto: true
 uni2_include_inner_square: true

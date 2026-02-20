@@ -33,9 +33,6 @@ Examples:
   # Build amd64 CPU SIF on Linux amd64 and upload it
   singularity/publish_sif_release_asset.sh --version 0.2.0 --device cpu --upload
 
-  # Build GPU arm64 SIF on Linux arm64/aarch64 (NVIDIA Spark) and upload it
-  singularity/publish_sif_release_asset.sh --version 0.2.0 --device gpu --source docker --docker-tag 0.2.0-gpu-arm64 --upload
-
   # Build from docker:// image instead of definition file
   singularity/publish_sif_release_asset.sh --source docker --device cpu --version 0.2.0 --upload
 USAGE
@@ -207,10 +204,6 @@ if [[ "$tmp_fs_type" == "tmpfs" ]]; then
 fi
 
 HOST_ARCH="$(normalize_arch "$(uname -m)")"
-if [[ "$DEVICE" == "gpu" && "$HOST_ARCH" != "amd64" && "$HOST_ARCH" != "arm64" ]]; then
-  echo "GPU SIF publishing is supported only on amd64 or arm64 hosts. Detected: $HOST_ARCH" >&2
-  exit 1
-fi
 
 mkdir -p "$OUTDIR"
 if [[ ! -w "$OUTDIR" ]]; then
@@ -236,6 +229,9 @@ OUT_SIF="${OUTDIR%/}/${ASSET_NAME}"
 if [[ -e "$OUT_SIF" && "$FORCE" != "true" ]]; then
   echo "Output already exists: $OUT_SIF (use --force to overwrite)" >&2
   exit 1
+fi
+if [[ -e "$OUT_SIF" && "$FORCE" == "true" ]]; then
+  rm -f "$OUT_SIF"
 fi
 
 if [[ "$SOURCE" == "def" ]]; then
@@ -265,10 +261,10 @@ if [[ "$SOURCE" == "def" ]]; then
 else
   if [[ -z "$DOCKER_TAG" ]]; then
     if [[ "$DEVICE" == "gpu" ]]; then
-      if [[ "$HOST_ARCH" == "arm64" ]]; then
-        DOCKER_TAG="${VERSION}-gpu-arm64"
-      else
+      if [[ "$HOST_ARCH" == "amd64" ]]; then
         DOCKER_TAG="${VERSION}-gpu"
+      else
+        DOCKER_TAG="${VERSION}-gpu-${HOST_ARCH}"
       fi
     elif [[ "$HOST_ARCH" == "amd64" ]]; then
       DOCKER_TAG="${VERSION}-amd64"
