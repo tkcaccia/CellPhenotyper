@@ -57,12 +57,24 @@ process RUN_STARDIST_ROI_SEGMENTATION {
       PY_MODEL_CACHE_ID="python_\${MODEL_CACHE_ID}"
     fi
 
+    copy_if_needed() {
+      local src="\$1"
+      local dst="\$2"
+      local src_real dst_real
+      src_real="\$(readlink -f "\$src" 2>/dev/null || echo "\$src")"
+      dst_real="\$(readlink -f "\$dst" 2>/dev/null || echo "\$dst")"
+      if [[ "\$src_real" == "\$dst_real" ]]; then
+        return 0
+      fi
+      cp -f "\$src" "\$dst"
+    }
+
     if [[ -n "${params.stardist_pretrained_zip}" ]]; then
       if [[ -f "${params.stardist_pretrained_zip}" ]]; then
-        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${PY_MODEL_CACHE_ID}.zip"
-        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${MODEL_CACHE_ID}.zip"
-        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip"
-        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}.zip"
+        copy_if_needed "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${PY_MODEL_CACHE_ID}.zip"
+        copy_if_needed "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${MODEL_CACHE_ID}.zip"
+        copy_if_needed "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip"
+        copy_if_needed "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}.zip"
       else
         echo "[WARN] stardist_pretrained_zip not found: ${params.stardist_pretrained_zip}"
       fi
