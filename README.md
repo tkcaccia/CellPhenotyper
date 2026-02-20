@@ -146,6 +146,20 @@ nextflow run main.nf \
   --host_arch amd64
 ```
 
+For HPC clusters without outbound internet from compute nodes, predownload StarDist model zip once and pass cache flags:
+
+```bash
+nextflow run main.nf \
+  -profile singularity \
+  -params-file pipeline_paramers.yml \
+  --folder_input Data \
+  --outdir_base results_example_gpu \
+  --compute_device gpu \
+  --host_arch amd64 \
+  --stardist_keras_home /scratch/<project>/keras \
+  --stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
+```
+
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
 ```bash

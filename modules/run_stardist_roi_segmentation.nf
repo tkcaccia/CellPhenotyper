@@ -36,8 +36,62 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     export TF_NUM_INTEROP_THREADS=1
     export LOKY_MAX_CPU_COUNT=${task.cpus}
     export MPLCONFIGDIR="\$PWD/.mplconfig"
-    export XDG_CACHE_HOME="\$PWD/.cache"
-    mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME"
+    STARDIST_KERAS_HOME="${params.stardist_keras_home}"
+    if [[ -n "\$STARDIST_KERAS_HOME" ]]; then
+      export KERAS_HOME="\$STARDIST_KERAS_HOME"
+    fi
+    if [[ -z "\${KERAS_HOME:-}" ]]; then
+      export KERAS_HOME="\$PWD/.keras"
+    fi
+    if [[ -z "\${XDG_CACHE_HOME:-}" ]]; then
+      export XDG_CACHE_HOME="\${KERAS_HOME}"
+    fi
+    mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME" "\$KERAS_HOME/models" "\$KERAS_HOME/models/StarDist2D"
+
+    MODEL_CACHE_ID="${params.stardist_model}"
+    if [[ "\$MODEL_CACHE_ID" == "auto" ]]; then
+      MODEL_CACHE_ID="2D_versatile_he"
+    fi
+    PY_MODEL_CACHE_ID="\$MODEL_CACHE_ID"
+    if [[ "\$PY_MODEL_CACHE_ID" != python_* ]]; then
+      PY_MODEL_CACHE_ID="python_\${MODEL_CACHE_ID}"
+    fi
+
+    if [[ -n "${params.stardist_pretrained_zip}" ]]; then
+      if [[ -f "${params.stardist_pretrained_zip}" ]]; then
+        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${PY_MODEL_CACHE_ID}.zip"
+        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/\${MODEL_CACHE_ID}.zip"
+        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip"
+        cp -f "${params.stardist_pretrained_zip}" "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}.zip"
+      else
+        echo "[WARN] stardist_pretrained_zip not found: ${params.stardist_pretrained_zip}"
+      fi
+    fi
+
+    # Backward-compatible fallback: normalize known cache filename variants.
+    STARDIST_CACHE_SRC=""
+    for CAND in \
+      "\$KERAS_HOME/models/\${PY_MODEL_CACHE_ID}.zip" \
+      "\$KERAS_HOME/models/\${MODEL_CACHE_ID}.zip" \
+      "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip" \
+      "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}.zip"; do
+      if [[ -f "\$CAND" ]]; then
+        STARDIST_CACHE_SRC="\$CAND"
+        break
+      fi
+    done
+    if [[ -n "\$STARDIST_CACHE_SRC" ]]; then
+      for DST in \
+        "\$KERAS_HOME/models/\${PY_MODEL_CACHE_ID}.zip" \
+        "\$KERAS_HOME/models/\${MODEL_CACHE_ID}.zip" \
+        "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}.zip" \
+        "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}.zip"; do
+        if [[ ! -f "\$DST" ]]; then
+          cp -f "\$STARDIST_CACHE_SRC" "\$DST"
+        fi
+      done
+    fi
+    echo "[INFO] StarDist cache env: KERAS_HOME=\$KERAS_HOME XDG_CACHE_HOME=\$XDG_CACHE_HOME model_cache_id=\$MODEL_CACHE_ID py_model_cache_id=\$PY_MODEL_CACHE_ID"
     if [[ "${params.stardist_autoinstall_runtime}" == "true" ]]; then
       export STARDIST_PYDEPS="\$PWD/.pydeps"
       export STARDIST_TF_VERSION="${params.stardist_tensorflow_version}"

@@ -94,8 +94,10 @@ GPU run notes:
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
+| `stardist_keras_home` | `''` | Optional persistent Keras cache directory for StarDist pretrained model files. |
+| `stardist_pretrained_zip` | `''` | Optional local zip path (for example `python_2D_versatile_he.zip`) copied into StarDist cache before execution. |
 | `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
-| `stardist_tensorflow_version` | `2.20.0` | TensorFlow version used by StarDist runtime auto-install fallback. |
+| `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |

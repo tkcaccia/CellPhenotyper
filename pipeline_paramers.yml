@@ -59,6 +59,8 @@ stardist_prob: 0.52
 stardist_nms: 0.28
 stardist_min_area: 120
 stardist_crop_pad: 0
+stardist_keras_home: ""      # optional persistent StarDist cache (recommended on HPC)
+stardist_pretrained_zip: ""  # optional local path to python_2D_versatile_he.zip
 stardist_autoinstall_runtime: true
 stardist_tensorflow_version: "2.16.2"
 tissue_auto_no_downsample_max_side: 1024
