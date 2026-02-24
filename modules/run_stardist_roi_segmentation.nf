@@ -139,6 +139,8 @@ if missing:
         req.append("imagecodecs")
     print(f"[INFO] Installing missing StarDist runtime packages: {', '.join(req)}")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--target", target, *req])
+else:
+    print("[INFO] StarDist runtime packages already available; skipping auto-install.")
 PY
       export PYTHONPATH="\$STARDIST_PYDEPS:\${PYTHONPATH:-}"
     fi
