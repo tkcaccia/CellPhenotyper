@@ -31,7 +31,10 @@ RUN set -euo pipefail && \
     micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
     MM_ARCH="$(uname -m)" && \
     if [ "${MM_ARCH}" = "x86_64" ]; then \
-      micromamba install -y -n stardist -c nvidia -c pytorch -c conda-forge pytorch torchvision pytorch-cuda=12.4; \
+      micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true; \
+      micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip && \
+      micromamba run -n stardist pip install --no-cache-dir --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch torchvision && \
+      micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0; \
     else \
       # GB10/sm_121 needs arm64 nightly cu130 wheels; stable cu126 arm64 wheels are sm_80/sm_90 only.
       micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true; \
@@ -39,15 +42,7 @@ RUN set -euo pipefail && \
       micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0; \
     fi && \
-    micromamba run -n stardist python - <<'PY' && \
-import torch
-print(f"[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}")
-if not torch.backends.cuda.is_built():
-    raise SystemExit("FATAL: GPU image build produced CPU-only PyTorch")
-if not torch.version.cuda:
-    raise SystemExit("FATAL: GPU image build has no CUDA runtime tag in PyTorch")
-print(f"[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}")
-PY
+    micromamba run -n stardist python -c "import torch; print(f'[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}'); assert torch.backends.cuda.is_built(), 'FATAL: GPU image build produced CPU-only PyTorch'; assert torch.version.cuda, 'FATAL: GPU image build has no CUDA runtime tag in PyTorch'; print(f'[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}')" && \
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \

@@ -27,6 +27,13 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
+# Import imagecodecs early; later imports can leave JPEG decode bound to stubs.
+try:
+    import imagecodecs  # noqa: F401
+    _ = imagecodecs.jpeg8_decode
+except Exception:
+    imagecodecs = None  # type: ignore
+
 import torch
 import tifffile
 import torchvision.transforms as T
@@ -328,6 +335,34 @@ def _shape_as_hwc(shp: Tuple[int, ...]) -> Tuple[int, int, int]:
     raise ValueError(f"Unsupported array shape: {shp}")
 
 
+def _resolve_zarr_array(zobj: Any, level: int = 0):
+    """
+    tifffile+zarr can return either an Array (older behavior) or a Group with
+    level-indexed arrays (newer behavior, e.g. keys '0','1','2').
+    Normalize both cases to a concrete array-like object with `.shape`.
+    """
+    if hasattr(zobj, "shape"):
+        return zobj
+
+    if hasattr(zobj, "array_keys"):
+        keys = list(zobj.array_keys())
+        if not keys:
+            raise RuntimeError("Zarr group has no arrays")
+
+        preferred = str(level)
+        if preferred in keys:
+            return zobj[preferred]
+
+        numeric_keys = [k for k in keys if str(k).isdigit()]
+        if numeric_keys:
+            numeric_keys = sorted(numeric_keys, key=lambda x: int(x))
+            return zobj[numeric_keys[0]]
+
+        return zobj[sorted(keys)[0]]
+
+    raise RuntimeError(f"Unsupported zarr object type: {type(zobj)}")
+
+
 def _slice_with_pad_np(img: np.ndarray, x0: int, y0: int, w: int, h: int) -> np.ndarray:
     H, W = img.shape[0], img.shape[1]
     x1, y1 = x0 + w, y0 + h
@@ -428,7 +463,7 @@ class RegionReader:
 
             lvl = levels[level]
             store = lvl.aszarr()
-            self._z = zarr.open(store, mode="r")
+            self._z = _resolve_zarr_array(zarr.open(store, mode="r"), level=level)
             self.backend = "tifffile_zarr"
             self.shape = _shape_as_hwc(self._z.shape)
             return
@@ -476,7 +511,7 @@ class LabelReader:
             # if mask is pyramidal, use level 0 by default
             lvl = levels[0]
             store = lvl.aszarr()
-            self._z = zarr.open(store, mode="r")
+            self._z = _resolve_zarr_array(zarr.open(store, mode="r"), level=0)
             if len(self._z.shape) != 2:
                 raise RuntimeError(f"Mask zarr must be 2D, got {self._z.shape}")
             self.backend = "tifffile_zarr"
