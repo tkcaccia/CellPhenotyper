@@ -80,15 +80,9 @@ workflow {
         params.containsKey(key) ? params[key] : fallback
     }
 
-    // Keep user-facing defaults at 4 CPUs / 8 GB, but auto-cap to host capacity.
-    // This prevents immediate scheduler failures on smaller VMs (e.g. 4 GB Lima).
+    // Use the user-configured CPU cap directly (validated as positive integer).
     def configured_max_cpus = parse_positive_int(paramOr('max_cpus', 4), 4)
-    def host_available_cpus = Math.max(1, Runtime.runtime.availableProcessors() as int)
-    def effective_max_cpus = Math.max(1, Math.min(configured_max_cpus, host_available_cpus))
-    if (effective_max_cpus != configured_max_cpus) {
-        println "WARN: Reducing max_cpus from ${configured_max_cpus} to ${effective_max_cpus} (host available CPUs: ${host_available_cpus})."
-    }
-    params.max_cpus = effective_max_cpus
+    params.max_cpus = configured_max_cpus
 
     def detect_host_memory_gb = {
         def candidates = [
