@@ -146,19 +146,79 @@ nextflow run main.nf \
   --host_arch amd64
 ```
 
-For HPC clusters without outbound internet from compute nodes, predownload StarDist model zip once and pass cache flags:
+For HPC clusters without outbound internet from compute nodes, use this offline-ready flow (CPU or GPU):
 
 ```bash
-nextflow run main.nf \
+# 0) paths
+export REPO=/scratch/<project>/CellPhenotyper
+export BASE=/scratch/<project>/cellphenotyper_cache
+export SIF_DIR=$BASE/singularity
+export KERAS_HOME=$BASE/keras
+export HF_HOME=$BASE/hf
+export HF_HUB_CACHE=$HF_HOME/hub
+export SIF=$SIF_DIR/cellphenotyper-0.2.0-amd64.sif
+mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
+
+# 1) token file must define HF_TOKEN=...
+source /scratch/<project>/tokens.env
+
+# 2) pull runtime image once (on a node with internet)
+apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+
+# 3) predownload StarDist model and normalize to expected local folder
+curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
+  https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_he.zip
+mkdir -p /tmp/stardist_unpack
+unzip -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" -d /tmp/stardist_unpack
+mkdir -p "$KERAS_HOME/models/StarDist2D/2D_versatile_he"
+if [ -d /tmp/stardist_unpack/python_2D_versatile_he ]; then
+  cp -a /tmp/stardist_unpack/python_2D_versatile_he/. "$KERAS_HOME/models/StarDist2D/2D_versatile_he/"
+else
+  cp -a /tmp/stardist_unpack/. "$KERAS_HOME/models/StarDist2D/2D_versatile_he/"
+fi
+
+# 4) predownload UNI2 model once
+export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+export APPTAINERENV_HF_HOME="$HF_HOME"
+export APPTAINERENV_HF_HUB_CACHE="$HF_HUB_CACHE"
+apptainer exec "$SIF" python - <<'PY'
+from huggingface_hub import snapshot_download
+snapshot_download("MahmoodLab/UNI2-h")
+print("UNI2 cache ready")
+PY
+
+# 5) offline cache env for all Nextflow tasks
+export APPTAINERENV_KERAS_HOME="$KERAS_HOME"
+export APPTAINERENV_XDG_CACHE_HOME="$KERAS_HOME"
+export SINGULARITYENV_KERAS_HOME="$KERAS_HOME"
+export SINGULARITYENV_XDG_CACHE_HOME="$KERAS_HOME"
+export APPTAINERENV_HF_HOME="$HF_HOME"
+export APPTAINERENV_HF_HUB_CACHE="$HF_HUB_CACHE"
+export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+export APPTAINERENV_HF_HUB_OFFLINE=1
+export SINGULARITYENV_HF_HOME="$APPTAINERENV_HF_HOME"
+export SINGULARITYENV_HF_HUB_CACHE="$APPTAINERENV_HF_HUB_CACHE"
+export SINGULARITYENV_HF_TOKEN="$APPTAINERENV_HF_TOKEN"
+export SINGULARITYENV_HF_HUB_OFFLINE="$APPTAINERENV_HF_HUB_OFFLINE"
+
+# 6) run (CPU example; compute_device can be cpu or gpu)
+nextflow run "$REPO/main.nf" \
   -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --folder_input Data \
-  --outdir_base results_example_gpu \
-  --compute_device gpu \
+  -params-file "$REPO/pipeline_paramers.yml" \
+  --folder_input "$REPO/Data" \
+  --outdir_base "$REPO/results_hpc_offline" \
+  --compute_device cpu \
   --host_arch amd64 \
-  --stardist_keras_home /scratch/<project>/keras \
-  --stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
+  --runtime_image_mode manual \
+  --singularity_image "$SIF" \
+  --stardist_keras_home "$KERAS_HOME" \
+  --max_cpus "${SLURM_CPUS_PER_TASK:-8}" \
+  -resume
 ```
+
+Important:
+- Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
+- Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
