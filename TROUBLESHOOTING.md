@@ -163,8 +163,14 @@ export HF_HUB_CACHE=$HF_HOME/hub
 mkdir -p "$HF_HUB_CACHE"
 singularity exec <image.sif> python - <<'PY'
 import os
-from huggingface_hub import snapshot_download
-snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+from huggingface_hub import snapshot_download, hf_hub_download
+token = os.environ["HF_TOKEN"].strip()
+repo = "MahmoodLab/UNI2-h"
+snapshot_download(repo, token=token, local_files_only=False)
+try:
+    hf_hub_download(repo_id=repo, filename="model.safetensors", token=token, local_files_only=False)
+except Exception:
+    hf_hub_download(repo_id=repo, filename="pytorch_model.bin", token=token, local_files_only=False)
 print("UNI2 cache ready")
 PY
 ```
@@ -180,6 +186,15 @@ export SINGULARITYENV_HF_HOME=$APPTAINERENV_HF_HOME
 export SINGULARITYENV_HF_HUB_CACHE=$APPTAINERENV_HF_HUB_CACHE
 export SINGULARITYENV_HF_HUB_OFFLINE=$APPTAINERENV_HF_HUB_OFFLINE
 export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
+```
+
+3. Ensure pipeline uses the same cache path and strict offline mode:
+
+```bash
+nextflow run main.nf ... \
+  --hf_home /scratch/<project>/CellPhenotyper/.hf_cache \
+  --hf_hub_cache /scratch/<project>/CellPhenotyper/.hf_cache/hub \
+  --hf_hub_offline true
 ```
 
 ## 7) `nextflow: command not found` on HPC GPU nodes

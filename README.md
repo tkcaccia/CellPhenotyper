@@ -182,8 +182,20 @@ export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
 export APPTAINERENV_HF_HOME="$HF_HOME"
 export APPTAINERENV_HF_HUB_CACHE="$HF_HUB_CACHE"
 apptainer exec "$SIF" python - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download("MahmoodLab/UNI2-h")
+import os
+from huggingface_hub import snapshot_download, hf_hub_download
+
+repo = "MahmoodLab/UNI2-h"
+snapshot_download(repo, token=os.environ.get("HF_TOKEN", "").strip() or None, local_files_only=False)
+
+# Force actual weight file in cache for strict offline runs.
+try:
+    p = hf_hub_download(repo_id=repo, filename="model.safetensors", token=os.environ.get("HF_TOKEN", "").strip() or None, local_files_only=False)
+    print("UNI2 weight cached:", p)
+except Exception:
+    p = hf_hub_download(repo_id=repo, filename="pytorch_model.bin", token=os.environ.get("HF_TOKEN", "").strip() or None, local_files_only=False)
+    print("UNI2 weight cached:", p)
+
 print("UNI2 cache ready")
 PY
 
@@ -212,6 +224,9 @@ nextflow run "$REPO/main.nf" \
   --runtime_image_mode manual \
   --singularity_image "$SIF" \
   --stardist_keras_home "$KERAS_HOME" \
+  --hf_home "$HF_HOME" \
+  --hf_hub_cache "$HF_HUB_CACHE" \
+  --hf_hub_offline true \
   --max_cpus "${SLURM_CPUS_PER_TASK:-8}" \
   -resume
 ```
