@@ -31,6 +31,7 @@ import json
 import math
 import io
 import contextlib
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple, Optional
@@ -87,6 +88,29 @@ except Exception as e:
     STARDIST_IMPORT_ERROR = e
     StarDist2D = None
 
+def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
+    """
+    Return local StarDist model candidates as (basedir, name).
+    StarDist typically stores pretrained models under:
+      $KERAS_HOME/models/StarDist2D/<model_name>
+    """
+    candidates: List[Tuple[str, str]] = []
+    keras_home = (os.environ.get("KERAS_HOME") or "").strip()
+    if not keras_home:
+        return candidates
+
+    root = Path(keras_home) / "models" / "StarDist2D"
+    names = [model_name]
+    if not model_name.startswith("python_"):
+        names.append(f"python_{model_name}")
+
+    for name in names:
+        model_dir = root / name
+        if model_dir.is_dir():
+            candidates.append((str(root), name))
+    return candidates
+
+
 def load_stardist_model_filtered(model_name: str):
     """
     Load a pretrained StarDist model but suppress the line:
@@ -97,6 +121,16 @@ def load_stardist_model_filtered(model_name: str):
     if not STARDIST_AVAILABLE:
         raise RuntimeError(f"StarDist import failed: {STARDIST_IMPORT_ERROR}")
 
+    # First try explicit local cache paths (offline-safe).
+    local_errors: List[str] = []
+    for basedir, name in _local_stardist_candidates(model_name):
+        try:
+            log(f"Trying local StarDist model: basedir={basedir} name={name}")
+            return StarDist2D(None, name=name, basedir=basedir)
+        except Exception as exc:
+            local_errors.append(f"{basedir}/{name}: {exc}")
+
+    # Fallback to StarDist pretrained resolver (may download if cache is incomplete).
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
         model = StarDist2D.from_pretrained(model_name)
@@ -108,6 +142,10 @@ def load_stardist_model_filtered(model_name: str):
         if line.strip() == "":
             continue
         print(line, flush=True)
+    if local_errors:
+        log("Local StarDist candidates were found but could not be loaded:")
+        for err in local_errors:
+            log(f"  - {err}")
     return model
 
 if STARDIST_AVAILABLE:
