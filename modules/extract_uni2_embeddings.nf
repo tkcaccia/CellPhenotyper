@@ -64,8 +64,12 @@ process EXTRACT_UNI2_EMBEDDINGS {
       set +a
     fi
 
-    export HF_HOME="${params.hf_home}"
-    export HF_HUB_CACHE="${params.hf_hub_cache}"
+    if [[ -z "\${HF_HOME:-}" ]]; then
+      export HF_HOME="${params.hf_home}"
+    fi
+    if [[ -z "\${HF_HUB_CACHE:-}" ]]; then
+      export HF_HUB_CACHE="${params.hf_hub_cache}"
+    fi
     export HF_TOKEN="\$(printenv "\$TOKEN_VAR_NAME" || true)"
     if [[ -z "\$HF_TOKEN" ]]; then
       export HF_TOKEN="\$(printenv HF_TOKEN || true)"
@@ -73,6 +77,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     if [[ -z "\$HF_TOKEN" ]]; then
       export HF_TOKEN="\$(printenv HF_UNI2 || true)"
     fi
+    echo "[INFO] HF cache env: HF_HOME=\$HF_HOME HF_HUB_CACHE=\$HF_HUB_CACHE HF_HUB_OFFLINE=\${HF_HUB_OFFLINE:-unset}"
 
     export OMP_NUM_THREADS=1
     export MKL_NUM_THREADS=1
