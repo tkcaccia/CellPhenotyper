@@ -57,6 +57,9 @@ nextflow run main.nf -profile singularity \
 | `gpu_debug_diagnostics` | `false` | When true, GPU-capable processes print `nvidia-smi` and framework CUDA diagnostics. |
 | `max_cpus` | `4` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
+| `hf_home` | `${baseDir}/.hf_cache` | Hugging Face cache root for UNI-2 model files. |
+| `hf_hub_cache` | `${baseDir}/.hf_cache/hub` | Hugging Face Hub cache directory for UNI-2 model files. |
+| `hf_hub_offline` | `false` | If `true`, UNI-2 runs in strict offline mode (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) and only uses local cache. |
 | `hf_token_env_var_name` | `HF_TOKEN` | Env var name used to read the HuggingFace token for UNI-2. |
 | `hf_token_env_file` | `''` | Optional env file path (for example `tokens.env`) sourced at runtime before UNI-2 starts. |
 

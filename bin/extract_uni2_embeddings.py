@@ -106,10 +106,30 @@ def _clear_hf_repo_cache(repo_id: str) -> None:
             shutil.rmtree(xet_dir, ignore_errors=True)
 
 
-def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str) -> Any:
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+def _hf_offline_enabled() -> bool:
+    return _env_flag("HF_HUB_OFFLINE", False) or _env_flag("TRANSFORMERS_OFFLINE", False)
+
+
+def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str, local_files_only: bool = False) -> Any:
     from huggingface_hub import hf_hub_download
 
-    ckpt_path = hf_hub_download(repo_id=repo_id, filename="pytorch_model.bin")
+    ckpt_path = hf_hub_download(
+        repo_id=repo_id,
+        filename="pytorch_model.bin",
+        local_files_only=local_files_only,
+    )
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     if isinstance(checkpoint, dict):
@@ -138,6 +158,36 @@ def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str) -> Any:
     return model
 
 
+def _load_timm_hf_checkpoint(model: Any, repo_id: str, local_files_only: bool = False) -> Any:
+    """
+    Load timm HF checkpoint from local/cache first.
+    Tries safetensors, then legacy pytorch_model.bin.
+    """
+    from huggingface_hub import hf_hub_download
+
+    # Preferred modern format.
+    try:
+        ckpt_safe = hf_hub_download(
+            repo_id=repo_id,
+            filename="model.safetensors",
+            local_files_only=local_files_only,
+        )
+        from safetensors.torch import load_file as load_safetensors
+
+        state_dict = load_safetensors(ckpt_safe, device="cpu")
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[WARN] safetensors load missing keys: {len(missing)}", file=sys.stderr)
+        if unexpected:
+            print(f"[WARN] safetensors load unexpected keys: {len(unexpected)}", file=sys.stderr)
+        return model
+    except Exception as safetensor_err:
+        print(f"[WARN] safetensors load failed, trying legacy bin: {safetensor_err}", file=sys.stderr)
+
+    # Backward-compatible legacy format.
+    return _load_timm_hf_legacy_checkpoint(model, repo_id, local_files_only=local_files_only)
+
+
 def _is_transient_hf_error(msg: str) -> bool:
     lowered = (msg or "").lower()
     transient_markers = [
@@ -163,6 +213,13 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
 
     legacy_weights_msg = "weights_only=True"  # torch>=2.6 + legacy .tar checkpoint
     legacy_tar_msg = "legacy .tar format"
+
+    # In strict offline mode, avoid timm's remote resolution path.
+    if repo_id and _hf_offline_enabled():
+        print(f"[INFO] HF offline mode enabled; loading '{repo_id}' from local cache only.", file=sys.stderr)
+        model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+        return _load_timm_hf_checkpoint(model, repo_id, local_files_only=True)
+
     try:
         return timm.create_model(enc_id, pretrained=True, **timm_kwargs)
     except (RuntimeError, OSError) as e:
@@ -188,7 +245,7 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
                         file=sys.stderr,
                     )
                     model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-                    return _load_timm_hf_legacy_checkpoint(model, repo_id)
+                    return _load_timm_hf_checkpoint(model, repo_id)
                 raise
         if repo_id and legacy_weights_msg in msg and legacy_tar_msg in msg:
             print(
@@ -196,7 +253,7 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
                 file=sys.stderr,
             )
             model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-            return _load_timm_hf_legacy_checkpoint(model, repo_id)
+            return _load_timm_hf_checkpoint(model, repo_id)
         raise
 
 
