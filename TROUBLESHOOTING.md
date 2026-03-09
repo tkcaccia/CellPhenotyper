@@ -237,3 +237,31 @@ singularity exec <image.sif> \
 ```
 
 If this command fails, rebuild/pull the correct image tag.
+
+## 10) StarDist crashes on RTX 50xx with PTX/`sm_120` errors
+
+Error examples:
+
+```text
+LLVM ERROR: PTX version 8.5 does not support target 'sm_120'
+no kernel image is available for execution on the device
+```
+
+Cause: current TensorFlow/StarDist GPU stack may not fully support Blackwell (`sm_120`) in all kernels yet.
+
+Fix now implemented in pipeline:
+
+- `RUN_STARDIST_ROI_SEGMENTATION` retries on CPU automatically when this specific GPU PTX/CUDA error is detected.
+- UNI-2 keeps using GPU.
+
+Control flag:
+
+```bash
+--stardist_gpu_auto_cpu_fallback true
+```
+
+Disable this behavior (strict GPU-only StarDist):
+
+```bash
+--stardist_gpu_auto_cpu_fallback false
+```

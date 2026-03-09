@@ -24,6 +24,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def write_full_flag = params.write_full_labels ? '--write-full-labels' : ''
     def allow_huge_flag = params.allow_huge_tif ? '--allow-huge-tif' : ''
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
+    def enable_gpu_cpu_fallback = params.stardist_gpu_auto_cpu_fallback ? 'true' : 'false'
     def stardist_script = "${projectDir}/${params.stardist_script}"
     """
     set -euo pipefail
@@ -170,21 +171,44 @@ PY
       echo "[WARN] StarDist script does not support --min-area; skipping area filter at segmentation step."
     fi
 
-    python "${stardist_script}" \\
-      --in "${ome_tif}" \\
-      --roi "${roi_geojson}" \\
-      --outdir stardist_out \\
-      --model "${params.stardist_model}" \\
-      --prob ${params.stardist_prob} \\
-      --nms ${params.stardist_nms} \\
-      \${MIN_AREA_FLAG} \\
-      --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
-      --pad ${params.stardist_crop_pad} \\
-      --full-format "${params.full_format}" \\
-      --full-out "stardist_out/labels_full.tif" \\
-      ${precomputed_flag} \\
-      ${write_full_flag} \\
-      ${allow_huge_flag}
+    run_stardist() {
+      python "${stardist_script}" \\
+        --in "${ome_tif}" \\
+        --roi "${roi_geojson}" \\
+        --outdir stardist_out \\
+        --model "${params.stardist_model}" \\
+        --prob ${params.stardist_prob} \\
+        --nms ${params.stardist_nms} \\
+        \${MIN_AREA_FLAG} \\
+        --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
+        --pad ${params.stardist_crop_pad} \\
+        --full-format "${params.full_format}" \\
+        --full-out "stardist_out/labels_full.tif" \\
+        ${precomputed_flag} \\
+        ${write_full_flag} \\
+        ${allow_huge_flag}
+    }
+
+    if [[ "${params.compute_device}" == "gpu" && "${enable_gpu_cpu_fallback}" == "true" ]]; then
+      set +e
+      run_stardist 2> >(tee .stardist_gpu_attempt.err >&2)
+      STARDIST_RC=\$?
+      set -e
+      if [[ "\$STARDIST_RC" -eq 0 ]]; then
+        exit 0
+      fi
+
+      if grep -Eiq 'LLVM ERROR: PTX version|sm_120|no kernel image is available|CUDA_ERROR_UNSUPPORTED_PTX_VERSION|unsupported toolchain|ptxas fatal' .stardist_gpu_attempt.err; then
+        echo "[WARN] StarDist GPU failed due to CUDA/PTX incompatibility. Retrying on CPU inside the same task."
+        export CUDA_VISIBLE_DEVICES=""
+        export TF_FORCE_GPU_ALLOW_GROWTH=false
+        run_stardist
+      else
+        exit "\$STARDIST_RC"
+      fi
+    else
+      run_stardist
+    fi
     """
 
     stub:
