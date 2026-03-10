@@ -35,7 +35,7 @@ container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_cpu_tag: 0.2.0   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 0.2.0-amd64
 container_cpu_tag_arm64: 0.2.0
-container_gpu_tag: 0.2.0-gpu
+container_gpu_tag: 0.2.0-gpu-amd64
 singularity_image_source: auto   # auto | release | docker
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v0.2.0

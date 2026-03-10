@@ -216,7 +216,7 @@ Fix: pre-pull manually once, then run in manual mode.
 
 ```bash
 singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 ```
 
 Then:
@@ -237,3 +237,30 @@ singularity exec <image.sif> \
 ```
 
 If this command fails, rebuild/pull the correct image tag.
+
+## 10) UNI-2 fails on RTX 50xx with `no kernel image is available for execution on the device`
+
+Error:
+
+```text
+RuntimeError: CUDA error: no kernel image is available for execution on the device
+```
+
+Cause: PyTorch build does not include kernels for Blackwell (`sm_120`).
+
+Fix:
+
+- Use `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64` (PyTorch `2.10.0+cu128`).
+- Keep `tokens.env` inside repository root and pass:
+
+```bash
+--hf_token_env_file tokens.env \
+--hf_token_env_var_name HF_UNI2
+```
+
+Quick check:
+
+```bash
+docker run --rm --gpus all ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability(0))"
+```

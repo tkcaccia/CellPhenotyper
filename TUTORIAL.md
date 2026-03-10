@@ -181,9 +181,8 @@ nextflow run main.nf \
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```
 
 ## 4) Run only tissue mask stage (fast validation)
@@ -214,7 +213,11 @@ nextflow run main.nf \
   --folder_input Data \
   --outdir_base results_gpu \
   --compute_device gpu \
-  --host_arch amd64
+  --host_arch amd64 \
+  --runtime_image_mode manual \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  --hf_token_env_file tokens.env \
+  --hf_token_env_var_name HF_UNI2
 
 # Singularity profile
 nextflow run main.nf \
@@ -264,10 +267,7 @@ export SINGULARITYENV_HF_TOKEN=$APPTAINERENV_HF_TOKEN
 
 ## 6) TensorFlow in runtime images
 
-StarDist runtime dependencies are already preinstalled in the official Docker and Singularity images/assets, including:
-
-- `tensorflow==2.16.2`
-- `imagecodecs`
+StarDist runtime dependencies are already preinstalled in the official Docker and Singularity images/assets (including TensorFlow and `imagecodecs`).
 
 You should not install TensorFlow manually before running the pipeline.
 

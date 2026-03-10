@@ -48,7 +48,7 @@ Current tags/assets (`v0.2.0`):
 
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
 - Singularity CPU amd64: `cellphenotyper-0.2.0-amd64.sif`
 - Singularity CPU arm64: `cellphenotyper-0.2.0-arm64.sif`
 - Singularity GPU amd64: `cellphenotyper-0.2.0-gpu-amd64.sif`
@@ -68,6 +68,7 @@ export HF_TOKEN="${HF_UNI2}"
 ```
 
 Run these `source/export` commands in every new shell before starting Nextflow.
+For Docker profile runs, keep `tokens.env` in the repository root (default bind-mounted working directory) and pass `--hf_token_env_file tokens.env`.
 
 If you get `401 Unauthorized` during UNI-2 download, check token validity and model access approval.
 
@@ -121,7 +122,11 @@ nextflow run main.nf \
   --folder_input Data \
   --outdir_base results_example_gpu \
   --compute_device gpu \
-  --host_arch amd64
+  --host_arch amd64 \
+  --runtime_image_mode manual \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  --hf_token_env_file tokens.env \
+  --hf_token_env_var_name HF_UNI2
 ```
 
 Singularity/Apptainer:

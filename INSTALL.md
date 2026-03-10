@@ -179,7 +179,7 @@ Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
 
 Reference Singularity assets (GitHub release `v0.2.0`):
 
@@ -225,13 +225,13 @@ Pull images with Docker:
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
 docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
 ```
 
 Use:
 - `0.2.0-amd64` on Linux x86_64/amd64
 - `0.2.0` on arm64
-- `0.2.0-gpu` only on Linux amd64 with NVIDIA
+- `0.2.0-gpu-amd64` only on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -252,7 +252,7 @@ GPU publish:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="0.2.0-gpu"
+export TAG="0.2.0-gpu-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -276,6 +276,10 @@ By default the pipeline reads token file/variable from:
 
 - `hf_token_env_file: tokens.env`
 - `hf_token_env_var_name: HF_UNI2`
+
+Important for Docker profile:
+- Keep `tokens.env` in the repository root or another path inside the bind-mounted project directory.
+- If the token file is outside the mounted project path, tasks may fail with `401 Unauthorized` for UNI-2.
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
@@ -372,4 +376,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `docker_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64` in `pipeline_paramers.yml`
