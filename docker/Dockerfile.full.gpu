@@ -42,6 +42,20 @@ RUN set -euo pipefail && \
       # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
         "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep imagecodecs && \
+      # TensorFlow's source-built wheel expects NVIDIA CUDA libs from pip packages.
+      # Keep these on image so runtime does not depend on host-side Python installs.
+      micromamba run -n stardist pip install --no-cache-dir --upgrade \
+        nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+        nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusolver-cu12 \
+        nvidia-cusparse-cu12 nvidia-nccl-cu12 nvidia-nvjitlink-cu12 \
+        nvidia-cuda-nvcc-cu12 && \
+      # Precedence shim: ensure NVIDIA pip CUDA libs are resolved before older conda libs.
+      mkdir -p /opt/micromamba/envs/stardist/lib/tf-nvidia && \
+      for d in /opt/micromamba/envs/stardist/lib/python3.11/site-packages/nvidia/*/lib; do \
+        for f in "$d"/*.so*; do \
+          ln -sf "$f" /opt/micromamba/envs/stardist/lib/tf-nvidia/; \
+        done; \
+      done && \
       micromamba run -n stardist python -c "import tensorflow as tf, stardist, csbdeep, imagecodecs; print(f'[INFO] StarDist runtime baked: tensorflow={tf.__version__} stardist={stardist.__version__} csbdeep={csbdeep.__version__} imagecodecs={imagecodecs.__version__}')"; \
     else \
       # GB10/sm_121 needs arm64 nightly cu130 wheels; stable cu126 arm64 wheels are sm_80/sm_90 only.
@@ -76,6 +90,7 @@ RUN set -euo pipefail && \
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib/tf-nvidia:/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/micromamba/envs/stardist/lib/python3.11/site-packages/nvidia/cuda_nvcc
 
 CMD ["/bin/bash"]
