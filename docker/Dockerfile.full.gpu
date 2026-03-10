@@ -2,6 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG STARDIST_TF_WHEEL_REL=docker/wheels/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git build-essential pkg-config \
@@ -25,6 +26,7 @@ RUN MM_ARCH="$(uname -m)" && \
 
 ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 COPY stardist.yml /opt/stardist.yml
+COPY ${STARDIST_TF_WHEEL_REL} /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 RUN set -euo pipefail && \
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
@@ -37,8 +39,9 @@ RUN set -euo pipefail && \
       micromamba run -n stardist pip install --no-cache-dir --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch torchvision && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0 && \
       # Pre-bake StarDist runtime stack to avoid task-time pip installs.
+      # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
-        "numpy<2" "tensorflow==2.16.2" stardist csbdeep imagecodecs && \
+        "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep imagecodecs && \
       micromamba run -n stardist python -c "import tensorflow as tf, stardist, csbdeep, imagecodecs; print(f'[INFO] StarDist runtime baked: tensorflow={tf.__version__} stardist={stardist.__version__} csbdeep={csbdeep.__version__} imagecodecs={imagecodecs.__version__}')"; \
     else \
       # GB10/sm_121 needs arm64 nightly cu130 wheels; stable cu126 arm64 wheels are sm_80/sm_90 only.
