@@ -36,7 +36,7 @@ RUN set -euo pipefail && \
     if [ "${MM_ARCH}" = "x86_64" ]; then \
       micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true; \
       micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip && \
-      micromamba run -n stardist pip install --no-cache-dir --force-reinstall --index-url https://download.pytorch.org/whl/cu124 torch torchvision && \
+      micromamba run -n stardist pip install --no-cache-dir --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch torchvision torchaudio && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0 && \
       # Pre-bake StarDist runtime stack to avoid task-time pip installs.
       # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
