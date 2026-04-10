@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev libicu-dev \
     libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
     libharfbuzz-dev libfribidi-dev libglpk-dev \
+    libopenslide0 \
     gfortran \
     openjdk-17-jre-headless \
     procps \
@@ -81,7 +82,7 @@ RUN set -euo pipefail && \
     done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
-      libjpeg-turbo libtiff libopenslide libvips \
+      libjpeg-turbo libtiff libvips \
       openslide openslide-python pyvips \
       rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
