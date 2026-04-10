@@ -44,15 +44,18 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
-Current tags/assets (`v0.2.0`):
+Current tags/assets (`v2.2`):
 
-- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
-- Singularity CPU amd64: `cellphenotyper-0.2.0-amd64.sif`
-- Singularity CPU arm64: `cellphenotyper-0.2.0-arm64.sif`
-- Singularity GPU amd64: `cellphenotyper-0.2.0-gpu-amd64.sif`
-- Singularity GPU arm64 (optional): `cellphenotyper-0.2.0-gpu-arm64.sif`
+- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
+- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
+- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- Docker GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
+- Docker multi-arch CPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2`
+- Docker multi-arch GPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu`
+- Singularity CPU amd64: `cellphenotyper-2.2-amd64.sif`
+- Singularity CPU arm64: `cellphenotyper-2.2-arm64.sif`
+- Singularity GPU amd64: `cellphenotyper-2.2-gpu-amd64.sif`
+- Singularity GPU arm64 (optional): `cellphenotyper-2.2-gpu-arm64.sif`
 
 ## UNI-2 token setup (required)
 
@@ -71,6 +74,46 @@ Run these `source/export` commands in every new shell before starting Nextflow.
 For Docker profile runs, keep `tokens.env` in the repository root (default bind-mounted working directory) and pass `--hf_token_env_file tokens.env`.
 
 If you get `401 Unauthorized` during UNI-2 download, check token validity and model access approval.
+
+## Project-local model caches (default)
+
+StarDist and Hugging Face model downloads now default to project-local cache paths:
+
+- StarDist: `${REPO}/.keras`
+- UNI-2 / GigaTIME: `${REPO}/.hf_cache`
+
+This matters for Docker reruns: because both caches live inside the repository, they are visible inside containerized Nextflow tasks and can be reused offline.
+
+One-time StarDist predownload into the default project cache:
+
+```bash
+mkdir -p .keras/models
+curl -L --retry 5 --connect-timeout 30 \
+  -o .keras/models/python_2D_versatile_he.zip \
+  https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_he.zip
+```
+
+On the first StarDist run, CellPhenotyper will normalize and extract that zip into `.keras/models/StarDist2D/...` automatically. Later reruns reuse the local cache and do not re-download the pretrained model.
+
+One-time Hugging Face predownload into the default project cache:
+
+```bash
+source tokens.env
+export HF_TOKEN="${HF_UNI2}"
+export HF_HOME="${PWD}/.hf_cache"
+export HF_HUB_CACHE="${HF_HOME}/hub"
+
+python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
+snapshot_download("prov-gigatime/GigaTIME", token=os.environ["HF_TOKEN"].strip())
+print("HF caches ready")
+PY
+```
+
+Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted cache for both UNI-2 and GigaTIME.
 
 ## Linux quick run
 
@@ -124,7 +167,7 @@ nextflow run main.nf \
   --compute_device gpu \
   --host_arch amd64 \
   --runtime_image_mode manual \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```
@@ -161,14 +204,14 @@ export SIF_DIR=$BASE/singularity
 export KERAS_HOME=$BASE/keras
 export HF_HOME=$BASE/hf
 export HF_HUB_CACHE=$HF_HOME/hub
-export SIF=$SIF_DIR/cellphenotyper-0.2.0-amd64.sif
+export SIF=$SIF_DIR/cellphenotyper-2.2-amd64.sif
 mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
 
 # 1) token file must define HF_TOKEN=...
 source /scratch/<project>/tokens.env
 
 # 2) pull runtime image once (on a node with internet)
-apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 
 # 3) predownload StarDist model and normalize to expected local folder
 curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
@@ -253,7 +296,7 @@ nextflow run main.nf \
   --enable_gpu_on_arm64 true
 ```
 
-Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v0.2.0` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
+Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v2.2` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
 
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
 
@@ -315,6 +358,12 @@ Final output:
 
 - `results_example/12_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
 - `results_example/12_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
+- `results_example/02_gigatime/ROI_A/gigatime_probs.ome.tif`
+- `results_example/02_gigatime/ROI_B/gigatime_probs.ome.tif`
+- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
+- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask.tif` if `ROI_B.geojson` was supplied
+- `results_example/13_cluster_geojson_mask/ROI_A/ROI_A_grown_mask_smooth_class.tif`
+- `results_example/13_cluster_geojson_mask/ROI_B/ROI_B_grown_mask_smooth_class.tif`
 
 Execution report:
 
@@ -341,7 +390,7 @@ Minimal Docker publish example:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="0.2.0"
+export TAG="2.2-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .

@@ -37,17 +37,17 @@ nextflow run main.nf -profile singularity \
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
-| `container_cpu_tag` | `0.2.0` | Legacy generic fallback; architecture-specific CPU tags below are authoritative. |
-| `container_cpu_tag_amd64` | `0.2.0-amd64` | CPU tag for amd64 hosts. |
-| `container_cpu_tag_arm64` | `0.2.0` | CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `0.2.0-gpu-amd64` | GPU tag used when `compute_device` resolves to GPU. |
+| `container_cpu_tag` | `2.2` | Legacy generic fallback; multi-arch CPU manifest tag. Architecture-specific CPU tags below remain authoritative. |
+| `container_cpu_tag_amd64` | `2.2-amd64` | CPU tag for amd64 hosts. |
+| `container_cpu_tag_arm64` | `2.2-arm64` | CPU tag for arm64 hosts. |
+| `container_gpu_tag` | `2.2-gpu` | Multi-arch GPU tag used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` and `release` try release/local `.sif` first. On arm64 GPU runs, missing GPU assets fall back to CPU (not amd64 docker GPU). |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
-| `singularity_release_tag` | `v0.2.0` | GitHub release tag containing `.sif` assets. |
-| `singularity_cpu_asset_amd64` | `cellphenotyper-0.2.0-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
-| `singularity_cpu_asset_arm64` | `cellphenotyper-0.2.0-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
-| `singularity_gpu_asset_amd64` | `cellphenotyper-0.2.0-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
-| `singularity_gpu_asset_arm64` | `cellphenotyper-0.2.0-gpu-arm64.sif` | GPU Singularity asset name for arm64 hosts. |
+| `singularity_release_tag` | `v2.2` | GitHub release tag containing `.sif` assets. |
+| `singularity_cpu_asset_amd64` | `cellphenotyper-2.2-amd64.sif` | CPU Singularity asset name for amd64 hosts. |
+| `singularity_cpu_asset_arm64` | `cellphenotyper-2.2-arm64.sif` | CPU Singularity asset name for arm64 hosts. |
+| `singularity_gpu_asset_amd64` | `cellphenotyper-2.2-gpu-amd64.sif` | GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_arm64` | `cellphenotyper-2.2-gpu-arm64.sif` | GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before release/docker fallback. |
 | `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |
 | `cpu_container_image` | `''` | Optional explicit CPU container URI/path. |
@@ -73,7 +73,7 @@ GPU run notes:
 - arm64: set `--compute_device gpu --host_arch arm64 --enable_gpu_on_arm64 true` and provide an arm64 GPU container (`singularity_gpu_asset_arm64` or `gpu_container_image`).
 - If no arm64 GPU container is available, GPU-capable processes fall back to CPU containers with warnings.
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
-- On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v0.2.0` arm64 GPU asset may fail with `no kernel image is available`).
+- On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v2.2` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
 `convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
@@ -97,19 +97,39 @@ GPU run notes:
 | `stardist_model` | `2D_versatile_he` | StarDist model preset. |
 | `stardist_prob` | `0.52` | Detection probability threshold. |
 | `stardist_nms` | `0.28` | NMS threshold. |
-| `stardist_keras_home` | `''` | Optional persistent Keras cache directory for StarDist pretrained model files. |
-| `stardist_pretrained_zip` | `''` | Optional local zip path (for example `python_2D_versatile_he.zip`) copied into StarDist cache before execution. |
+| `stardist_keras_home` | `${baseDir}/.keras` | Project-local Keras cache directory for StarDist pretrained model files. This keeps the cache inside the repository so Docker reruns can reuse it offline. |
+| `stardist_pretrained_zip` | `''` | Optional local zip path (for example `python_2D_versatile_he.zip`) copied into StarDist cache before execution. If the zip already lives under `stardist_keras_home`, the pipeline now reuses and auto-extracts it without needing this override. |
 | `stardist_autoinstall_runtime` | `true` | If StarDist/TensorFlow runtime is missing in container, auto-install required Python deps into task-local `.pydeps`. |
 | `stardist_tensorflow_version` | `2.16.2` | TensorFlow version used by StarDist runtime auto-install fallback. |
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
+| `input_roi_mask_compression` | `deflate` | Compression for the crop-aligned mask rasterized from the provided input ROI GeoJSON. |
+| `input_roi_mask_cpus` | `4` | CPU allocation for the ROI GeoJSON-to-mask step. |
+| `input_roi_mask_memory_gb` | `8` | RAM allocation for the ROI GeoJSON-to-mask step. |
+| `input_roi_mask_time` | `4h` | Time allocation for the ROI GeoJSON-to-mask step. |
 | `write_full_labels` | `true` | Write full labels TIFF. |
 | `full_format` | `tif` | Full label file format. |
 | `allow_huge_tif` | `true` | Allow huge TIFF writes. |
 | `stardist_cpus` | `16` | CPU allocation. |
 | `stardist_memory_gb` | `48` | RAM allocation. |
 | `stardist_time` | `24h` | Time allocation. |
+
+## GigaTIME
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `gigatime_enable` | `false` | Enable the crop-image GigaTIME virtual mIF stage after StarDist. |
+| `gigatime_repo_id` | `prov-gigatime/GigaTIME` | Hugging Face repo used for model weights. |
+| `gigatime_hf_token_env_var_name` | `HF_GIGATIME` | Preferred environment variable name for the GigaTIME token. The workflow also falls back to `HF_TOKEN` and `HF_UNI2`. |
+| `gigatime_page` | `0` | TIFF page index used as the crop-image source. |
+| `gigatime_patch_size` | `256` | Patch size for tiled GigaTIME inference. |
+| `gigatime_stride` | `128` | Patch stride for tiled GigaTIME inference. Lower than `gigatime_patch_size` by default so overlapping tiles and raised-cosine blending reduce visible seam artifacts. |
+| `gigatime_batch_size` | `4` | Batch size for GigaTIME inference. |
+| `gigatime_output_compression` | `deflate` | Compression for `gigatime_probs.ome.tif`. |
+| `gigatime_cpus` | `8` | CPU allocation. |
+| `gigatime_memory_gb` | `24` | RAM allocation. |
+| `gigatime_time` | `12h` | Time allocation. |
 
 ## Tissue mask
 
@@ -172,3 +192,10 @@ GPU run notes:
 | Cluster mask build | `cluster_mask_*` |
 | Grow clusters to tissue | `grow_*` |
 | Final cluster GeoJSON | `cluster_geojson_*` |
+| Final GeoJSON-to-mask rasterization | `final_geojson_mask_*` |
+
+Additional automatic outputs:
+
+- `02_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
+- If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`.
+- After `12_cluster_geojson`, the pipeline rasterizes the final cluster GeoJSON onto the crop image as `13_cluster_geojson_mask/<sample>/<sample>_grown_mask_smooth_class.tif`.

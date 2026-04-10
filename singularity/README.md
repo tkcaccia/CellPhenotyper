@@ -49,7 +49,7 @@ gh auth status
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --upload
 ```
@@ -58,7 +58,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --tmpdir /var/tmp/apptainer/tmp \
   --cachedir /var/tmp/apptainer/cache \
@@ -71,7 +71,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --upload
 ```
@@ -81,7 +81,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device gpu \
   --upload
 ```
@@ -91,7 +91,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device gpu \
   --upload
 ```
@@ -105,7 +105,7 @@ Notes for arm64 GPU builds:
 ## Verify Release Assets
 
 ```bash
-gh release view v0.2.0 \
+gh release view v2.2 \
   --repo tkcaccia/CellPhenotyper \
   --json assets \
   --jq '.assets[].name'
@@ -117,7 +117,7 @@ You should see the correct asset names for your release.
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --source docker \
   --device cpu \
   --upload
@@ -162,7 +162,7 @@ Then rerun:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --outdir /var/tmp/apptainer/out \
   --upload
@@ -171,7 +171,7 @@ cd /path/to/CellPhenotyper
 If `/Users/...` mount is read-only in Lima, always write SIF to `/var/tmp/apptainer/out` and copy back to macOS:
 
 ```bash
-limactl copy default:/var/tmp/apptainer/out/cellphenotyper-0.2.0-arm64.sif \
+limactl copy default:/var/tmp/apptainer/out/cellphenotyper-2.2-arm64.sif \
   /Users/<your-user>/Documents/CellPhenotyper/
 ```
 

@@ -9,7 +9,7 @@ Usage:
   singularity/publish_sif_release_asset.sh [options]
 
 Options:
-  --version <semver>             Version string used in asset name (default: 0.2.0)
+  --version <semver>             Version string used in asset name (default: 2.2)
   --device <cpu|gpu>             Runtime target (default: cpu)
   --source <def|docker>          Build from definition file or pull from docker:// (default: def)
   --tmpdir <path>                Temp dir for singularity/apptainer build/pull
@@ -28,13 +28,13 @@ Options:
 
 Examples:
   # Build arm64 CPU SIF on Apple Silicon/Linux ARM and upload it
-  singularity/publish_sif_release_asset.sh --version 0.2.0 --device cpu --upload
+  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload
 
   # Build amd64 CPU SIF on Linux amd64 and upload it
-  singularity/publish_sif_release_asset.sh --version 0.2.0 --device cpu --upload
+  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload
 
   # Build from docker:// image instead of definition file
-  singularity/publish_sif_release_asset.sh --source docker --device cpu --version 0.2.0 --upload
+  singularity/publish_sif_release_asset.sh --source docker --device cpu --version 2.2 --upload
 USAGE
 }
 
@@ -54,7 +54,7 @@ normalize_arch() {
   esac
 }
 
-VERSION="0.2.0"
+VERSION="2.2"
 DEVICE="cpu"
 SOURCE="def"
 OUTDIR="."

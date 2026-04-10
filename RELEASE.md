@@ -12,21 +12,21 @@ Current default branch:
 
 Current published runtime tags:
 
-- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
-- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64`
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
 
 Runtime dependency note:
 
-- Official runtime images are built with StarDist dependencies preinstalled, including `tensorflow==2.16.2` and `imagecodecs`.
+- Official runtime images are built with the slide-conversion and virtual mIF stack preinstalled, including `tensorflow`, `imagecodecs`, `pyvips`, `openslide`, `rasterio`, `huggingface_hub`, and `timm`.
 
-Current published Singularity assets on release `v0.2.0`:
+Current published Singularity assets on release `v2.2`:
 
-- `cellphenotyper-0.2.0-amd64.sif`
-- `cellphenotyper-0.2.0-arm64.sif`
-- `cellphenotyper-0.2.0-gpu-amd64.sif`
-- `cellphenotyper-0.2.0-gpu-arm64.sif`
+- `cellphenotyper-2.2-amd64.sif`
+- `cellphenotyper-2.2-arm64.sif`
+- `cellphenotyper-2.2-gpu-amd64.sif`
+- `cellphenotyper-2.2-gpu-arm64.sif`
 
 Operational notes:
 
@@ -54,39 +54,58 @@ source GHCRtoken.env
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
 
+# amd64 GPU build prerequisite:
+# place the custom TensorFlow wheel at
+# docker/wheels/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
+# before building docker/Dockerfile.full.gpu on amd64.
+
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2-amd64 \
   --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2-arm64 \
   --push .
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
   --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64 \
   --push .
+
+docker buildx imagetools create \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2 \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-amd64 \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+
+docker buildx imagetools create \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
 3. Verify pushed Docker tags (explicit inspect commands):
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu
 
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu
 ```
 
 4. Build/upload Singularity release assets (run on each architecture host):
@@ -94,13 +113,13 @@ docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
 ```bash
 # On arm64 host (Mac M1/M2 or Linux arm64)
 singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --upload
 
 # On amd64 host (Linux x86_64)
 singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device cpu \
   --upload
 ```
@@ -109,7 +128,7 @@ Optional GPU Singularity asset (amd64):
 
 ```bash
 singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device gpu \
   --upload
 ```
@@ -118,10 +137,10 @@ Optional GPU Singularity asset (arm64/aarch64 Spark):
 
 ```bash
 singularity/publish_sif_release_asset.sh \
-  --version 0.2.0 \
+  --version 2.2 \
   --device gpu \
   --source docker \
-  --docker-tag 0.2.0-gpu-arm64 \
+  --docker-tag 2.2-gpu-arm64 \
   --upload
 ```
 

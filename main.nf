@@ -6,6 +6,8 @@ nextflow.enable.dsl = 2
 include { PREPARE_INPUT_OMETIFF } from './modules/prepare_input_ometiff'
 include { PREPARE_ROI_GEOJSON } from './modules/prepare_roi_geojson'
 include { RUN_STARDIST_ROI_SEGMENTATION } from './modules/run_stardist_roi_segmentation'
+include { RUN_GIGATIME_ON_CROP } from './modules/run_gigatime_on_crop'
+include { ROI_GEOJSON_TO_MASK } from './modules/roi_geojson_to_mask'
 include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_PRIMARY } from './modules/expand_labels_to_cytoplasm'
@@ -16,6 +18,7 @@ include { RUN_RCODE_CLUSTERING } from './modules/run_rcode_clustering'
 include { LABELS_TO_CLUSTER_MASK } from './modules/labels_to_cluster_mask'
 include { GROW_TO_TISSUE } from './modules/grow_to_tissue'
 include { MASK_TO_GEOJSON } from './modules/mask_to_geojson'
+include { FINAL_GEOJSON_TO_MASK } from './modules/final_geojson_to_mask'
 
 workflow {
     def run_full_pipeline = params.run_full_pipeline as boolean
@@ -317,6 +320,9 @@ workflow {
         prepare_input   : 'convert',
         stardist        : 'stardist',
         startdist       : 'stardist',
+        gigatime        : 'gigatime',
+        virtual_mif     : 'gigatime',
+        mif             : 'gigatime',
         tissue_mask     : 'tissue_mask',
         mask_tissue     : 'tissue_mask',
         tissue_geojson  : 'tissue_mask',
@@ -339,7 +345,7 @@ workflow {
         mask_to_geojson : 'cluster_geojson',
         final_geojson   : 'cluster_geojson'
     ]
-    def stage_order = ['convert', 'stardist', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
+    def stage_order = ['convert', 'stardist', 'gigatime', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
     def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
     def normalize_stage = { raw_value, fallback_value ->
@@ -372,6 +378,7 @@ workflow {
 
     def run_convert = should_run_stage('convert')
     def run_stardist = should_run_stage('stardist')
+    def run_gigatime = should_run_stage('gigatime') && (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
     def run_tissue_mask = should_run_stage('tissue_mask')
     def run_cell_assignment = should_run_stage('cell_assignment')
     def run_cytoplasm = should_run_stage('cytoplasm')
@@ -384,6 +391,7 @@ workflow {
     def include_uni2_nuclei = params.uni2_include_nuclei == null ? true : (params.uni2_include_nuclei as boolean)
     def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
     def include_uni2_inner_square = params.uni2_include_inner_square == null ? true : (params.uni2_include_inner_square as boolean)
+    def use_roi_crop_for_uni2 = params.uni2_use_roi_crop == null ? true : (params.uni2_use_roi_crop as boolean)
     if (run_kodama && run_uni2 && (!include_uni2_nuclei || !include_uni2_cyto || !include_uni2_inner_square)) {
         error "KODAMA stage requires all embedding families from UNI-2. Set uni2_include_nuclei=true, uni2_include_cyto=true and uni2_include_inner_square=true."
     }
@@ -395,6 +403,12 @@ workflow {
         [suffix: '.ome.tif',  priority: 80],
         [suffix: '.ome.tiff', priority: 75],
         [suffix: '.btf',      priority: 70],
+        [suffix: '.svs',      priority: 68],
+        [suffix: '.ndpi',     priority: 67],
+        [suffix: '.scn',      priority: 66],
+        [suffix: '.mrxs',     priority: 65],
+        [suffix: '.vms',      priority: 64],
+        [suffix: '.vmu',      priority: 63],
         [suffix: '.tif',      priority: 60],
         [suffix: '.tiff',     priority: 55],
         [suffix: '.png',      priority: 50],
@@ -413,8 +427,9 @@ workflow {
         (hit?.priority ?: 0) as int
     }
 
-    def deriveSampleId = { File imageFile ->
-        def name = imageFile.name
+    def deriveSampleId = { imageFile ->
+        def fileObj = imageFile instanceof File ? imageFile : new File(imageFile.toString())
+        def name = fileObj.name
         def suffix = detectImageSuffix(name)
         if (suffix) {
             return name.substring(0, name.length() - suffix.length())
@@ -466,8 +481,9 @@ workflow {
         sample_map.keySet().sort().each { sample_id ->
             def image_file = sample_map[sample_id].file as File
             def roi_candidate = new File(input_dir, "${sample_id}.geojson")
-            def roi_hint = roi_candidate.exists() ? roi_candidate.absolutePath : ''
-            sample_rows << tuple(sample_id, file(image_file.absolutePath, checkIfExists: true), roi_hint)
+            def roi_hint_name = roi_candidate.exists() ? roi_candidate.name : ''
+            def roi_hint_b64 = roi_candidate.exists() ? roi_candidate.bytes.encodeBase64().toString() : ''
+            sample_rows << tuple(sample_id, file(image_file.absolutePath, checkIfExists: true), roi_hint_name, roi_hint_b64)
         }
     } else {
         if (!image_input_param) {
@@ -479,14 +495,20 @@ workflow {
             error "Unsupported image extension for --image_input '${image_file.name}'. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
         }
         def sample_id = deriveSampleId(image_file)
-        def roi_hint = ''
+        def roi_hint_name = ''
+        def roi_hint_b64 = ''
         if (roi_geojson_param) {
-            roi_hint = file(roi_geojson_param, checkIfExists: true).absolutePath
+            def roi_file = file(roi_geojson_param, checkIfExists: true)
+            roi_hint_name = roi_file.name
+            roi_hint_b64 = roi_file.bytes.encodeBase64().toString()
         } else {
             def roi_candidate = new File(image_file.parentFile, "${sample_id}.geojson")
-            roi_hint = roi_candidate.exists() ? roi_candidate.absolutePath : ''
+            if (roi_candidate.exists()) {
+                roi_hint_name = roi_candidate.name
+                roi_hint_b64 = roi_candidate.bytes.encodeBase64().toString()
+            }
         }
-        sample_rows << tuple(sample_id, image_file, roi_hint)
+        sample_rows << tuple(sample_id, image_file, roi_hint_name, roi_hint_b64)
     }
 
     if (!sample_rows) {
@@ -499,13 +521,17 @@ workflow {
         .set { input_spec_ch }
 
     def image_input_ch = input_spec_ch
-        .map { sample_id, image_file, roi_hint ->
+        .map { sample_id, image_file, roi_hint_name, roi_hint_b64 ->
             tuple(sample_id, image_file)
         }
 
     def roi_hint_ch = input_spec_ch
-        .map { sample_id, image_file, roi_hint ->
-            tuple(sample_id, roi_hint)
+        .map { sample_id, image_file, roi_hint_name, roi_hint_b64 ->
+            tuple(sample_id, roi_hint_name ?: '', roi_hint_b64 ?: '')
+        }
+    def roi_provided_ch = roi_hint_ch
+        .map { sample_id, roi_hint_name, roi_hint_b64 ->
+            tuple(sample_id, ((roi_hint_b64 ?: '').toString().trim() ? true : false))
         }
 
     def ome_tif_ch
@@ -526,8 +552,8 @@ workflow {
     if (run_stardist) {
         def roi_prepare_input_ch = ome_tif_ch
             .join(roi_hint_ch)
-            .map { sample_id, ome_tif, roi_hint ->
-                tuple(sample_id, ome_tif, roi_hint ?: '')
+            .map { sample_id, ome_tif, roi_hint_name, roi_hint_b64 ->
+                tuple(sample_id, ome_tif, roi_hint_name ?: '', roi_hint_b64 ?: '')
             }
         PREPARE_ROI_GEOJSON(roi_prepare_input_ch)
         roi_geojson_ch = PREPARE_ROI_GEOJSON.out.roi_geojson
@@ -543,6 +569,7 @@ workflow {
     def labels_tif_ch = Channel.empty()
     def labels_full_tif_ch = Channel.empty()
     def objects_csv_ch = Channel.empty()
+    def roi_crop_geojson_ch = Channel.empty()
     def shift_json_ch = Channel.empty()
 
     if (need_stardist_outputs) {
@@ -557,6 +584,7 @@ workflow {
             labels_tif_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_tif
             labels_full_tif_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_full_tif
             objects_csv_ch = RUN_STARDIST_ROI_SEGMENTATION.out.objects_csv
+            roi_crop_geojson_ch = RUN_STARDIST_ROI_SEGMENTATION.out.roi_crop_geojson
             shift_json_ch = RUN_STARDIST_ROI_SEGMENTATION.out.shift_json
         } else {
             def require_labels_full = run_uni2 || (run_cytoplasm && (params.expand_full_labels as boolean))
@@ -569,6 +597,9 @@ workflow {
             objects_csv_ch = image_input_ch.map { sample_id, _ ->
                 tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
             }
+            roi_crop_geojson_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+            }
             shift_json_ch = image_input_ch.map { sample_id, _ ->
                 tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
             }
@@ -578,6 +609,36 @@ workflow {
                 }
                 : Channel.empty()
         }
+    }
+
+    def stardist_outputs_available = stage_index[end_point] >= stage_index['stardist']
+    def crop_roi_for_masks_ch = stardist_outputs_available
+        ? (run_stardist
+            ? crop_roi_ch
+            : image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+            })
+        : Channel.empty()
+    def roi_crop_geojson_for_masks_ch = stardist_outputs_available
+        ? (run_stardist
+            ? roi_crop_geojson_ch
+            : image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+            })
+        : Channel.empty()
+
+    if (stardist_outputs_available) {
+        if (run_gigatime) {
+            RUN_GIGATIME_ON_CROP(crop_roi_for_masks_ch)
+        }
+        def roi_mask_input_ch = roi_crop_geojson_for_masks_ch
+            .join(crop_roi_for_masks_ch)
+            .join(roi_provided_ch)
+            .filter { sample_id, roi_crop_geojson, crop_roi_tif, roi_provided -> roi_provided }
+            .map { sample_id, roi_crop_geojson, crop_roi_tif, roi_provided ->
+                tuple(sample_id, roi_crop_geojson, crop_roi_tif)
+            }
+        ROI_GEOJSON_TO_MASK(roi_mask_input_ch)
     }
 
     def tissue_mask_ch = Channel.empty()
@@ -614,7 +675,7 @@ workflow {
                 }
             EXPAND_LABELS_TO_CYTOPLASM_PRIMARY(expand_primary_ch)
 
-            if (params.expand_full_labels as boolean) {
+            if ((params.expand_full_labels as boolean) && !(run_uni2 && use_roi_crop_for_uni2)) {
                 def expand_full_ch = labels_full_tif_ch.map { sample_id, labels_full_tif ->
                     tuple(sample_id, labels_full_tif, 'labels_full_cyto', '')
                 }
@@ -622,7 +683,7 @@ workflow {
                 cyto_mask_full_ch = EXPAND_LABELS_TO_CYTOPLASM_FULL.out.expanded_labels
                     .filter { sample_id, expanded_mask, label_kind -> label_kind == 'labels_full_cyto' }
                     .map { sample_id, expanded_mask, label_kind -> tuple(sample_id, expanded_mask) }
-            } else if (run_uni2 && (include_uni2_cyto || include_uni2_inner_square)) {
+            } else if (run_uni2 && !use_roi_crop_for_uni2 && (include_uni2_cyto || include_uni2_inner_square)) {
                 error "UNI-2 cyto/inner-square embeddings require expand_full_labels=true to generate *_labels_full_cyto.tif."
             }
 
@@ -643,35 +704,38 @@ workflow {
         def cyto_embeddings_ch = Channel.empty()
         def inner_square_embeddings_ch = Channel.empty()
         if (run_uni2) {
-            def uni2_tile_input_ch = ome_tif_ch
-                .join(labels_full_tif_ch)
-                .map { sample_id, ome_tif, labels_full_tif ->
-                    tuple(sample_id, ome_tif, labels_full_tif, 'tile', false, 'none', 255)
+            def uni2_image_ch = use_roi_crop_for_uni2 ? crop_roi_ch : ome_tif_ch
+            def uni2_label_mask_ch = use_roi_crop_for_uni2 ? labels_tif_ch : labels_full_tif_ch
+            def uni2_cyto_mask_source_ch = use_roi_crop_for_uni2 ? cyto_mask_ch : cyto_mask_full_ch
+
+            def uni2_tile_input_ch = uni2_image_ch
+                .join(uni2_label_mask_ch)
+                .map { sample_id, image_tif, labels_tif ->
+                    tuple(sample_id, image_tif, labels_tif, 'tile', false, 'none', 255)
                 }
 
             def uni2_input_ch = uni2_tile_input_ch
             if (include_uni2_cyto) {
-                def uni2_cyto_input_ch = ome_tif_ch
-                    .join(cyto_mask_full_ch)
-                    .map { sample_id, ome_tif, cyto_mask_tif ->
-                        tuple(sample_id, ome_tif, cyto_mask_tif, 'cyto', true, 'label', 255)
+                def uni2_cyto_input_ch = uni2_image_ch
+                    .join(uni2_cyto_mask_source_ch)
+                    .map { sample_id, image_tif, cyto_mask_tif ->
+                        tuple(sample_id, image_tif, cyto_mask_tif, 'cyto', true, 'label', 255)
                     }
                 uni2_input_ch = uni2_input_ch.mix(uni2_cyto_input_ch)
             }
             if (include_uni2_inner_square) {
-                def uni2_inner_square_input_ch = ome_tif_ch
-                    .join(cyto_mask_full_ch)
-                    .map { sample_id, ome_tif, cyto_mask_tif ->
-                        tuple(sample_id, ome_tif, cyto_mask_tif, 'inner_square', true, 'inner_square', 255)
+                def uni2_inner_square_input_ch = uni2_image_ch
+                    .join(uni2_cyto_mask_source_ch)
+                    .map { sample_id, image_tif, cyto_mask_tif ->
+                        tuple(sample_id, image_tif, cyto_mask_tif, 'inner_square', true, 'inner_square', 255)
                     }
                 uni2_input_ch = uni2_input_ch.mix(uni2_inner_square_input_ch)
             }
             if (include_uni2_nuclei) {
-                // Keep nuclei embeddings in the same full-image coordinate system as tile/cyto/inner_square
-                def uni2_nuclei_input_ch = ome_tif_ch
-                    .join(labels_full_tif_ch)
-                    .map { sample_id, ome_tif, labels_full_tif ->
-                        tuple(sample_id, ome_tif, labels_full_tif, 'nuclei', true, 'label', 255)
+                def uni2_nuclei_input_ch = uni2_image_ch
+                    .join(uni2_label_mask_ch)
+                    .map { sample_id, image_tif, labels_tif ->
+                        tuple(sample_id, image_tif, labels_tif, 'nuclei', true, 'label', 255)
                     }
                 uni2_input_ch = uni2_input_ch.mix(uni2_nuclei_input_ch)
             }
@@ -802,6 +866,12 @@ workflow {
 
         if (run_cluster_geojson) {
             MASK_TO_GEOJSON(grown_mask_ch)
+            def final_geojson_mask_input_ch = MASK_TO_GEOJSON.out.cluster_geojson
+                .join(crop_roi_for_masks_ch)
+                .map { sample_id, cluster_geojson, crop_roi_tif ->
+                    tuple(sample_id, cluster_geojson, crop_roi_tif)
+                }
+            FINAL_GEOJSON_TO_MASK(final_geojson_mask_input_ch)
         }
     }
 }
@@ -814,8 +884,10 @@ workflow.onComplete {
     def stageDefs = [
         [folder: '01_input',          title: 'Input Conversion',        expected: ['.ome.tif']],
         [folder: '02_stardist',       title: 'StarDist Segmentation',   expected: ['labels.tif', 'objects.csv']],
+        [folder: '02_gigatime',       title: 'GigaTIME Virtual mIF',    expected: ['gigatime_probs.ome.tif']],
         [folder: '03_tissue_mask',    title: 'Tissue Mask',             expected: ['_tissue_mask.tif']],
         [folder: '04_roi',            title: 'ROI GeoJSON',             expected: ['.roi.geojson']],
+        [folder: '04_roi_mask',       title: 'Input ROI Mask',          expected: ['_input_roi_mask.tif']],
         [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
         [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
         [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],
@@ -826,6 +898,7 @@ workflow.onComplete {
         [folder: '10_cluster_mask',   title: 'Cluster Mask',            expected: ['_cluster_mask.tif']],
         [folder: '11_grown_tissue',   title: 'Grown Tissue',            expected: ['_grown_mask.ome.tif']],
         [folder: '12_cluster_geojson', title: 'Cluster GeoJSON',        expected: ['.geojson']],
+        [folder: '13_cluster_geojson_mask', title: 'Cluster GeoJSON Mask', expected: ['_grown_mask_smooth_class.tif']],
         [folder: '00_execution',      title: 'Execution Metadata',      expected: ['trace.tsv', 'timeline.html', 'dag.html']]
     ]
 

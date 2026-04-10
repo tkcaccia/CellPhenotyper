@@ -32,3 +32,6 @@ singularity-cellphenotyper-*.sif
 # runtime outputs
 *.html
 *.txt
+
+# local TensorFlow build artifacts used for maintainer-only GPU image builds
+docker/wheels/

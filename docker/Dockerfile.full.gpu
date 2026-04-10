@@ -82,6 +82,7 @@ RUN set -euo pipefail && \
       rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
       bioconductor-bluster && \
+    micromamba run -n stardist python -c "import importlib; mods=['torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \

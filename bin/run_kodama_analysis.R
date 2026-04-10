@@ -339,7 +339,7 @@ spatial_for_kodama <- as.matrix(xy)
 storage.mode(spatial_for_kodama) <- "double"
 rownames(spatial_for_kodama) <- common_ids
 
-jj <- KODAMA.matrix.parallel(
+jj <- KODAMA.matrix(
   pca[, seq_len(dims_use), drop = FALSE],
   spatial = spatial_for_kodama,
   landmarks = min(1000L, nrow(pca)),

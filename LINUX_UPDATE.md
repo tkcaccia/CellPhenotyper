@@ -70,13 +70,13 @@ Do not use both profiles in the same run.
 Pull fresh image tag(s):
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
-Use `0.2.0-gpu-amd64` on amd64 and `0.2.0-gpu-arm64` on arm64/aarch64 Spark.
+Use `2.2-gpu-amd64` on amd64 and `2.2-gpu-arm64` on arm64/aarch64 Spark.
 
 Run:
 
@@ -133,8 +133,8 @@ nextflow run main.nf \
 If you want to see pull progress explicitly, pre-pull image once:
 
 ```bash
-singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 ```
 
 Then run with manual image path:
@@ -144,7 +144,7 @@ nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
   --runtime_image_mode manual \
-  --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
+  --singularity_image /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
   --folder_input Data \
   --outdir_base results_example
 ```

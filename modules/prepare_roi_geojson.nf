@@ -9,7 +9,7 @@ process PREPARE_ROI_GEOJSON {
     time '1h'
 
     input:
-    tuple val(sample_id), path(ome_tif), val(roi_hint)
+    tuple val(sample_id), path(ome_tif), val(roi_hint_name), val(roi_hint_b64)
 
     output:
     tuple val(sample_id), path("${sample_id}.roi.geojson"), emit: roi_geojson
@@ -19,9 +19,9 @@ process PREPARE_ROI_GEOJSON {
     """
     set -euo pipefail
 
-    if [[ -n "${roi_hint}" && -s "${roi_hint}" ]]; then
-      cp "${roi_hint}" "${sample_id}.roi.geojson"
-      echo "[INFO] Using provided ROI GeoJSON for ${sample_id}: ${roi_hint}"
+    if [[ -n "${roi_hint_b64}" ]]; then
+      printf '%s' '${roi_hint_b64}' | base64 --decode > "${sample_id}.roi.geojson"
+      echo "[INFO] Using provided ROI GeoJSON for ${sample_id}: ${roi_hint_name}"
     else
       python "${roi_script}" \\
         --image "${ome_tif}" \\
