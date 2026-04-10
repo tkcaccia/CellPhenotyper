@@ -55,6 +55,8 @@ RUN set -euo pipefail && \
     done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
+      libjpeg-turbo libtiff libopenslide libvips \
+      openslide openslide-python pyvips \
       rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
       bioconductor-bluster && \

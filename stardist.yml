@@ -24,6 +24,9 @@ dependencies:
   - shapely
 
   # WSI + tiled image handling
+  - libjpeg-turbo
+  - libtiff
+  - libopenslide
   - libvips
   - pyvips
   - openslide

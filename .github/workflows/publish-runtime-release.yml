@@ -15,7 +15,7 @@ env:
 jobs:
   docker-publish:
     name: Docker ${{ matrix.tag }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
       packages: write
@@ -27,18 +27,22 @@ jobs:
             platform: linux/amd64
             tag: amd64
             gpu: "false"
+            runs_on: ubuntu-latest
           - dockerfile: docker/Dockerfile.full.cpu
             platform: linux/arm64
             tag: arm64
             gpu: "false"
+            runs_on: ubuntu-24.04-arm
           - dockerfile: docker/Dockerfile.full.gpu
             platform: linux/amd64
             tag: gpu-amd64
             gpu: "true"
+            runs_on: ubuntu-latest
           - dockerfile: docker/Dockerfile.full.gpu
             platform: linux/arm64
             tag: gpu-arm64
             gpu: "true"
+            runs_on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -104,7 +108,7 @@ jobs:
 
   singularity-assets:
     name: SIF ${{ matrix.docker_tag }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     needs: docker-manifests
     permissions:
       contents: write
@@ -116,15 +120,19 @@ jobs:
           - device: cpu
             docker_tag: amd64
             asset_arch: amd64
+            runs_on: ubuntu-latest
           - device: cpu
             docker_tag: arm64
             asset_arch: arm64
+            runs_on: ubuntu-24.04-arm
           - device: gpu
             docker_tag: gpu-amd64
             asset_arch: amd64
+            runs_on: ubuntu-latest
           - device: gpu
             docker_tag: gpu-arm64
             asset_arch: arm64
+            runs_on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
