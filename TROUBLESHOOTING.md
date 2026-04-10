@@ -215,8 +215,8 @@ Cause: Nextflow suppresses detailed pull progress while resolving tasks.
 Fix: pre-pull manually once, then run in manual mode.
 
 ```bash
-singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 ```
 
 Then:
@@ -226,7 +226,7 @@ nextflow run main.nf \
   -profile singularity \
   -params-file pipeline_paramers.yml \
   --runtime_image_mode manual \
-  --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif
+  --singularity_image /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif
 ```
 
 ## 9) Check if runtime has TensorFlow installed
@@ -250,7 +250,7 @@ Cause: PyTorch build does not include kernels for Blackwell (`sm_120`).
 
 Fix:
 
-- Use `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64` (PyTorch `2.10.0+cu128`).
+- Use `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64` (CUDA-enabled PyTorch cu128 build).
 - Keep `tokens.env` inside repository root and pass:
 
 ```bash
@@ -261,6 +261,6 @@ Fix:
 Quick check:
 
 ```bash
-docker run --rm --gpus all ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+docker run --rm --gpus all ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
   python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_capability(0))"
 ```

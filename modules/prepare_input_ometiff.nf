@@ -19,10 +19,10 @@ process PREPARE_INPUT_OMETIFF {
     def is_ome = image_name.endsWith('.ome.tif') || image_name.endsWith('.ome.tiff')
     def is_btf = image_name.endsWith('.btf')
     def is_tiff_like = image_name.endsWith('.tif') || image_name.endsWith('.tiff')
-    def is_simple_raster = image_name.endsWith('.png') || image_name.endsWith('.jpg') || image_name.endsWith('.jpeg')
     def rgb_flag = params.convert_rgb ? '--rgb' : ''
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
     def btf_converter_script = "${projectDir}/${params.btf_converter_script}"
+    def generic_converter_script = "${projectDir}/bin/convert_image_to_tiff.py"
     """
     set -euo pipefail
 
@@ -64,24 +64,17 @@ process PREPARE_INPUT_OMETIFF {
       exit 0
     fi
 
-    if [[ "${is_simple_raster}" == "true" ]]; then
-      python - "${image_file}" "${sample_id}.ome.tif" <<'PY'
-import sys
-from PIL import Image
-
-src = sys.argv[1]
-dst = sys.argv[2]
-
-im = Image.open(src)
-if im.mode not in ("RGB", "RGBA", "L"):
-    im = im.convert("RGB")
-im.save(dst, format="TIFF", compression="tiff_lzw")
-PY
-      exit 0
-    fi
+    python "${generic_converter_script}" \
+      --input "${image_file}" \
+      --output "${sample_id}.ome.tif" \
+      --compression "${params.convert_compression}" \
+      --quality ${params.convert_jpeg_quality} \
+      ${params.convert_pyramid ? '--pyramid' : ''} \
+      --tile 512
+    exit 0
 
     echo "Unsupported input image format: ${image_file}" >&2
-    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .tif, .tiff, .png, .jpg, .jpeg" >&2
+    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .svs, .ndpi, .scn, .mrxs, .vms, .vmu, .tif, .tiff, .png, .jpg, .jpeg" >&2
     exit 2
     """
 

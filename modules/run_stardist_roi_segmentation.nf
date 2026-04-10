@@ -17,6 +17,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     tuple val(sample_id), path("stardist_out/labels.tif"), emit: labels_tif
     tuple val(sample_id), path("stardist_out/labels_full.tif"), optional: true, emit: labels_full_tif
     tuple val(sample_id), path("stardist_out/objects.csv"), emit: objects_csv
+    tuple val(sample_id), path("stardist_out/roi_all_crop.geojson"), emit: roi_crop_geojson
     tuple val(sample_id), path("stardist_out/shift.json"), emit: shift_json
     tuple val(sample_id), path("stardist_out"), emit: stardist_dir
 
@@ -43,9 +44,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     if [[ -z "\${KERAS_HOME:-}" ]]; then
       export KERAS_HOME="\$PWD/.keras"
     fi
-    if [[ -z "\${XDG_CACHE_HOME:-}" ]]; then
-      export XDG_CACHE_HOME="\${KERAS_HOME}"
-    fi
+    export XDG_CACHE_HOME="\${KERAS_HOME}"
     mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME" "\$KERAS_HOME/models" "\$KERAS_HOME/models/StarDist2D"
 
     MODEL_CACHE_ID="${params.stardist_model}"
@@ -102,6 +101,52 @@ process RUN_STARDIST_ROI_SEGMENTATION {
           cp -f "\$STARDIST_CACHE_SRC" "\$DST"
         fi
       done
+
+      python - "\$STARDIST_CACHE_SRC" "\$KERAS_HOME/models/StarDist2D/\${MODEL_CACHE_ID}" "\$KERAS_HOME/models/StarDist2D/\${PY_MODEL_CACHE_ID}" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import zipfile
+
+zip_path = Path(sys.argv[1])
+target_dirs = [Path(p) for p in sys.argv[2:] if p]
+required = {"config.json", "thresholds.json", "weights_best.h5"}
+
+def is_complete(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return required.issubset({p.name for p in path.iterdir() if p.is_file()})
+
+def extract_model(target_dir: Path) -> None:
+    if is_complete(target_dir):
+        return
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp_root = Path(tempfile.mkdtemp(prefix="stardist_extract_", dir=str(target_dir.parent)))
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp_root)
+
+        candidates = [tmp_root] + [p for p in tmp_root.iterdir() if p.is_dir()]
+        extracted = None
+        for cand in candidates:
+            if is_complete(cand):
+                extracted = cand
+                break
+
+        if extracted is None:
+            raise RuntimeError(f"Could not find StarDist model files inside {zip_path}")
+
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.copytree(extracted, target_dir)
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+for target in target_dirs:
+    extract_model(target)
+PY
     fi
     echo "[INFO] StarDist cache env: KERAS_HOME=\$KERAS_HOME XDG_CACHE_HOME=\$XDG_CACHE_HOME model_cache_id=\$MODEL_CACHE_ID py_model_cache_id=\$PY_MODEL_CACHE_ID"
     if [[ "${params.stardist_autoinstall_runtime}" == "true" ]]; then

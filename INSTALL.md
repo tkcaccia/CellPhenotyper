@@ -177,16 +177,17 @@ Use published runtime images. For Singularity, the default is release-hosted `.s
 
 Reference OCI tags:
 
-- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64`
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
 
-Reference Singularity assets (GitHub release `v0.2.0`):
+Reference Singularity assets (GitHub release `v2.2`):
 
-- `cellphenotyper-0.2.0-amd64.sif`
-- `cellphenotyper-0.2.0-arm64.sif`
-- `cellphenotyper-0.2.0-gpu-amd64.sif`
-- `cellphenotyper-0.2.0-gpu-arm64.sif` (optional)
+- `cellphenotyper-2.2-amd64.sif`
+- `cellphenotyper-2.2-arm64.sif`
+- `cellphenotyper-2.2-gpu-amd64.sif`
+- `cellphenotyper-2.2-gpu-arm64.sif` (optional)
 
 ## Step 6-S (Singularity/Apptainer via Nextflow)
 
@@ -204,7 +205,7 @@ Default automatic runtime settings in `pipeline_paramers.yml`:
 To force a specific manual image, set:
 
 - `runtime_image_mode: manual`
-- `singularity_image: https://github.com/tkcaccia/CellPhenotyper/releases/download/v0.2.0/cellphenotyper-0.2.0-amd64.sif` (example)
+- `singularity_image: https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/cellphenotyper-2.2-amd64.sif` (example)
 
 To force docker:// fallback instead of release assets in auto mode:
 
@@ -223,15 +224,17 @@ export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
 Pull images with Docker:
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
 Use:
-- `0.2.0-amd64` on Linux x86_64/amd64
-- `0.2.0` on arm64
-- `0.2.0-gpu-amd64` only on Linux amd64 with NVIDIA
+- `2.2-amd64` on Linux x86_64/amd64
+- `2.2-arm64` on arm64
+- `2.2-gpu-amd64` on Linux amd64 with NVIDIA
+- `2.2-gpu-arm64` on Linux arm64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -240,7 +243,7 @@ Use this only when you need to publish a new container version.
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="0.2.0"
+export TAG="2.2"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -252,7 +255,7 @@ GPU publish:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="0.2.0-gpu-amd64"
+export TAG="2.2-gpu-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -376,4 +379,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64` in `pipeline_paramers.yml`

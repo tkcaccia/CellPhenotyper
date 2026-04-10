@@ -32,7 +32,7 @@ Prepare runtime:
 # Nextflow pulls `singularity_image` automatically on first run.
 
 # Docker (optional pre-pull, amd64 CPU example)
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 ```
 
 Create UNI-2 token file (required for full pipeline):
@@ -180,9 +180,9 @@ nextflow run main.nf \
 - `-profile docker`: pull image with Docker if needed:
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
-docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 ```
 
 ## 4) Run only tissue mask stage (fast validation)
@@ -215,7 +215,7 @@ nextflow run main.nf \
   --compute_device gpu \
   --host_arch amd64 \
   --runtime_image_mode manual \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 
@@ -234,8 +234,8 @@ For Linux arm64/aarch64 Spark, use `--host_arch arm64` (same commands).
 If singularity pull is slow or appears stuck, pre-pull once to monitor progress:
 
 ```bash
-singularity pull /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:0.2.0-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 ```
 
 Then run in manual image mode:
@@ -249,7 +249,7 @@ nextflow run main.nf \
   --compute_device gpu \
   --host_arch amd64 \
   --runtime_image_mode manual \
-  --singularity_image /scratch/<project>/singularity/cellphenotyper-0.2.0-gpu-amd64.sif
+  --singularity_image /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif
 ```
 
 For offline/restricted compute nodes, export HF cache env before running:
