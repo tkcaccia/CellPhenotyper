@@ -55,9 +55,9 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
 
 # amd64 GPU build prerequisite:
-# place the custom TensorFlow wheel at
-# docker/wheels/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
-# before building docker/Dockerfile.full.gpu on amd64.
+# upload the custom TensorFlow wheel asset
+# tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
+# to the GitHub release v2.2 before building docker/Dockerfile.full.gpu.
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.cpu \

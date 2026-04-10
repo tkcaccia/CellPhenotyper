@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-ARG STARDIST_TF_WHEEL_REL=docker/wheels/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
+ARG STARDIST_TF_WHEEL_URL=https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git build-essential pkg-config \
@@ -26,7 +26,6 @@ RUN MM_ARCH="$(uname -m)" && \
 
 ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 COPY stardist.yml /opt/stardist.yml
-COPY ${STARDIST_TF_WHEEL_REL} /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 RUN set -euo pipefail && \
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
@@ -34,6 +33,9 @@ RUN set -euo pipefail && \
     micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
     MM_ARCH="$(uname -m)" && \
     if [ "${MM_ARCH}" = "x86_64" ]; then \
+      curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
+        -o /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl \
+        "${STARDIST_TF_WHEEL_URL}" && \
       micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true; \
       micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip && \
       micromamba run -n stardist pip install --no-cache-dir --force-reinstall --index-url https://download.pytorch.org/whl/cu128 torch torchvision torchaudio && \
