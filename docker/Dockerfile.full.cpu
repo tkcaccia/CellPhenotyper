@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
     libharfbuzz-dev libfribidi-dev libglpk-dev \
     libopenslide0 \
+    libvips42 \
     gfortran \
     openjdk-17-jre-headless \
     procps \
@@ -44,6 +45,7 @@ RUN set -euo pipefail && \
     if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then \
       micromamba run -n stardist pip install --no-cache-dir imagecodecs ; \
     fi && \
+    micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python && \
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \
@@ -56,9 +58,6 @@ RUN set -euo pipefail && \
     done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
-      libjpeg-turbo libtiff libvips \
-      openslide openslide-python pyvips \
-      rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
       bioconductor-bluster && \
     micromamba run -n stardist python -c "import importlib; mods=['tensorflow','stardist','csbdeep','torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \

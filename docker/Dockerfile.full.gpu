@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
     libharfbuzz-dev libfribidi-dev libglpk-dev \
     libopenslide0 \
+    libvips42 \
     gfortran \
     openjdk-17-jre-headless \
     procps \
@@ -45,6 +46,7 @@ RUN set -euo pipefail && \
       # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
         "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep imagecodecs && \
+      micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python && \
       # TensorFlow's source-built wheel expects NVIDIA CUDA libs from pip packages.
       # Keep these on image so runtime does not depend on host-side Python installs.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
@@ -67,7 +69,7 @@ RUN set -euo pipefail && \
       micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0 && \
       # Keep non-TensorFlow StarDist deps baked on arm64; TensorFlow wheel availability varies.
-      micromamba run -n stardist pip install --no-cache-dir --upgrade "numpy<2" stardist csbdeep imagecodecs; \
+      micromamba run -n stardist pip install --no-cache-dir --upgrade "numpy<2" stardist csbdeep imagecodecs rasterio affine pyvips openslide-python; \
     fi && \
     micromamba run -n stardist python -c "import torch; print(f'[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}'); assert torch.backends.cuda.is_built(), 'FATAL: GPU image build produced CPU-only PyTorch'; assert torch.version.cuda, 'FATAL: GPU image build has no CUDA runtime tag in PyTorch'; print(f'[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}')" && \
     for attempt in 1 2 3; do \
@@ -82,9 +84,6 @@ RUN set -euo pipefail && \
     done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
-      libjpeg-turbo libtiff libvips \
-      openslide openslide-python pyvips \
-      rasterio affine \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
       bioconductor-bluster && \
     micromamba run -n stardist python -c "import importlib; mods=['torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \

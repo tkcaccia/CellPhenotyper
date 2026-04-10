@@ -24,12 +24,6 @@ dependencies:
   - shapely
 
   # WSI + tiled image handling
-  - libjpeg-turbo
-  - libtiff
-  - libvips
-  - pyvips
-  - openslide
-  - openslide-python
   - zarr
 
   # Deep learning (UNI-2)
