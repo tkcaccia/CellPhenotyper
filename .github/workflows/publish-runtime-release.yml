@@ -54,7 +54,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -82,7 +82,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
 
       - name: Create multi-arch tags
         run: |
@@ -146,9 +146,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
-          APPTAINER_DOCKER_PASSWORD: ${{ github.token }}
+          APPTAINER_DOCKER_PASSWORD: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
           SINGULARITY_DOCKER_USERNAME: ${{ github.actor }}
-          SINGULARITY_DOCKER_PASSWORD: ${{ github.token }}
+          SINGULARITY_DOCKER_PASSWORD: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
         run: |
           set -euo pipefail
           mkdir -p /var/tmp/apptainer/tmp /var/tmp/apptainer/cache /var/tmp/apptainer/out
