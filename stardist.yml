@@ -10,7 +10,7 @@ dependencies:
   - libgcc-ng>=13
 
   # Core scientific + image I/O
-  - numpy
+  - numpy<2
   - scipy
   - pandas
   - scikit-image
@@ -18,13 +18,13 @@ dependencies:
   - tqdm
   - pillow
   - tifffile
-  - imagecodecs
+  - imagecodecs<2025
 
   # Geometry / geospatial
   - shapely
 
   # WSI + tiled image handling
-  - zarr
+  - zarr<3
 
   # Deep learning (UNI-2)
   - pytorch

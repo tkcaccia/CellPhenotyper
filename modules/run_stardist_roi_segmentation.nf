@@ -181,7 +181,7 @@ if missing:
     if "csbdeep" in missing:
         req.append("csbdeep")
     if "imagecodecs" in missing:
-        req.append("imagecodecs")
+        req.append("imagecodecs<2025")
     print(f"[INFO] Installing missing StarDist runtime packages: {', '.join(req)}")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "--target", target, *req])
 else:

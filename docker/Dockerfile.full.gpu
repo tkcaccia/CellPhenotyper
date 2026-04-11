@@ -46,7 +46,7 @@ RUN set -euo pipefail && \
       # Pre-bake StarDist runtime stack to avoid task-time pip installs.
       # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
-        "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep imagecodecs && \
+        "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep "imagecodecs<2025" && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python && \
       # TensorFlow's source-built wheel expects NVIDIA CUDA libs from pip packages.
       # Keep these on image so runtime does not depend on host-side Python installs.
@@ -70,7 +70,7 @@ RUN set -euo pipefail && \
       micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision && \
       micromamba run -n stardist pip install --no-cache-dir --upgrade timm==1.0.24 accelerate==1.12.0 && \
       # Keep non-TensorFlow StarDist deps baked on arm64; TensorFlow wheel availability varies.
-      micromamba run -n stardist pip install --no-cache-dir --upgrade "numpy<2" stardist csbdeep imagecodecs rasterio affine pyvips openslide-python; \
+      micromamba run -n stardist pip install --no-cache-dir --upgrade "numpy<2" stardist csbdeep "imagecodecs<2025" rasterio affine pyvips openslide-python; \
     fi && \
     micromamba run -n stardist python -c "import torch; print(f'[INFO] PyTorch build: version={torch.__version__} cuda={torch.version.cuda}'); assert torch.backends.cuda.is_built(), 'FATAL: GPU image build produced CPU-only PyTorch'; assert torch.version.cuda, 'FATAL: GPU image build has no CUDA runtime tag in PyTorch'; print(f'[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}')" && \
     for attempt in 1 2 3; do \

@@ -44,7 +44,7 @@ RUN set -euo pipefail && \
       micromamba run -n stardist pip install --no-cache-dir "tensorflow==${STARDIST_TF_VERSION}" ; \
     fi && \
     if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then \
-      micromamba run -n stardist pip install --no-cache-dir imagecodecs ; \
+      micromamba run -n stardist pip install --no-cache-dir "imagecodecs<2025" ; \
     fi && \
     micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python && \
     for attempt in 1 2 3; do \
