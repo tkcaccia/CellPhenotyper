@@ -364,8 +364,10 @@ Final output:
 - `results_example/02_gigatime/ROI_B/gigatime_probs.ome.tif`
 - `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
 - `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask.tif` if `ROI_B.geojson` was supplied
-- `results_example/13_cluster_geojson_mask/ROI_A/ROI_A_grown_mask_smooth_class.tif`
-- `results_example/13_cluster_geojson_mask/ROI_B/ROI_B_grown_mask_smooth_class.tif`
+- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_preview.png` if `ROI_A.geojson` was supplied
+- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_preview.png` if `ROI_B.geojson` was supplied
+- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_labels.json` if `ROI_A.geojson` was supplied
+- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_labels.json` if `ROI_B.geojson` was supplied
 
 Execution report:
 

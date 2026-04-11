@@ -18,7 +18,6 @@ include { RUN_RCODE_CLUSTERING } from './modules/run_rcode_clustering'
 include { LABELS_TO_CLUSTER_MASK } from './modules/labels_to_cluster_mask'
 include { GROW_TO_TISSUE } from './modules/grow_to_tissue'
 include { MASK_TO_GEOJSON } from './modules/mask_to_geojson'
-include { FINAL_GEOJSON_TO_MASK } from './modules/final_geojson_to_mask'
 
 workflow {
     def run_full_pipeline = params.run_full_pipeline as boolean
@@ -884,12 +883,6 @@ workflow {
 
         if (run_cluster_geojson) {
             MASK_TO_GEOJSON(grown_mask_ch)
-            def final_geojson_mask_input_ch = MASK_TO_GEOJSON.out.cluster_geojson
-                .join(crop_roi_for_masks_ch)
-                .map { sample_id, cluster_geojson, crop_roi_tif ->
-                    tuple(sample_id, cluster_geojson, crop_roi_tif)
-                }
-            FINAL_GEOJSON_TO_MASK(final_geojson_mask_input_ch)
         }
     }
 }
@@ -905,7 +898,7 @@ workflow.onComplete {
         [folder: '02_gigatime',       title: 'GigaTIME Virtual mIF',    expected: ['gigatime_probs.ome.tif']],
         [folder: '03_tissue_mask',    title: 'Tissue Mask',             expected: ['_tissue_mask.tif']],
         [folder: '04_roi',            title: 'ROI GeoJSON',             expected: ['.roi.geojson']],
-        [folder: '04_roi_mask',       title: 'Input ROI Mask',          expected: ['_input_roi_mask.tif']],
+        [folder: '04_roi_mask',       title: 'Input ROI Mask',          expected: ['_input_roi_mask.tif', '_input_roi_mask_preview.png', '_input_roi_mask_labels.json']],
         [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
         [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
         [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],
@@ -916,7 +909,6 @@ workflow.onComplete {
         [folder: '10_cluster_mask',   title: 'Cluster Mask',            expected: ['_cluster_mask.tif']],
         [folder: '11_grown_tissue',   title: 'Grown Tissue',            expected: ['_grown_mask.ome.tif']],
         [folder: '12_cluster_geojson', title: 'Cluster GeoJSON',        expected: ['.geojson']],
-        [folder: '13_cluster_geojson_mask', title: 'Cluster GeoJSON Mask', expected: ['_grown_mask_smooth_class.tif']],
         [folder: '00_execution',      title: 'Execution Metadata',      expected: ['trace.tsv', 'timeline.html', 'dag.html']]
     ]
 

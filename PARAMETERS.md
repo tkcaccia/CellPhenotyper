@@ -109,7 +109,14 @@ GPU run notes:
 | `stardist_tiles_x` | `32` | Tiles in X. |
 | `stardist_tiles_y` | `32` | Tiles in Y. |
 | `stardist_pythonpath` | `''` | Optional extra `PYTHONPATH` for StarDist runtime dependencies (e.g. external TensorFlow path on M1). |
-| `input_roi_mask_compression` | `deflate` | Compression for the crop-aligned mask rasterized from the provided input ROI GeoJSON. |
+| `input_roi_mask_label_mode` | `auto` | Rasterize the crop-aligned input ROI GeoJSON as a labeled mask. `auto` prefers a numeric `value` property when present and otherwise assigns stable IDs from annotation labels. |
+| `input_roi_mask_value_prop` | `value` | Numeric GeoJSON property used first when `input_roi_mask_label_mode=auto` or explicitly when `input_roi_mask_label_mode=property`. |
+| `input_roi_mask_annotation_props` | `classification.name,classification.label,class,label,type,name` | Fallback annotation properties used to derive per-class mask values from the input ROI GeoJSON. |
+| `input_roi_mask_default_value` | `1` | Value used for ROI polygons that lack both a numeric value and a recognized annotation label. |
+| `input_roi_mask_compression` | `deflate` | Compression for the crop-aligned labeled mask rasterized from the provided input ROI GeoJSON. |
+| `input_roi_mask_preview_factor` | `10` | Downsample factor used only when the ROI mask preview exceeds the preview memory threshold. |
+| `input_roi_mask_preview_threshold_mb` | `100.0` | Preview downsampling threshold for the ROI mask overlay. |
+| `input_roi_mask_preview_alpha` | `0.45` | Overlay alpha for the ROI mask preview rendered on the crop image. |
 | `input_roi_mask_cpus` | `4` | CPU allocation for the ROI GeoJSON-to-mask step. |
 | `input_roi_mask_memory_gb` | `8` | RAM allocation for the ROI GeoJSON-to-mask step. |
 | `input_roi_mask_time` | `4h` | Time allocation for the ROI GeoJSON-to-mask step. |
@@ -197,10 +204,8 @@ GPU run notes:
 | Cluster mask build | `cluster_mask_*` |
 | Grow clusters to tissue | `grow_*` |
 | Final cluster GeoJSON | `cluster_geojson_*` |
-| Final GeoJSON-to-mask rasterization | `final_geojson_mask_*` |
 
 Additional automatic outputs:
 
 - `02_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
-- If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`.
-- After `12_cluster_geojson`, the pipeline rasterizes the final cluster GeoJSON onto the crop image as `13_cluster_geojson_mask/<sample>/<sample>_grown_mask_smooth_class.tif`.
+- If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `04_roi_mask/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `04_roi_mask/<sample>/<sample>_input_roi_mask_labels.json`.
