@@ -176,7 +176,7 @@ nextflow run main.nf \
 
 ## 3) Runtime image behavior
 
-- `-profile singularity`: Nextflow resolves image automatically (local `.sif` -> release asset -> `docker://` fallback).
+- `-profile singularity`: Nextflow resolves image automatically (local `.sif` -> GHCR `oras://` SIF tag -> legacy release asset -> `docker://` fallback).
 - `-profile docker`: pull image with Docker if needed:
 
 ```bash

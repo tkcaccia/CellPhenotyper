@@ -4,12 +4,12 @@ This folder contains:
 
 - `cellphenotyper_full_cpu.def`: CPU definition
 - `cellphenotyper_full_gpu.def`: GPU definition (amd64 + NVIDIA)
-- `publish_sif_release_asset.sh`: build/upload helper
+- `publish_sif_release_asset.sh`: build/publish helper
 
 Important:
 
 - Do **not** commit `.sif` files to git.
-- Upload `.sif` files as **GitHub Release assets**.
+- Publish `.sif` files to GHCR over `oras://`; small files may also be mirrored as GitHub Release assets.
 - Pipeline users pull automatically with `-profile singularity`.
 
 ## Naming Convention
@@ -21,7 +21,14 @@ For version `X.Y.Z`, expected asset names are:
 - GPU amd64 (optional): `cellphenotyper-X.Y.Z-gpu-amd64.sif`
 - GPU arm64 (optional): `cellphenotyper-X.Y.Z-gpu-arm64.sif`
 
-Release tag: `vX.Y.Z`
+Default ORAS tags:
+
+- CPU arm64: `X.Y.Z-sif-arm64`
+- CPU amd64: `X.Y.Z-sif-amd64`
+- GPU amd64 (optional): `X.Y.Z-sif-gpu-amd64`
+- GPU arm64 (optional): `X.Y.Z-sif-gpu-arm64`
+
+Legacy GitHub Release tag: `vX.Y.Z`
 
 ## Prerequisites
 
@@ -44,14 +51,15 @@ gh auth status
 
 ## Standard Release Workflow
 
-### 1) Build/upload arm64 CPU asset (Mac M1/M2 or Linux arm64)
+### 1) Build/publish arm64 CPU asset (Mac M1/M2 or Linux arm64)
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device cpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
@@ -63,37 +71,41 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
   --tmpdir /var/tmp/apptainer/tmp \
   --cachedir /var/tmp/apptainer/cache \
   --outdir /var/tmp/apptainer/out \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
-### 2) Build/upload amd64 CPU asset (Linux amd64)
+### 2) Build/publish amd64 CPU asset (Linux amd64)
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device cpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
-### 3) Optional: build/upload amd64 GPU asset
+### 3) Optional: build/publish amd64 GPU asset
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device gpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
-### 4) Optional: build/upload arm64 GPU asset
+### 4) Optional: build/publish arm64 GPU asset
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device gpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 Notes for arm64 GPU builds:
@@ -102,7 +114,14 @@ Notes for arm64 GPU builds:
 - For GB10-class GPUs (`sm_121`), the arm64 GPU definition installs nightly `cu130` PyTorch wheels (stable `cu126` arm64 wheels are not sufficient).
 - TensorFlow GPU availability on generic Linux arm64 may still be limited; UNI-2 (PyTorch) is the primary GPU path.
 
-## Verify Release Assets
+## Verify Published SIFs
+
+```bash
+apptainer pull -F /tmp/cellphenotyper-2.2-amd64.sif \
+  oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64
+```
+
+You can still inspect mirrored GitHub Release assets with:
 
 ```bash
 gh release view v2.2 \
@@ -111,8 +130,6 @@ gh release view v2.2 \
   --jq '.assets[].name'
 ```
 
-You should see the correct asset names for your release.
-
 ## If You Need Docker-Source Build Instead of `.def`
 
 ```bash
@@ -120,7 +137,8 @@ You should see the correct asset names for your release.
   --version 2.2 \
   --source docker \
   --device cpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 ## Troubleshooting: `No space left on device`
@@ -189,6 +207,11 @@ When publishing a new release (example `0.3.0`), update:
 Fields to update include:
 
 - `singularity_release_tag`
+- `singularity_oras_repo`
+- `singularity_cpu_oras_tag_amd64`
+- `singularity_cpu_oras_tag_arm64`
+- `singularity_gpu_oras_tag_amd64`
+- `singularity_gpu_oras_tag_arm64`
 - `singularity_cpu_asset_amd64`
 - `singularity_cpu_asset_arm64`
 - `singularity_gpu_asset_amd64`

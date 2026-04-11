@@ -191,30 +191,40 @@ workflow {
     def auto_docker_singularity_image = "docker://${auto_docker_image}"
 
     def singularity_image_source = (paramOr('singularity_image_source', 'auto') ?: 'auto').toString().trim().toLowerCase()
-    if (!(singularity_image_source in ['auto', 'release', 'docker'])) {
+    if (!(singularity_image_source in ['auto', 'oras', 'release', 'docker'])) {
         singularity_image_source = 'auto'
     }
+    def singularity_oras_repo = (paramOr('singularity_oras_repo', container_repo) ?: container_repo).toString().trim()
     def singularity_release_repo = (paramOr('singularity_release_repo', 'tkcaccia/CellPhenotyper') ?: 'tkcaccia/CellPhenotyper').toString().trim()
-    def singularity_release_tag = (paramOr('singularity_release_tag', 'v0.2.0') ?: 'v0.2.0').toString().trim()
-    def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-0.2.0-amd64.sif') ?: 'cellphenotyper-0.2.0-amd64.sif').toString().trim()
-    def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-0.2.0-arm64.sif') ?: 'cellphenotyper-0.2.0-arm64.sif').toString().trim()
-    def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-0.2.0-gpu-amd64.sif') ?: 'cellphenotyper-0.2.0-gpu-amd64.sif').toString().trim()
-    def singularity_gpu_asset_arm64 = (paramOr('singularity_gpu_asset_arm64', 'cellphenotyper-0.2.0-gpu-arm64.sif') ?: 'cellphenotyper-0.2.0-gpu-arm64.sif').toString().trim()
+    def singularity_release_tag = (paramOr('singularity_release_tag', 'v2.2') ?: 'v2.2').toString().trim()
+    def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-2.2-amd64.sif') ?: 'cellphenotyper-2.2-amd64.sif').toString().trim()
+    def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-2.2-arm64.sif') ?: 'cellphenotyper-2.2-arm64.sif').toString().trim()
+    def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-2.2-gpu-amd64.sif') ?: 'cellphenotyper-2.2-gpu-amd64.sif').toString().trim()
+    def singularity_gpu_asset_arm64 = (paramOr('singularity_gpu_asset_arm64', 'cellphenotyper-2.2-gpu-arm64.sif') ?: 'cellphenotyper-2.2-gpu-arm64.sif').toString().trim()
+    def singularity_cpu_oras_tag_amd64 = (paramOr('singularity_cpu_oras_tag_amd64', '2.2-sif-amd64') ?: '2.2-sif-amd64').toString().trim()
+    def singularity_cpu_oras_tag_arm64 = (paramOr('singularity_cpu_oras_tag_arm64', '2.2-sif-arm64') ?: '2.2-sif-arm64').toString().trim()
+    def singularity_gpu_oras_tag_amd64 = (paramOr('singularity_gpu_oras_tag_amd64', '2.2-sif-gpu-amd64') ?: '2.2-sif-gpu-amd64').toString().trim()
+    def singularity_gpu_oras_tag_arm64 = (paramOr('singularity_gpu_oras_tag_arm64', '2.2-sif-gpu-arm64') ?: '2.2-sif-gpu-arm64').toString().trim()
     def singularity_local_dir = (paramOr('singularity_local_dir', '') ?: '').toString().trim()
     def cpu_container_image = (paramOr('cpu_container_image', '') ?: '').toString().trim()
     def gpu_container_image = (paramOr('gpu_container_image', '') ?: '').toString().trim()
 
     def selected_release_asset = ''
+    def selected_oras_tag = ''
     if (resolved_compute_device == 'gpu') {
         if (detected_arch == 'amd64') {
             selected_release_asset = singularity_gpu_asset_amd64
+            selected_oras_tag = singularity_gpu_oras_tag_amd64
         } else if (detected_arch == 'arm64') {
             selected_release_asset = singularity_gpu_asset_arm64 ?: ''
+            selected_oras_tag = singularity_gpu_oras_tag_arm64 ?: ''
         } else {
             selected_release_asset = singularity_gpu_asset_amd64
+            selected_oras_tag = singularity_gpu_oras_tag_amd64
         }
     } else {
         selected_release_asset = (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
+        selected_oras_tag = (detected_arch == 'amd64' ? singularity_cpu_oras_tag_amd64 : singularity_cpu_oras_tag_arm64)
     }
     def local_sif_candidates = []
     if (selected_release_asset) {
@@ -226,6 +236,9 @@ workflow {
     }
     def local_sif_file = local_sif_candidates.find { it.exists() && it.isFile() }
     def auto_local_singularity_image = local_sif_file ? local_sif_file.absolutePath : ''
+    def auto_oras_singularity_image = (singularity_oras_repo && selected_oras_tag)
+        ? "oras://${singularity_oras_repo}:${selected_oras_tag}"
+        : ''
     def auto_release_singularity_image = (singularity_release_repo && singularity_release_tag && selected_release_asset)
         ? "https://github.com/${singularity_release_repo}/releases/download/${singularity_release_tag}/${selected_release_asset}"
         : ''
@@ -238,17 +251,22 @@ workflow {
 
     def auto_singularity_image = auto_docker_singularity_image
     def auto_singularity_origin = 'docker'
-    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_local_singularity_image) {
+    if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras', 'release'] && auto_local_singularity_image) {
         auto_singularity_image = auto_local_singularity_image
         auto_singularity_origin = 'local'
+    } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras'] && auto_oras_singularity_image) {
+        auto_singularity_image = auto_oras_singularity_image
+        auto_singularity_origin = 'oras'
     } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
         auto_singularity_image = auto_release_singularity_image
         auto_singularity_origin = 'release'
-    } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release']) {
+    } else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras', 'release']) {
         auto_singularity_image = auto_docker_singularity_image
         auto_singularity_origin = 'docker'
         if (singularity_image_source == 'release') {
             println "WARN: Release-hosted Singularity image is not reachable (${auto_release_singularity_image}); falling back to ${auto_docker_singularity_image}"
+        } else if (singularity_image_source == 'oras') {
+            println "WARN: ORAS-hosted Singularity image is not configured; falling back to ${auto_docker_singularity_image}"
         }
     }
     if (resolved_compute_device == 'gpu' && detected_arch == 'arm64' && auto_singularity_origin == 'docker') {
@@ -396,7 +414,7 @@ workflow {
         error "KODAMA stage requires all embedding families from UNI-2. Set uni2_include_nuclei=true, uni2_include_cyto=true and uni2_include_inner_square=true."
     }
 
-    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, enable_stardist_gpu_on_arm64=${enable_stardist_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_asset=${selected_release_asset}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
+    println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, enable_stardist_gpu_on_arm64=${enable_stardist_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_oras_tag=${selected_oras_tag ?: 'none'}, singularity_asset=${selected_release_asset ?: 'none'}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
     println "Pipeline stage window: ${start_point} -> ${end_point}"
 
     def supported_image_suffixes = [

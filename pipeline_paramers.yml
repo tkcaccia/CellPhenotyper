@@ -27,16 +27,22 @@ end_point: auto
 # kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
-# In `runtime_image_mode: auto`, singularity tries release-hosted .sif first,
-# then falls back to docker:// for amd64. On arm64 GPU requests, missing GPU assets
-# fall back to CPU containers unless `gpu_container_image` is explicitly provided.
+# In `runtime_image_mode: auto`, singularity tries local .sif first, then ORAS-hosted
+# prebuilt SIF tags in GHCR, then legacy release assets, then docker:// fallback.
+# On arm64 GPU requests, missing GPU assets fall back to CPU containers unless
+# `gpu_container_image` is explicitly provided.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_cpu_tag: 2.2   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 2.2-amd64
 container_cpu_tag_arm64: 2.2-arm64
 container_gpu_tag: 2.2-gpu
-singularity_image_source: auto   # auto | release | docker
+singularity_image_source: auto   # auto | oras | release | docker
+singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
+singularity_cpu_oras_tag_amd64: 2.2-sif-amd64
+singularity_cpu_oras_tag_arm64: 2.2-sif-arm64
+singularity_gpu_oras_tag_amd64: 2.2-sif-gpu-amd64
+singularity_gpu_oras_tag_arm64: 2.2-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v2.2
 singularity_cpu_asset_amd64: cellphenotyper-2.2-amd64.sif

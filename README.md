@@ -52,10 +52,11 @@ Current tags/assets (`v2.2`):
 - Docker GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
 - Docker multi-arch CPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2`
 - Docker multi-arch GPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu`
-- Singularity CPU amd64: `cellphenotyper-2.2-amd64.sif`
-- Singularity CPU arm64: `cellphenotyper-2.2-arm64.sif`
-- Singularity GPU amd64: `cellphenotyper-2.2-gpu-amd64.sif`
-- Singularity GPU arm64 (optional): `cellphenotyper-2.2-gpu-arm64.sif`
+- Singularity CPU amd64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
+- Singularity CPU arm64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
+- Singularity GPU amd64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64`
+- Singularity GPU arm64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
+- Legacy GitHub Release `.sif` assets remain supported when present, but large SIFs are now published to GHCR over `oras://` to avoid the 2 GiB GitHub Release asset limit.
 
 ## UNI-2 token setup (required)
 
@@ -210,8 +211,8 @@ mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
 # 1) token file must define HF_TOKEN=...
 source /scratch/<project>/tokens.env
 
-# 2) pull runtime image once (on a node with internet)
-apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+# 2) pull prebuilt SIF once (on a node with internet)
+apptainer pull -F "$SIF" oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64
 
 # 3) predownload StarDist model and normalize to expected local folder
 curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
@@ -282,6 +283,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
+- In `-profile singularity`, automatic resolution is now: local `.sif` -> GHCR `oras://` SIF tag -> legacy release asset -> `docker://` fallback.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 

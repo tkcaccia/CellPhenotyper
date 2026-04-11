@@ -194,7 +194,7 @@ Reference Singularity assets (GitHub release `v2.2`):
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
 Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`
-(release/local `.sif` first; on arm64 GPU runs, missing GPU assets fall back to CPU containers).
+(local `.sif` first, then GHCR `oras://` SIF tags, then legacy release assets, then `docker://`; on arm64 GPU runs, missing GPU assets fall back to CPU containers).
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
@@ -207,7 +207,12 @@ To force a specific manual image, set:
 - `runtime_image_mode: manual`
 - `singularity_image: https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/cellphenotyper-2.2-amd64.sif` (example)
 
-To force docker:// fallback instead of release assets in auto mode:
+To force the prebuilt GHCR SIF directly, set:
+
+- `runtime_image_mode: manual`
+- `singularity_image: oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64` (example)
+
+To force docker:// fallback instead of ORAS/release assets in auto mode:
 
 - `runtime_image_mode: auto`
 - `singularity_image_source: docker`

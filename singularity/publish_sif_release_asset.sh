@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Build and optionally upload a Singularity/Apptainer SIF asset for this host architecture.
+Build and optionally publish a Singularity/Apptainer SIF asset for this host architecture.
 
 Usage:
   singularity/publish_sif_release_asset.sh [options]
@@ -20,25 +20,28 @@ Options:
   --docker-repo <image_repo>     OCI image repo used when --source docker (default: ghcr.io/tkcaccia/cellphenotyper)
   --docker-tag <tag>             OCI image tag override when --source docker
   --asset-arch <arch>            Override asset architecture suffix (useful for docker-source conversion)
+  --oras-repo <image_repo>       ORAS/OCI repo used for SIF push (default: same as --docker-repo)
+  --oras-tag <tag>               ORAS tag override for pushed SIF
+  --upload-mode <mode>           Upload target: auto, release, oras, or both (default: auto)
   --cpu-def <path>               CPU Singularity definition file (default: singularity/cellphenotyper_full_cpu.def)
   --gpu-def <path>               GPU Singularity definition file (default: singularity/cellphenotyper_full_gpu.def)
-  --upload                        Upload to GitHub release after build
+  --upload                        Publish after build using --upload-mode
   --fakeroot                      Use --fakeroot for definition builds (requires host support)
   --force                         Overwrite existing output file
   -h, --help                      Show this message
 
   # Build an arm64 SIF from an arm64 docker tag while running on another host arch
-  singularity/publish_sif_release_asset.sh --source docker --device gpu --version 2.2 --docker-tag 2.2-gpu-arm64 --asset-arch arm64 --upload
+  singularity/publish_sif_release_asset.sh --source docker --device gpu --version 2.2 --docker-tag 2.2-gpu-arm64 --asset-arch arm64 --upload --upload-mode oras
 
 Examples:
   # Build arm64 CPU SIF on Apple Silicon/Linux ARM and upload it
-  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload
+  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload --upload-mode auto
 
   # Build amd64 CPU SIF on Linux amd64 and upload it
-  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload
+  singularity/publish_sif_release_asset.sh --version 2.2 --device cpu --upload --upload-mode auto
 
   # Build from docker:// image instead of definition file
-  singularity/publish_sif_release_asset.sh --source docker --device cpu --version 2.2 --upload
+  singularity/publish_sif_release_asset.sh --source docker --device cpu --version 2.2 --upload --upload-mode auto
 USAGE
 }
 
@@ -69,6 +72,9 @@ RELEASE_TAG=""
 DOCKER_REPO="ghcr.io/tkcaccia/cellphenotyper"
 DOCKER_TAG=""
 ASSET_ARCH=""
+ORAS_REPO=""
+ORAS_TAG=""
+UPLOAD_MODE="auto"
 CPU_DEF="singularity/cellphenotyper_full_cpu.def"
 GPU_DEF="singularity/cellphenotyper_full_gpu.def"
 UPLOAD="false"
@@ -121,6 +127,18 @@ while [[ $# -gt 0 ]]; do
       ASSET_ARCH="$2"
       shift 2
       ;;
+    --oras-repo)
+      ORAS_REPO="$2"
+      shift 2
+      ;;
+    --oras-tag)
+      ORAS_TAG="$2"
+      shift 2
+      ;;
+    --upload-mode)
+      UPLOAD_MODE="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
     --cpu-def)
       CPU_DEF="$2"
       shift 2
@@ -160,6 +178,11 @@ fi
 
 if [[ "$SOURCE" != "def" && "$SOURCE" != "docker" ]]; then
   echo "Invalid --source '$SOURCE'. Use def or docker." >&2
+  exit 1
+fi
+
+if [[ "$UPLOAD_MODE" != "auto" && "$UPLOAD_MODE" != "release" && "$UPLOAD_MODE" != "oras" && "$UPLOAD_MODE" != "both" ]]; then
+  echo "Invalid --upload-mode '$UPLOAD_MODE'. Use auto, release, oras, or both." >&2
   exit 1
 fi
 
@@ -239,6 +262,17 @@ if [[ "$DEVICE" == "gpu" ]]; then
 fi
 ASSET_NAME="cellphenotyper-${VERSION}${name_suffix}-${ASSET_ARCH}.sif"
 OUT_SIF="${OUTDIR%/}/${ASSET_NAME}"
+if [[ -z "$ORAS_REPO" ]]; then
+  ORAS_REPO="$DOCKER_REPO"
+fi
+if [[ -z "$ORAS_TAG" ]]; then
+  if [[ "$DEVICE" == "gpu" ]]; then
+    ORAS_TAG="${VERSION}-sif-gpu-${ASSET_ARCH}"
+  else
+    ORAS_TAG="${VERSION}-sif-${ASSET_ARCH}"
+  fi
+fi
+ORAS_REF="oras://${ORAS_REPO}:${ORAS_TAG}"
 
 if [[ -e "$OUT_SIF" && "$FORCE" != "true" ]]; then
   echo "Output already exists: $OUT_SIF (use --force to overwrite)" >&2
@@ -290,18 +324,39 @@ else
   "$SING_BIN" pull --force "$OUT_SIF" "$OCI_REF"
 fi
 
-echo "Built: $OUT_SIF"
+FILE_BYTES="$(wc -c < "$OUT_SIF" | tr -d '[:space:]')"
+GITHUB_RELEASE_MAX_BYTES=2147483647
+echo "Built: $OUT_SIF (${FILE_BYTES} bytes)"
 
 if [[ "$UPLOAD" == "true" ]]; then
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "GitHub CLI (gh) is required for --upload." >&2
-    exit 1
+  SELECTED_UPLOAD_MODE="$UPLOAD_MODE"
+  if [[ "$SELECTED_UPLOAD_MODE" == "auto" ]]; then
+    if [[ "$FILE_BYTES" -le "$GITHUB_RELEASE_MAX_BYTES" ]]; then
+      SELECTED_UPLOAD_MODE="both"
+    else
+      SELECTED_UPLOAD_MODE="oras"
+    fi
   fi
 
-  if ! gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release create "$RELEASE_TAG" --repo "$REPO" --title "$RELEASE_TAG" --notes "Release assets for CellPhenotyper ${VERSION}."
+  if [[ "$SELECTED_UPLOAD_MODE" == "release" || "$SELECTED_UPLOAD_MODE" == "both" ]]; then
+    if [[ "$FILE_BYTES" -gt "$GITHUB_RELEASE_MAX_BYTES" ]]; then
+      echo "Asset '$ASSET_NAME' is ${FILE_BYTES} bytes and exceeds the GitHub release asset limit (${GITHUB_RELEASE_MAX_BYTES} bytes)." >&2
+      echo "Use --upload-mode oras or --upload-mode auto for large SIF files." >&2
+      exit 1
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+      echo "GitHub CLI (gh) is required for release uploads." >&2
+      exit 1
+    fi
+    if ! gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
+      gh release create "$RELEASE_TAG" --repo "$REPO" --title "$RELEASE_TAG" --notes "Release assets for CellPhenotyper ${VERSION}."
+    fi
+    gh release upload "$RELEASE_TAG" "$OUT_SIF" --repo "$REPO" --clobber
+    echo "Uploaded asset '$ASSET_NAME' to $REPO release $RELEASE_TAG"
   fi
 
-  gh release upload "$RELEASE_TAG" "$OUT_SIF" --repo "$REPO" --clobber
-  echo "Uploaded asset '$ASSET_NAME' to $REPO release $RELEASE_TAG"
+  if [[ "$SELECTED_UPLOAD_MODE" == "oras" || "$SELECTED_UPLOAD_MODE" == "both" ]]; then
+    "$SING_BIN" push "$OUT_SIF" "$ORAS_REF"
+    echo "Pushed SIF to ${ORAS_REF}"
+  fi
 fi

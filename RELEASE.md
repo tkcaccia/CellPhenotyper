@@ -108,20 +108,22 @@ docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu
 ```
 
-4. Build/upload Singularity release assets (run on each architecture host):
+4. Build/publish Singularity assets (run on each architecture host):
 
 ```bash
 # On arm64 host (Mac M1/M2 or Linux arm64)
 singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device cpu \
-  --upload
+  --upload \
+  --upload-mode auto
 
 # On amd64 host (Linux x86_64)
 singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device cpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 Optional GPU Singularity asset (amd64):
@@ -130,7 +132,8 @@ Optional GPU Singularity asset (amd64):
 singularity/publish_sif_release_asset.sh \
   --version 2.2 \
   --device gpu \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 Optional GPU Singularity asset (arm64/aarch64 Spark):
@@ -141,12 +144,14 @@ singularity/publish_sif_release_asset.sh \
   --device gpu \
   --source docker \
   --docker-tag 2.2-gpu-arm64 \
-  --upload
+  --upload \
+  --upload-mode auto
 ```
 
 Important behavior:
 
-- `--source docker` in `publish_sif_release_asset.sh` pulls an existing OCI image and converts it to `.sif`, then uploads the `.sif` release asset.
+- `--source docker` in `publish_sif_release_asset.sh` pulls an existing OCI image and converts it to `.sif`, then publishes the SIF to GHCR over `oras://`.
+- Small SIFs can still be mirrored to GitHub Release assets, but large SIFs exceed GitHub's 2 GiB upload limit and therefore must use `oras://`.
 - It does **not** build/push Docker images to GHCR.
 - Docker publish is a separate step (`docker build` + `docker push`).
 
@@ -162,7 +167,7 @@ After a new Docker/Singularity release is published, Linux users should:
 Use the complete command list in `LINUX_UPDATE.md`.
 
 For Singularity users, no manual pull command is needed.
-Nextflow auto-selects the release-hosted `.sif` by architecture/device when using `-profile singularity`.
+Nextflow auto-selects the local/ORAS-hosted `.sif` by architecture/device when using `-profile singularity`.
 
 ```bash
 nextflow run main.nf \
