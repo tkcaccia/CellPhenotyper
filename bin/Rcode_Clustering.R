@@ -1,445 +1,334 @@
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 2) {
-  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N] [--k N] [--resolution X]")
+if (length(args) < 2L) {
+  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N (selects kodama_full_N.RData only)] [--k N] [--resolution auto|X]")
 }
 
 kodama_dir <- args[1]
 out_csv <- args[2]
 
-target_dim <- 20L
-snn_k <- 10L
-resolution_mode <- "fixed"
-resolution <- 0.2
-resolution_grid <- c(0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.2)
+selected_file_dim <- 20L
+requested_k <- 20L
+resolution_mode <- "auto"
+fixed_resolution <- 0.06
+resolution_grid <- c(0.02, 0.04, 0.06, 0.08, 0.12, 0.18)
+score_margin <- 0.02
+silhouette_max_cells <- 4000L
+merge_min_size_fraction <- 0.005
+merge_min_size_floor <- 5L
 
-target_n <- 0L
-annotation_csv <- NULL
-annotation_col <- "polygon_label"
-annotation_ari_margin <- 0.01
-annotation_only <- FALSE
-
-if (length(args) > 2) {
+if (length(args) > 2L) {
   i <- 3L
   while (i <= length(args)) {
     flag <- args[i]
     if (flag == "--dim" && i + 1L <= length(args)) {
-      target_dim <- as.integer(args[i + 1L])
+      selected_file_dim <- as.integer(args[i + 1L])
       i <- i + 2L
       next
     }
     if (flag == "--k" && i + 1L <= length(args)) {
-      snn_k <- as.integer(args[i + 1L])
+      requested_k <- as.integer(args[i + 1L])
       i <- i + 2L
       next
     }
     if (flag == "--resolution" && i + 1L <= length(args)) {
-      res_arg <- tolower(args[i + 1L])
-      if (res_arg == "auto") {
+      value <- tolower(args[i + 1L])
+      if (value == "auto") {
         resolution_mode <- "auto"
       } else {
         resolution_mode <- "fixed"
-        resolution <- as.numeric(args[i + 1L])
+        fixed_resolution <- as.numeric(args[i + 1L])
       }
       i <- i + 2L
-      next
-    }
-    if (flag == "--resolution-grid" && i + 1L <= length(args)) {
-      grid_vals <- strsplit(args[i + 1L], ",", fixed = TRUE)[[1]]
-      parsed <- suppressWarnings(as.numeric(trimws(grid_vals)))
-      parsed <- parsed[is.finite(parsed) & parsed > 0]
-      if (length(parsed) > 0) {
-        resolution_grid <- sort(unique(parsed))
-      }
-      i <- i + 2L
-      next
-    }
-    if (flag == "--target-n" && i + 1L <= length(args)) {
-      target_n <- as.integer(args[i + 1L])
-      i <- i + 2L
-      next
-    }
-    if (flag == "--annotation-csv" && i + 1L <= length(args)) {
-      annotation_csv <- args[i + 1L]
-      i <- i + 2L
-      next
-    }
-    if (flag == "--annotation-col" && i + 1L <= length(args)) {
-      annotation_col <- args[i + 1L]
-      i <- i + 2L
-      next
-    }
-    if (flag == "--annotation-ari-margin" && i + 1L <= length(args)) {
-      annotation_ari_margin <- as.numeric(args[i + 1L])
-      i <- i + 2L
-      next
-    }
-    if (flag == "--annotation-only") {
-      annotation_only <- TRUE
-      i <- i + 1L
       next
     }
     i <- i + 1L
   }
 }
 
-if (resolution_mode == "fixed" && (!is.finite(resolution) || resolution <= 0)) {
-  stop(paste("Invalid --resolution value:", resolution))
+if (!is.finite(selected_file_dim) || selected_file_dim < 2L) {
+  stop("--dim must be an integer >= 2.")
 }
-if (!is.finite(annotation_ari_margin) || annotation_ari_margin < 0) {
-  annotation_ari_margin <- 0.01
+if (!is.finite(requested_k) || requested_k < 2L) {
+  stop("--k must be an integer >= 2.")
 }
-if (!is.finite(target_n) || target_n < 0) {
-  target_n <- 0L
-}
-
-calc_ari <- function(truth, pred) {
-  keep <- !is.na(truth) & !is.na(pred) & nzchar(as.character(truth)) & nzchar(as.character(pred))
-  truth <- as.character(truth[keep])
-  pred <- as.character(pred[keep])
-  if (length(truth) < 2L || length(unique(truth)) < 2L || length(unique(pred)) < 2L) {
-    return(NA_real_)
-  }
-
-  tab <- table(truth, pred)
-  n <- sum(tab)
-  if (n < 2L) {
-    return(NA_real_)
-  }
-  comb2 <- function(x) x * (x - 1) / 2
-  sum_nij <- sum(comb2(as.numeric(tab)))
-  a_sum <- rowSums(tab)
-  b_sum <- colSums(tab)
-  sum_ai <- sum(comb2(as.numeric(a_sum)))
-  sum_bj <- sum(comb2(as.numeric(b_sum)))
-  total_pairs <- comb2(n)
-  if (total_pairs == 0) {
-    return(NA_real_)
-  }
-  expected <- (sum_ai * sum_bj) / total_pairs
-  max_index <- 0.5 * (sum_ai + sum_bj)
-  denom <- max_index - expected
-  if (denom == 0) {
-    return(NA_real_)
-  }
-  (sum_nij - expected) / denom
+if (resolution_mode == "fixed" && (!is.finite(fixed_resolution) || fixed_resolution <= 0)) {
+  stop("--resolution must be 'auto' or a positive number.")
 }
 
-build_annotation_df <- function(path, colname) {
-  if (is.null(path) || !nzchar(path) || !file.exists(path)) {
-    return(NULL)
+require_namespace <- function(pkg) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    stop(sprintf("Required package '%s' is not installed.", pkg))
   }
-  ann <- tryCatch(
-    read.csv(path, stringsAsFactors = FALSE),
-    error = function(e) NULL
-  )
-  if (is.null(ann)) {
-    cat(sprintf("[WARN] Could not read annotation CSV: %s\n", path))
-    return(NULL)
+}
+
+require_namespace("bluster")
+require_namespace("igraph")
+if (resolution_mode == "auto") {
+  require_namespace("cluster")
+}
+
+list_kodama_files <- function(path) {
+  files <- list.files(path, pattern = "^kodama_full_[0-9]+\\.RData$", full.names = TRUE)
+  if (length(files) == 0L) {
+    stop(sprintf("No kodama_full_*.RData files found in: %s", path))
   }
-  if (!("label" %in% colnames(ann)) || !(colname %in% colnames(ann))) {
-    cat(sprintf("[WARN] Annotation CSV missing required columns: label and %s\n", colname))
-    return(NULL)
+  dims <- suppressWarnings(as.integer(sub("^.*kodama_full_([0-9]+)\\.RData$", "\\1", files)))
+  if (any(is.na(dims))) {
+    stop("Unable to parse dimensions from kodama_full_*.RData filenames.")
   }
-  out <- ann[, c("label", colname)]
-  colnames(out) <- c("label", "truth")
-  out$label <- trimws(as.character(out$label))
-  out$truth <- trimws(as.character(out$truth))
-  out <- out[!is.na(out$label) & nzchar(out$label) & !is.na(out$truth) & nzchar(out$truth), , drop = FALSE]
-  if (nrow(out) == 0L) {
-    cat("[WARN] Annotation CSV has no usable rows after filtering empty labels.\n")
-    return(NULL)
+  ord <- order(dims)
+  list(files = files[ord], dims = dims[ord])
+}
+
+select_kodama_file <- function(target_dim, dims, files) {
+  if (target_dim %in% dims) {
+    idx <- which(dims == target_dim)[1]
+    return(list(file = files[idx], dim = dims[idx], exact = TRUE))
   }
-  out <- out[!duplicated(out$label), , drop = FALSE]
-  if (length(unique(out$truth)) < 2L) {
-    cat("[WARN] Annotation column has <2 classes; annotation-guided selection disabled.\n")
-    return(NULL)
+  lower_idx <- which(dims < target_dim)
+  if (length(lower_idx) > 0L) {
+    idx <- lower_idx[which.max(dims[lower_idx])]
+    return(list(file = files[idx], dim = dims[idx], exact = FALSE))
   }
+  idx <- which.min(dims)
+  list(file = files[idx], dim = dims[idx], exact = FALSE)
+}
+
+format_cluster_sizes <- function(membership) {
+  sizes <- sort(table(as.integer(membership)), decreasing = TRUE)
+  paste(sprintf("%s:%d", names(sizes), as.integer(sizes)), collapse = ";")
+}
+
+renumber_membership <- function(membership) {
+  uniq <- sort(unique(as.integer(membership)))
+  out <- as.integer(match(as.integer(membership), uniq))
+  names(out) <- names(membership)
   out
 }
 
-files <- list.files(kodama_dir, pattern = "^kodama_full_[0-9]+\\.RData$", full.names = TRUE)
-if (length(files) == 0) {
-  stop(paste("No kodama_full_*.RData files found in:", kodama_dir))
-}
-
-dims <- as.integer(sub("^.*kodama_full_([0-9]+)\\.RData$", "\\1", files))
-if (any(is.na(dims))) {
-  stop("Unable to parse embedding dimensions from kodama_full_*.RData filenames.")
-}
-
-select_file <- function(target, candidate_dims, candidate_files) {
-  if (target %in% candidate_dims) {
-    return(candidate_files[which(candidate_dims == target)[1]])
+mean_silhouette <- function(vis, membership) {
+  if (nrow(vis) < 4L || length(unique(membership)) < 2L) {
+    return(NA_real_)
   }
-  lower <- which(candidate_dims < target)
-  if (length(lower) > 0) {
-    return(candidate_files[lower[which.max(candidate_dims[lower])]])
+  idx <- seq_len(nrow(vis))
+  if (nrow(vis) > silhouette_max_cells) {
+    set.seed(1L)
+    idx <- sort(sample(idx, silhouette_max_cells))
   }
-  candidate_files[which.min(candidate_dims)]
+  sil <- tryCatch(
+    cluster::silhouette(as.integer(membership[idx]), stats::dist(scale(vis[idx, , drop = FALSE]))),
+    error = function(e) NULL
+  )
+  if (is.null(sil)) return(NA_real_)
+  summary(sil)$avg.width
 }
 
-chosen <- select_file(target_dim, dims, files)
-load(chosen)
+cluster_centroids <- function(vis, membership) {
+  ids <- sort(unique(as.integer(membership)))
+  out <- do.call(rbind, lapply(ids, function(id) colMeans(vis[membership == id, , drop = FALSE])))
+  rownames(out) <- as.character(ids)
+  out
+}
 
+merge_small_clusters <- function(vis, membership, min_size) {
+  merged <- as.integer(membership)
+  names(merged) <- rownames(vis)
+  if (length(unique(merged)) < 2L) {
+    return(list(membership = renumber_membership(merged), merged_any = FALSE))
+  }
+
+  merged_any <- FALSE
+  repeat {
+    sizes <- table(merged)
+    if (length(sizes) < 2L) break
+    small_ids <- names(sizes)[sizes < min_size]
+    if (length(small_ids) == 0L) break
+
+    small_ids <- small_ids[order(as.integer(sizes[small_ids]))]
+    changed_this_round <- FALSE
+
+    for (small_id in small_ids) {
+      sizes <- table(merged)
+      if (!(small_id %in% names(sizes))) next
+      if (sizes[[small_id]] >= min_size) next
+      if (length(sizes) < 2L) break
+
+      candidate_ids <- names(sizes)[names(sizes) != small_id & sizes >= min_size]
+      if (length(candidate_ids) == 0L) {
+        candidate_ids <- names(sizes)[names(sizes) != small_id]
+      }
+      if (length(candidate_ids) == 0L) next
+
+      small_center <- colMeans(vis[merged == as.integer(small_id), , drop = FALSE])
+      centers <- cluster_centroids(vis, merged)
+      centers <- centers[rownames(centers) %in% candidate_ids, , drop = FALSE]
+      if (nrow(centers) == 0L) next
+
+      diffs <- centers - matrix(small_center, nrow = nrow(centers), ncol = ncol(centers), byrow = TRUE)
+      nearest_id <- rownames(centers)[which.min(rowSums(diffs * diffs))]
+      merged[merged == as.integer(small_id)] <- as.integer(nearest_id)
+      merged_any <- TRUE
+      changed_this_round <- TRUE
+    }
+
+    if (!changed_this_round) break
+  }
+
+  list(membership = renumber_membership(merged), merged_any = merged_any)
+}
+
+run_louvain <- function(graph_obj, resolution_value) {
+  set.seed(1L)
+  cl <- igraph::cluster_louvain(graph_obj, resolution = resolution_value)
+  membership <- renumber_membership(as.integer(cl$membership))
+  sizes <- table(membership)
+  tiny_threshold <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * sum(sizes)))
+  tiny_count <- sum(as.integer(sizes) < tiny_threshold)
+  tiny_fraction <- if (length(sizes) == 0L) 0 else sum(as.integer(sizes)[as.integer(sizes) < tiny_threshold]) / sum(sizes)
+  list(
+    resolution = resolution_value,
+    membership = membership,
+    raw_cluster_count = length(sizes),
+    modularity = igraph::modularity(graph_obj, membership = membership),
+    silhouette = NA_real_,
+    tiny_count = tiny_count,
+    tiny_fraction = tiny_fraction,
+    tiny_threshold = tiny_threshold,
+    score = NA_real_
+  )
+}
+
+picked <- {
+  info <- list_kodama_files(kodama_dir)
+  select_kodama_file(selected_file_dim, info$dims, info$files)
+}
+
+load(picked$file)
 if (!exists("vis")) {
-  stop(paste("Variable 'vis' not found in:", chosen))
+  stop(sprintf("Variable 'vis' not found in: %s", picked$file))
 }
 
 vis <- as.matrix(vis)
 if (is.null(rownames(vis))) {
   rownames(vis) <- sprintf("cell_%05d", seq_len(nrow(vis)))
 }
-vis_all <- vis
-
-annotation_df <- build_annotation_df(annotation_csv, annotation_col)
-if (!is.null(annotation_df)) {
-  cat(sprintf("[INFO] Annotation guidance active: %s (rows=%d, classes=%d)\n",
-              annotation_col, nrow(annotation_df), length(unique(annotation_df$truth))))
-  if (isTRUE(annotation_only)) {
-    keep_labels <- intersect(rownames(vis), annotation_df$label)
-    if (length(keep_labels) >= 3L) {
-      truth_keep <- annotation_df$truth[match(keep_labels, annotation_df$label)]
-      if (length(unique(truth_keep)) >= 2L) {
-        vis <- vis[keep_labels, , drop = FALSE]
-        annotation_df <- annotation_df[annotation_df$label %in% keep_labels, , drop = FALSE]
-        cat(sprintf("[INFO] Annotation-only clustering enabled: retained %d cells with labels.\n", nrow(vis)))
-      } else {
-        cat("[WARN] Annotation-only requested but retained cells have <2 classes; using all cells.\n")
-      }
-    } else {
-      cat("[WARN] Annotation-only requested but <3 labeled cells overlap embedding; using all cells.\n")
-    }
-  }
+if (nrow(vis) < 3L) {
+  stop(sprintf("Need at least 3 cells for clustering. Found: %d", nrow(vis)))
+}
+if (ncol(vis) < 2L) {
+  stop(sprintf("Expected 'vis' to have at least 2 columns. Found: %d", ncol(vis)))
 }
 
-if (nrow(vis) < 3) {
-  stop(paste("Need at least 3 cells for clustering. Found:", nrow(vis)))
-}
+vis <- vis[, seq_len(min(2L, ncol(vis))), drop = FALSE]
+actual_vis_dims <- ncol(vis)
+actual_k <- max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
+graph_obj <- bluster::makeSNNGraph(vis, k = actual_k)
 
-membership <- NULL
-if (requireNamespace("bluster", quietly = TRUE) && requireNamespace("igraph", quietly = TRUE)) {
-  k_use <- max(2L, min(as.integer(snn_k), nrow(vis) - 1L))
-  g <- bluster::makeSNNGraph(vis, k = k_use)
+if (resolution_mode == "auto") {
+  evals <- lapply(resolution_grid, function(res) {
+    out <- run_louvain(graph_obj, res)
+    out$silhouette <- mean_silhouette(vis, out$membership)
+    sil_term <- if (is.finite(out$silhouette)) out$silhouette else -1
+    out$score <- sil_term + 0.25 * out$modularity - 0.04 * out$raw_cluster_count - 0.25 * out$tiny_fraction - 0.02 * out$tiny_count
+    out
+  })
 
-  run_louvain <- function(res_value) {
-    set.seed(1L)
-    clu <- igraph::cluster_louvain(g, resolution = res_value)
-    memb <- as.integer(clu$membership)
-    list(
-      resolution = res_value,
-      membership = memb,
-      n_clusters = length(unique(memb)),
-      modularity = igraph::modularity(g, membership = memb),
-      silhouette = NA_real_,
-      annotation_ari = NA_real_,
-      annotation_n = 0L
-    )
-  }
+  scores <- vapply(evals, function(x) x$score, numeric(1))
+  best_score <- max(scores)
+  near_best_idx <- which(scores >= (best_score - score_margin))
+  near_best <- evals[near_best_idx]
 
-  if (resolution_mode == "auto") {
-    evals <- lapply(resolution_grid, run_louvain)
-    max_clusters <- max(2L, min(20L, floor(nrow(vis) / 3L)))
-    valid_idx <- which(vapply(evals, function(e) {
-      e$n_clusters >= 2L && e$n_clusters <= max_clusters
-    }, logical(1)))
-    if (length(valid_idx) == 0L) {
-      valid_idx <- seq_along(evals)
-    }
-    if (target_n > 0L) {
-      exact_target <- valid_idx[vapply(evals[valid_idx], function(e) e$n_clusters == target_n, logical(1))]
-      if (length(exact_target) > 0L) {
-        valid_idx <- exact_target
-        cat(sprintf("[INFO] Auto-resolution constrained to target_n=%d (candidate_count=%d)\n", target_n, length(valid_idx)))
-      }
-    }
+  near_counts <- vapply(near_best, function(x) x$raw_cluster_count, integer(1))
+  near_best <- near_best[near_counts == min(near_counts)]
 
-    apply_target_preference <- function(indices) {
-      if (length(indices) <= 1L || target_n <= 0L) {
-        return(indices)
-      }
-      dist_to_target <- vapply(evals[indices], function(e) abs(e$n_clusters - target_n), integer(1))
-      indices[which(dist_to_target == min(dist_to_target))]
-    }
+  near_tiny_fraction <- vapply(near_best, function(x) x$tiny_fraction, numeric(1))
+  near_best <- near_best[near_tiny_fraction == min(near_tiny_fraction)]
 
-    silhouette_margin <- 0.02
-    max_silhouette_cells <- 2000L
-    use_silhouette <- requireNamespace("cluster", quietly = TRUE) && nrow(vis) >= 4L
+  near_tiny_count <- vapply(near_best, function(x) x$tiny_count, integer(1))
+  near_best <- near_best[near_tiny_count == min(near_tiny_count)]
 
-    if (use_silhouette) {
-      set.seed(1L)
-      sample_idx <- seq_len(nrow(vis))
-      if (nrow(vis) > max_silhouette_cells) {
-        sample_idx <- sort(sample(sample_idx, max_silhouette_cells))
-      }
-      vis_eval <- scale(vis[sample_idx, , drop = FALSE])
-      dist_eval <- stats::dist(vis_eval)
+  near_sil <- vapply(near_best, function(x) if (is.finite(x$silhouette)) x$silhouette else -1, numeric(1))
+  near_best <- near_best[near_sil == max(near_sil)]
 
-      for (ii in valid_idx) {
-        memb_eval <- evals[[ii]]$membership[sample_idx]
-        if (length(unique(memb_eval)) >= 2L) {
-          sil_obj <- tryCatch(cluster::silhouette(memb_eval, dist_eval), error = function(e) NULL)
-          evals[[ii]]$silhouette <- if (is.null(sil_obj)) NA_real_ else summary(sil_obj)$avg.width
-        }
-      }
-    }
+  best <- near_best[[which.max(vapply(near_best, function(x) x$modularity, numeric(1)))]]
 
-    if (!is.null(annotation_df)) {
-      for (ii in valid_idx) {
-        pred_df <- data.frame(
-          label = rownames(vis),
-          pred = as.character(evals[[ii]]$membership),
-          stringsAsFactors = FALSE
-        )
-        merged <- merge(annotation_df, pred_df, by = "label")
-        evals[[ii]]$annotation_n <- nrow(merged)
-        if (nrow(merged) >= 4L) {
-          evals[[ii]]$annotation_ari <- calc_ari(merged$truth, merged$pred)
-        }
-      }
-    }
-
-    ari_values <- vapply(evals[valid_idx], function(e) e$annotation_ari, numeric(1))
-    if (any(is.finite(ari_values))) {
-      best_ari <- max(ari_values, na.rm = TRUE)
-      near_ari <- valid_idx[which(ari_values >= (best_ari - annotation_ari_margin))]
-      near_ari <- apply_target_preference(near_ari)
-
-      sil_near <- vapply(evals[near_ari], function(e) e$silhouette, numeric(1))
-      if (any(is.finite(sil_near))) {
-        best_sil_near <- max(sil_near, na.rm = TRUE)
-        near_sil <- near_ari[which(sil_near >= (best_sil_near - silhouette_margin))]
-      } else {
-        near_sil <- near_ari
-      }
-
-      near_clusters <- vapply(evals[near_sil], function(e) e$n_clusters, integer(1))
-      min_clusters <- min(near_clusters)
-      simplest <- near_sil[which(near_clusters == min_clusters)]
-      best_pos <- simplest[which.max(vapply(evals[simplest], function(e) e$modularity, numeric(1)))]
-      auto_reason <- sprintf(
-        "annotation_ari+silhouette+parsimony (ari_margin=%.3f, sil_margin=%.2f)",
-        annotation_ari_margin, silhouette_margin
-      )
-    } else {
-      sil_values <- vapply(evals[valid_idx], function(e) e$silhouette, numeric(1))
-      if (any(is.finite(sil_values))) {
-        best_sil <- max(sil_values, na.rm = TRUE)
-        near_best <- valid_idx[which(sil_values >= (best_sil - silhouette_margin))]
-        near_best <- apply_target_preference(near_best)
-        near_clusters <- vapply(evals[near_best], function(e) e$n_clusters, integer(1))
-        min_clusters <- min(near_clusters)
-        simplest <- near_best[which(near_clusters == min_clusters)]
-        best_pos <- simplest[which.max(vapply(evals[simplest], function(e) e$modularity, numeric(1)))]
-        auto_reason <- sprintf("silhouette+parsimony (margin=%.2f)", silhouette_margin)
-      } else {
-        score_values <- vapply(evals[valid_idx], function(e) {
-          target_penalty <- if (target_n > 0L) 0.10 * abs(e$n_clusters - target_n) else 0
-          e$modularity - 0.08 * max(0, e$n_clusters - 2L) - target_penalty
-        }, numeric(1))
-        best_pos <- valid_idx[which.max(score_values)]
-        auto_reason <- if (target_n > 0L) {
-          "modularity-penalized fallback (+target_n penalty)"
-        } else {
-          "modularity-penalized fallback"
-        }
-      }
-    }
-
-    best <- evals[[best_pos]]
-    membership <- best$membership
-
+  cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid), collapse = ", ")))
+  cat("[INFO] Auto-resolution candidates:\n")
+  for (item in evals) {
     cat(sprintf(
-      "[INFO] Louvain auto-resolution selected: %.3f (clusters=%d, modularity=%.4f, silhouette=%s, annotation_ari=%s, reason=%s)\n",
-      best$resolution, best$n_clusters, best$modularity,
-      ifelse(is.finite(best$silhouette), sprintf("%.4f", best$silhouette), "NA"),
-      ifelse(is.finite(best$annotation_ari), sprintf("%.4f", best$annotation_ari), "NA"),
-      auto_reason
-    ))
-    cat("[INFO] Candidate resolutions:\n")
-    for (e in evals) {
-      cat(sprintf(
-        "  - res=%.3f clusters=%d modularity=%.4f silhouette=%s annotation_ari=%s matched=%d\n",
-        e$resolution, e$n_clusters, e$modularity,
-        ifelse(is.finite(e$silhouette), sprintf("%.4f", e$silhouette), "NA"),
-        ifelse(is.finite(e$annotation_ari), sprintf("%.4f", e$annotation_ari), "NA"),
-        as.integer(e$annotation_n)
-      ))
-    }
-  } else {
-    best <- run_louvain(resolution)
-    if (!is.null(annotation_df)) {
-      pred_df <- data.frame(
-        label = rownames(vis),
-        pred = as.character(best$membership),
-        stringsAsFactors = FALSE
-      )
-      merged <- merge(annotation_df, pred_df, by = "label")
-      best$annotation_n <- nrow(merged)
-      if (nrow(merged) >= 4L) {
-        best$annotation_ari <- calc_ari(merged$truth, merged$pred)
-      }
-    }
-    membership <- best$membership
-    cat(sprintf(
-      "[INFO] Louvain fixed resolution: %.3f (clusters=%d, modularity=%.4f, annotation_ari=%s)\n",
-      best$resolution, best$n_clusters, best$modularity,
-      ifelse(is.finite(best$annotation_ari), sprintf("%.4f", best$annotation_ari), "NA")
+      "  - res=%.3f raw_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f score=%.4f\n",
+      item$resolution,
+      item$raw_cluster_count,
+      ifelse(is.finite(item$silhouette), sprintf("%.4f", item$silhouette), "NA"),
+      item$modularity,
+      item$tiny_count,
+      item$tiny_fraction,
+      item$score
     ))
   }
+  cat(sprintf(
+    "[INFO] Selected auto resolution %.3f with raw_clusters=%d (score=%.4f)\n",
+    best$resolution,
+    best$raw_cluster_count,
+    best$score
+  ))
 } else {
-  kmeans_k <- if (target_n > 1L) {
-    max(2L, min(as.integer(target_n), nrow(vis) - 1L))
-  } else {
-    max(2L, min(8L, floor(sqrt(nrow(vis)))))
-  }
-  km <- stats::kmeans(scale(vis), centers = kmeans_k, nstart = 20)
-  membership <- as.integer(km$cluster)
-  cat(sprintf("[INFO] bluster/igraph unavailable; fallback kmeans centers=%d\n", kmeans_k))
+  best <- run_louvain(graph_obj, fixed_resolution)
+  cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Fixed resolution %.3f with raw_clusters=%d modularity=%.4f\n", best$resolution, best$raw_cluster_count, best$modularity))
 }
 
-output_labels <- rownames(vis)
-output_membership <- as.integer(membership)
-if (isTRUE(annotation_only) && nrow(vis_all) > nrow(vis)) {
-  missing_labels <- setdiff(rownames(vis_all), rownames(vis))
-  if (length(missing_labels) > 0L && length(unique(output_membership)) >= 1L) {
-    cluster_ids <- sort(unique(output_membership))
-    centroids <- do.call(rbind, lapply(cluster_ids, function(cid) {
-      colMeans(vis[output_membership == cid, , drop = FALSE])
-    }))
-    rownames(centroids) <- as.character(cluster_ids)
+raw_membership <- renumber_membership(best$membership)
+merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
+merged <- merge_small_clusters(vis, raw_membership, merge_min_size)
+final_membership <- merged$membership
 
-    missing_pred <- integer(length(missing_labels))
-    for (ii in seq_along(missing_labels)) {
-      v <- vis_all[missing_labels[ii], , drop = FALSE]
-      diff <- centroids - matrix(v, nrow = nrow(centroids), ncol = ncol(centroids), byrow = TRUE)
-      dist2 <- rowSums(diff * diff)
-      missing_pred[ii] <- as.integer(rownames(centroids)[which.min(dist2)])
-    }
+raw_cluster_count <- length(unique(raw_membership))
+final_cluster_count <- length(unique(final_membership))
+raw_cluster_sizes <- format_cluster_sizes(raw_membership)
+final_cluster_sizes <- format_cluster_sizes(final_membership)
 
-    full_membership <- setNames(rep(NA_integer_, nrow(vis_all)), rownames(vis_all))
-    full_membership[rownames(vis)] <- output_membership
-    full_membership[missing_labels] <- missing_pred
-    output_labels <- names(full_membership)
-    output_membership <- as.integer(full_membership)
-    cat(sprintf("[INFO] Assigned %d unlabeled cells to nearest cluster centroids.\n", length(missing_labels)))
-  }
-}
+cluster_df <- data.frame(
+  label = rownames(vis),
+  cluster = as.integer(final_membership),
+  stringsAsFactors = FALSE
+)
+write.csv(cluster_df, out_csv, row.names = FALSE, quote = FALSE)
 
-da <- data.frame(label = output_labels, cluster = output_membership)
-write.csv(da, out_csv, row.names = FALSE, quote = FALSE)
+sample_id <- sub("_cluster$", "", tools::file_path_sans_ext(basename(out_csv)))
+summary_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_summary.csv"))
+summary_df <- data.frame(
+  sample_id = sample_id,
+  vis_dims = actual_vis_dims,
+  requested_dim = as.integer(selected_file_dim),
+  loaded_dim = as.integer(picked$dim),
+  requested_k = as.integer(requested_k),
+  actual_k = as.integer(actual_k),
+  resolution_mode = resolution_mode,
+  selected_resolution = as.numeric(best$resolution),
+  raw_cluster_count = as.integer(raw_cluster_count),
+  final_cluster_count = as.integer(final_cluster_count),
+  merge_min_size = as.integer(merge_min_size),
+  raw_cluster_sizes = raw_cluster_sizes,
+  final_cluster_sizes = final_cluster_sizes,
+  stringsAsFactors = FALSE
+)
+write.csv(summary_df, summary_path, row.names = FALSE, quote = TRUE)
 
-cat(paste0("[INFO] RData source: ", chosen, "\n"))
-cat(paste0("[INFO] Cells clustered: ", nrow(da), "\n"))
-cat(paste0("[INFO] Wrote: ", out_csv, "\n"))
-
-membership_named <- setNames(output_membership, output_labels)
-plot_vis <- vis_all
-plot_membership <- as.integer(membership_named[rownames(plot_vis)])
-plot_membership[is.na(plot_membership)] <- 0L
-
-pdf_name <- paste0(tools::file_path_sans_ext(basename(out_csv)), "_kodama_membership.pdf")
-pdf_path <- file.path(dirname(out_csv), pdf_name)
+pdf_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.pdf"))
 pdf(pdf_path)
-plot(plot_vis, pch = 20, col = plot_membership, cex = 1)
+plot(vis, pch = 20, col = as.integer(final_membership), cex = 1)
 dev.off()
-cat(paste0("[INFO] Wrote: ", pdf_path, "\n"))
+
+cat(sprintf("[INFO] Requested --dim=%d loaded kodama_full_%d.RData\n", selected_file_dim, picked$dim))
+if (!isTRUE(picked$exact)) {
+  cat("[INFO] Requested dim file was not present; nearest lower available file was used.\n")
+}
+cat(sprintf("[INFO] Requested k=%d actual k=%d\n", requested_k, actual_k))
+cat(sprintf("[INFO] Raw clusters=%d final clusters=%d merge_min_size=%d\n", raw_cluster_count, final_cluster_count, merge_min_size))
+cat(sprintf("[INFO] Raw cluster sizes=%s\n", raw_cluster_sizes))
+cat(sprintf("[INFO] Final cluster sizes=%s\n", final_cluster_sizes))
+cat(sprintf("[INFO] Wrote: %s\n", out_csv))
+cat(sprintf("[INFO] Wrote: %s\n", summary_path))
+cat(sprintf("[INFO] Wrote: %s\n", pdf_path))

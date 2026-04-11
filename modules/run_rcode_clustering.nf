@@ -15,13 +15,11 @@ process RUN_RCODE_CLUSTERING {
     output:
     tuple val(sample_id), path("${sample_id}_cluster.csv"), emit: cluster_csv
     tuple val(sample_id), path("${sample_id}_cluster_kodama_membership.pdf"), emit: membership_pdf
+    tuple val(sample_id), path("${sample_id}_cluster_summary.csv"), emit: cluster_summary
     tuple val(sample_id), path("Rcode_Clustering_${sample_id}.Rout"), emit: clustering_log
 
     script:
     def cluster_script = "${projectDir}/${params.cluster_r_script}"
-    def annotation_flag = (params.cluster_annotation_guided as boolean) ? "--annotation-csv \"${objects_assigned_csv}\" --annotation-col \"${params.cluster_annotation_col}\" --annotation-ari-margin ${params.cluster_annotation_ari_margin}" : ''
-    def annotation_only_flag = (params.cluster_annotation_guided as boolean) && (params.cluster_annotation_only as boolean) ? "--annotation-only" : ''
-    def target_n_flag = (params.cluster_target_n as int) > 0 ? "--target-n ${params.cluster_target_n}" : ''
     """
     set -euo pipefail
 
@@ -31,9 +29,6 @@ process RUN_RCODE_CLUSTERING {
       --dim ${params.cluster_kodama_dim} \
       --k ${params.cluster_snn_k} \
       --resolution ${params.cluster_resolution} \
-      ${target_n_flag} \
-      ${annotation_flag} \
-      ${annotation_only_flag} \
       > "Rcode_Clustering_${sample_id}.Rout" 2>&1
     """
 
@@ -41,6 +36,7 @@ process RUN_RCODE_CLUSTERING {
     """
     touch "${sample_id}_cluster.csv"
     touch "${sample_id}_cluster_kodama_membership.pdf"
+    touch "${sample_id}_cluster_summary.csv"
     touch "Rcode_Clustering_${sample_id}.Rout"
     """
 }
