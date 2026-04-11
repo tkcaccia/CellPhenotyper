@@ -30,6 +30,7 @@ ENV MAMBA_ROOT_PREFIX=/opt/micromamba
 COPY stardist.yml /opt/stardist.yml
 
 RUN set -euo pipefail && \
+    export PIP_DEFAULT_TIMEOUT=100 PIP_RETRIES=10 PIP_DISABLE_PIP_VERSION_CHECK=1 && \
     export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 KMP_AFFINITY=disabled && \
     export LD_LIBRARY_PATH="/opt/micromamba/envs/stardist/lib:${LD_LIBRARY_PATH:-}" && \
     micromamba create -y -n stardist -f /opt/stardist.yml -c conda-forge && \
@@ -103,7 +104,7 @@ COPY singularity /opt/cellphenotyper/singularity
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib/tf-nvidia:/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib/tf-nvidia:/opt/micromamba/envs/stardist/lib
 ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/micromamba/envs/stardist/lib/python3.11/site-packages/nvidia/cuda_nvcc
 ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
 
