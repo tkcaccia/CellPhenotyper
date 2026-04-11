@@ -66,9 +66,18 @@ RUN set -euo pipefail && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \
     micromamba clean -a -y
 
+WORKDIR /opt/cellphenotyper
+COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md /opt/cellphenotyper/
+COPY bin /opt/cellphenotyper/bin
+COPY modules /opt/cellphenotyper/modules
+COPY docker /opt/cellphenotyper/docker
+COPY examples /opt/cellphenotyper/examples
+COPY singularity /opt/cellphenotyper/singularity
+
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
 ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
 
 CMD ["/bin/bash"]

@@ -1,6 +1,6 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs StarDist segmentation, extracts UNI-2 embeddings, performs KODAMA-based clustering, and generates a final tissue cluster GeoJSON.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs StarDist segmentation, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and generates a final tissue cluster GeoJSON.
 
 Main command:
 
@@ -115,6 +115,22 @@ PY
 ```
 
 Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted cache for both UNI-2 and GigaTIME.
+
+## GigaTIME marker quantification
+
+When `--gigatime_enable true`, the pipeline now also quantifies the crop-aligned GigaTIME marker stack over:
+
+- StarDist nuclei labels
+- expanded cytoplasm labels
+
+Outputs are written per sample to:
+
+- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv`
+- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv`
+- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_mean_intensity.csv`
+- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_intensity_stats.csv`
+
+The mean-intensity CSV is designed to be easy to reuse downstream in the same spirit as mcMicro-style single-cell quantification tables. The stats CSV additionally records per-marker sum and max values together with object area.
 
 ## Linux quick run
 

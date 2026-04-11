@@ -8,6 +8,7 @@ With `--outdir_base results_full`, the pipeline writes:
 - `results_full/04_roi/<sample_root>/`
 - `results_full/05_cell_assignments/<sample_root>/`
 - `results_full/06_cytoplasm/<sample_root>/`
+- `results_full/06_marker_quantification/<sample_root>/`
 - `results_full/07_embeddings/<sample_root>/`
 - `results_full/08_kodama/<sample_root>/`
 - `results_full/08_kodama_logs/<sample_root>/`
@@ -25,6 +26,9 @@ With `--outdir_base results_full`, the pipeline writes:
   - `results_full/04_roi/<sample_root>/<sample_root>.roi.geojson`
 - Assigned cells:
   - `results_full/05_cell_assignments/<sample_root>/<sample_root>_objects_assigned.csv`
+- GigaTIME marker quantification:
+  - `results_full/06_marker_quantification/<sample_root>/<sample_root>_nuclei_gigatime_mean_intensity.csv`
+  - `results_full/06_marker_quantification/<sample_root>/<sample_root>_cyto_gigatime_mean_intensity.csv`
 - Embeddings:
   - `results_full/07_embeddings/<sample_root>/`
 - KODAMA logs:

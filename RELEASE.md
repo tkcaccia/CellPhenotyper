@@ -20,6 +20,7 @@ Current published runtime tags:
 Runtime dependency note:
 
 - Official runtime images are built with the slide-conversion and virtual mIF stack preinstalled, including `tensorflow`, `imagecodecs`, `pyvips`, `openslide`, `rasterio`, `huggingface_hub`, and `timm`.
+- Official runtime images now also copy the pipeline code itself into `/opt/cellphenotyper`, so published Docker/SIF artifacts and repository code stay aligned for offline or standalone inspection.
 
 Current published Singularity assets on release `v2.2`:
 

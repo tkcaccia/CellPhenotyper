@@ -143,6 +143,15 @@ GPU run notes:
 | `gigatime_memory_gb` | `24` | RAM allocation. |
 | `gigatime_time` | `12h` | Time allocation. |
 
+## GigaTIME marker quantification
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `marker_quantification_enable` | `true` | Quantify the GigaTIME marker stack over nuclei and cytoplasm label masks. |
+| `marker_quantification_cpus` | `8` | CPU allocation. |
+| `marker_quantification_memory_gb` | `24` | RAM allocation. |
+| `marker_quantification_time` | `12h` | Time allocation. |
+
 ## Tissue mask
 
 | Parameter | Default | Meaning |
@@ -208,4 +217,6 @@ GPU run notes:
 Additional automatic outputs:
 
 - `02_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
+- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
+- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
 - If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `04_roi_mask/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `04_roi_mask/<sample>/<sample>_input_roi_mask_labels.json`.
