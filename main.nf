@@ -12,6 +12,7 @@ include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_PRIMARY } from './modules/expand_labels_to_cytoplasm'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_FULL } from './modules/expand_labels_to_cytoplasm'
+include { QUANTIFY_GIGATIME_INTENSITY } from './modules/quantify_gigatime_intensity'
 include { EXTRACT_UNI2_EMBEDDINGS } from './modules/extract_uni2_embeddings'
 include { RUN_KODAMA_ANALYSIS } from './modules/run_kodama_analysis'
 include { RUN_RCODE_CLUSTERING } from './modules/run_rcode_clustering'
@@ -347,6 +348,10 @@ workflow {
         cell_assignment : 'cell_assignment',
         assign          : 'cell_assignment',
         cytoplasm       : 'cytoplasm',
+        quantification  : 'marker_quantification',
+        marker_quantification: 'marker_quantification',
+        marker_intensity : 'marker_quantification',
+        gigatime_quantification: 'marker_quantification',
         uni2            : 'uni2',
         uni_2           : 'uni2',
         'uni-2'         : 'uni2',
@@ -362,7 +367,7 @@ workflow {
         mask_to_geojson : 'cluster_geojson',
         final_geojson   : 'cluster_geojson'
     ]
-    def stage_order = ['convert', 'stardist', 'gigatime', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
+    def stage_order = ['convert', 'stardist', 'gigatime', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'marker_quantification', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
     def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
     def normalize_stage = { raw_value, fallback_value ->
@@ -393,12 +398,15 @@ workflow {
         idx >= stage_index[start_point] && idx <= stage_index[end_point]
     }
 
+    def gigatime_enabled = (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+    def marker_quantification_enabled = (((params.marker_quantification_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
     def run_convert = should_run_stage('convert')
     def run_stardist = should_run_stage('stardist')
-    def run_gigatime = should_run_stage('gigatime') && (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+    def run_gigatime = should_run_stage('gigatime') && gigatime_enabled
     def run_tissue_mask = should_run_stage('tissue_mask')
     def run_cell_assignment = should_run_stage('cell_assignment')
     def run_cytoplasm = should_run_stage('cytoplasm')
+    def run_marker_quantification = should_run_stage('marker_quantification') && gigatime_enabled && marker_quantification_enabled
     def run_uni2 = should_run_stage('uni2')
     def run_kodama = should_run_stage('kodama')
     def run_clustering = should_run_stage('clustering')
@@ -629,6 +637,7 @@ workflow {
     }
 
     def stardist_outputs_available = stage_index[end_point] >= stage_index['stardist']
+    def gigatime_outputs_available = stage_index[end_point] >= stage_index['gigatime'] && gigatime_enabled
     def crop_roi_for_masks_ch = stardist_outputs_available
         ? (run_stardist
             ? crop_roi_ch
@@ -643,10 +652,16 @@ workflow {
                 tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
             })
         : Channel.empty()
+    def gigatime_tif_ch = Channel.empty()
 
     if (stardist_outputs_available) {
         if (run_gigatime) {
             RUN_GIGATIME_ON_CROP(crop_roi_for_masks_ch)
+            gigatime_tif_ch = RUN_GIGATIME_ON_CROP.out.gigatime_tif
+        } else if (gigatime_outputs_available) {
+            gigatime_tif_ch = image_input_ch.map { sample_id, _ ->
+                tuple(sample_id, file("${params.outdir_base}/02_gigatime/${sample_id}/gigatime_${sample_id}/gigatime_probs.ome.tif", checkIfExists: true))
+            }
         }
         def roi_mask_input_ch = roi_crop_geojson_for_masks_ch
             .join(crop_roi_for_masks_ch)
@@ -665,7 +680,7 @@ workflow {
         tissue_mask_ch = BUILD_TISSUE_MASK.out.tissue_mask
     }
 
-    if (run_cell_assignment || run_cytoplasm || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
+    if (run_cell_assignment || run_cytoplasm || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
         def objects_assigned_ch = Channel.empty()
         if (run_cell_assignment) {
             def assign_input_ch = objects_csv_ch
@@ -714,6 +729,32 @@ workflow {
             cyto_mask_full_ch = image_input_ch.map { sample_id, _ ->
                 tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}/${sample_id}_labels_full_cyto.tif", checkIfExists: true))
             }
+        }
+
+        if (run_marker_quantification) {
+            def nuclei_mask_for_quant_ch = run_stardist
+                ? labels_tif_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
+                }
+            def cyto_mask_for_quant_ch = run_cytoplasm
+                ? cyto_mask_ch
+                : image_input_ch.map { sample_id, _ ->
+                    tuple(sample_id, file("${params.outdir_base}/06_cytoplasm/${sample_id}/${sample_id}_labels_cyto.tif", checkIfExists: true))
+                }
+
+            def nuclei_quant_input_ch = gigatime_tif_ch
+                .join(nuclei_mask_for_quant_ch)
+                .map { sample_id, gigatime_tif, nuclei_mask_tif ->
+                    tuple(sample_id, gigatime_tif, nuclei_mask_tif, 'nuclei')
+                }
+            def cyto_quant_input_ch = gigatime_tif_ch
+                .join(cyto_mask_for_quant_ch)
+                .map { sample_id, gigatime_tif, cyto_mask_tif ->
+                    tuple(sample_id, gigatime_tif, cyto_mask_tif, 'cyto')
+                }
+
+            QUANTIFY_GIGATIME_INTENSITY(nuclei_quant_input_ch.mix(cyto_quant_input_ch))
         }
 
         def tile_embeddings_ch = Channel.empty()
@@ -901,6 +942,7 @@ workflow.onComplete {
         [folder: '04_roi_mask',       title: 'Input ROI Mask',          expected: ['_input_roi_mask.tif', '_input_roi_mask_preview.png', '_input_roi_mask_labels.json']],
         [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
         [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
+        [folder: '06_marker_quantification', title: 'Marker Quantification', expected: ['_gigatime_mean_intensity.csv', '_gigatime_intensity_stats.csv', '_gigatime_intensity_summary.json']],
         [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],
         [folder: '08_kodama',         title: 'KODAMA',                  expected: ['kodama_output']],
         [folder: '08_kodama_logs',    title: 'KODAMA Logs',             expected: ['.Rout']],
