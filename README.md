@@ -44,7 +44,7 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
-Current tags/assets (`v2.2`):
+Target tag layout for `v2.2`:
 
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
@@ -57,6 +57,15 @@ Current tags/assets (`v2.2`):
 - Singularity GPU amd64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64`
 - Singularity GPU arm64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
 - Legacy GitHub Release `.sif` assets remain supported when present, but large SIFs are now published to GHCR over `oras://` to avoid the 2 GiB GitHub Release asset limit.
+
+Verify actual published tags before instructing users to pull them:
+
+```bash
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
+```
 
 ## UNI-2 token setup (required)
 

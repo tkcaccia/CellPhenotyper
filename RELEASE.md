@@ -10,7 +10,7 @@ Current default branch:
 
 - `main`
 
-Current published runtime tags:
+Target runtime tags for `v2.2`:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
@@ -22,7 +22,7 @@ Runtime dependency note:
 - Official runtime images are built with the slide-conversion and virtual mIF stack preinstalled, including `tensorflow`, `imagecodecs`, `pyvips`, `openslide`, `rasterio`, `huggingface_hub`, and `timm`.
 - Official runtime images now also copy the pipeline code itself into `/opt/cellphenotyper`, so published Docker/SIF artifacts and repository code stay aligned for offline or standalone inspection.
 
-Current published Singularity assets on release `v2.2`:
+Target Singularity assets for release `v2.2`:
 
 - `cellphenotyper-2.2-amd64.sif`
 - `cellphenotyper-2.2-arm64.sif`
@@ -33,6 +33,7 @@ Operational notes:
 
 - GPU SIF files can be large; if GitHub Release asset upload limits are hit, keep Docker images on GHCR as authoritative source and document manual pre-pull + `runtime_image_mode: manual`.
 - For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
+- Verify GHCR/ORAS availability before telling users to pull a `2.2` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.
 
 ## Versioning policy
 
@@ -54,6 +55,11 @@ source GHCRtoken.env
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
+
+# Recommended host split:
+# - build amd64 images on a native Linux amd64/x86_64 host
+# - build arm64 images on a native arm64 host (Apple Silicon or Linux arm64)
+# QEMU-emulated amd64 validation of TensorFlow/PyTorch can fail with exit 132 on Apple Silicon.
 
 # amd64 GPU build prerequisite:
 # upload the custom TensorFlow wheel asset
