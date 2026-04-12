@@ -7,14 +7,14 @@ kodama_dir <- args[1]
 out_csv <- args[2]
 
 selected_file_dim <- 20L
-requested_k <- 20L
+requested_k <- 50L
 resolution_mode <- "auto"
-fixed_resolution <- 0.06
-resolution_grid <- c(0.02, 0.04, 0.06, 0.08, 0.12, 0.18)
-score_margin <- 0.02
+fixed_resolution <- 0.03
+resolution_grid <- c(0.005, 0.01, 0.02, 0.03, 0.04, 0.05)
+score_margin <- 0.015
 silhouette_max_cells <- 4000L
-merge_min_size_fraction <- 0.005
-merge_min_size_floor <- 5L
+merge_min_size_fraction <- 0.01
+merge_min_size_floor <- 15L
 
 if (length(args) > 2L) {
   i <- 3L
@@ -198,6 +198,10 @@ run_louvain <- function(graph_obj, resolution_value) {
   )
 }
 
+preferred_cluster_cap <- function(n_cells) {
+  max(4L, min(25L, as.integer(round(sqrt(max(1L, n_cells)) * 0.75))))
+}
+
 picked <- {
   info <- list_kodama_files(kodama_dir)
   select_kodama_file(selected_file_dim, info$dims, info$files)
@@ -225,11 +229,19 @@ actual_k <- max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
 graph_obj <- bluster::makeSNNGraph(vis, k = actual_k)
 
 if (resolution_mode == "auto") {
+  cluster_cap <- preferred_cluster_cap(nrow(vis))
   evals <- lapply(resolution_grid, function(res) {
     out <- run_louvain(graph_obj, res)
     out$silhouette <- mean_silhouette(vis, out$membership)
     sil_term <- if (is.finite(out$silhouette)) out$silhouette else -1
-    out$score <- sil_term + 0.25 * out$modularity - 0.04 * out$raw_cluster_count - 0.25 * out$tiny_fraction - 0.02 * out$tiny_count
+    over_cap <- max(0L, out$raw_cluster_count - cluster_cap)
+    out$score <- sil_term +
+      0.20 * out$modularity -
+      0.08 * out$raw_cluster_count -
+      0.60 * out$tiny_fraction -
+      0.05 * out$tiny_count -
+      0.12 * over_cap
+    out$cluster_cap <- cluster_cap
     out
   })
 
@@ -254,16 +266,18 @@ if (resolution_mode == "auto") {
 
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
   cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid), collapse = ", ")))
+  cat(sprintf("[INFO] Preferred raw cluster cap for auto mode: %d\n", cluster_cap))
   cat("[INFO] Auto-resolution candidates:\n")
   for (item in evals) {
     cat(sprintf(
-      "  - res=%.3f raw_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f score=%.4f\n",
+      "  - res=%.3f raw_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f over_cap=%d score=%.4f\n",
       item$resolution,
       item$raw_cluster_count,
       ifelse(is.finite(item$silhouette), sprintf("%.4f", item$silhouette), "NA"),
       item$modularity,
       item$tiny_count,
       item$tiny_fraction,
+      max(0L, item$raw_cluster_count - cluster_cap),
       item$score
     ))
   }
