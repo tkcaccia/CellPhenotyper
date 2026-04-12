@@ -75,6 +75,7 @@ expand_auto_threshold_mpix: 25.0
 expand_preview_factor: 10
 expand_preview_threshold_mb: 100.0
 expand_preview_alpha: 0.45
+publish_dir_mode: rellink
 input_roi_mask_label_mode: auto
 input_roi_mask_value_prop: value
 input_roi_mask_annotation_props: classification.name,classification.label,class,label,type,name

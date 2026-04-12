@@ -2,7 +2,7 @@ process ROI_GEOJSON_TO_MASK {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/04_roi_mask/${sample_id}", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/04_roi_mask/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.input_roi_mask_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.input_roi_mask_memory_gb as int))} GB" }

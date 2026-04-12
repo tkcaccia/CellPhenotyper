@@ -16,6 +16,7 @@ def parse_args():
     ap.add_argument("--image", required=True, help="Input GigaTIME TIFF/OME-TIFF")
     ap.add_argument("--mask", required=True, help="Input labeled mask TIFF")
     ap.add_argument("--mask-name", required=True, help="Mask label used in outputs, e.g. nuclei or cyto")
+    ap.add_argument("--out-quant-csv", required=True, help="Output wide CSV with mcMicro-like per-object quantification")
     ap.add_argument("--out-mean-csv", required=True, help="Output CSV with mean intensity per marker")
     ap.add_argument("--out-stats-csv", required=True, help="Output CSV with area/mean/sum/max per marker")
     ap.add_argument("--out-summary-json", required=True, help="Output JSON summary")
@@ -104,7 +105,13 @@ def _read_label_mask(path: str) -> np.ndarray:
     return arr
 
 
-def quantify(image_cyx: np.ndarray, mask_yx: np.ndarray, channel_names: list[str]) -> tuple[list[dict], list[dict]]:
+def quantify(
+    image_cyx: np.ndarray,
+    mask_yx: np.ndarray,
+    channel_names: list[str],
+    *,
+    mask_name: str,
+) -> tuple[list[dict], list[dict], list[dict]]:
     if image_cyx.ndim != 3:
         raise ValueError(f"Expected CYX image, got shape {image_cyx.shape}")
     if mask_yx.ndim != 2:
@@ -117,11 +124,22 @@ def quantify(image_cyx: np.ndarray, mask_yx: np.ndarray, channel_names: list[str
     mask_flat = mask_yx.reshape(-1)
     positive = mask_flat > 0
     if not np.any(positive):
-        return [], []
+        return [], [], []
 
     labels_sorted, inverse = np.unique(mask_flat[positive].astype(np.int64, copy=False), return_inverse=True)
     counts = np.bincount(inverse).astype(np.int64, copy=False)
     n_labels = len(labels_sorted)
+    y_coords, x_coords = np.nonzero(mask_yx > 0)
+    sum_y = np.bincount(inverse, weights=y_coords.astype(np.float64, copy=False), minlength=n_labels)
+    sum_x = np.bincount(inverse, weights=x_coords.astype(np.float64, copy=False), minlength=n_labels)
+    min_y = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64)
+    min_x = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64)
+    max_y = np.full(n_labels, -1, dtype=np.int64)
+    max_x = np.full(n_labels, -1, dtype=np.int64)
+    np.minimum.at(min_y, inverse, y_coords.astype(np.int64, copy=False))
+    np.minimum.at(min_x, inverse, x_coords.astype(np.int64, copy=False))
+    np.maximum.at(max_y, inverse, y_coords.astype(np.int64, copy=False))
+    np.maximum.at(max_x, inverse, x_coords.astype(np.int64, copy=False))
 
     means_by_channel: list[np.ndarray] = []
     sums_by_channel: list[np.ndarray] = []
@@ -137,25 +155,38 @@ def quantify(image_cyx: np.ndarray, mask_yx: np.ndarray, channel_names: list[str
         sums_by_channel.append(sums)
         max_by_channel.append(maxes)
 
+    quant_rows: list[dict] = []
     mean_rows: list[dict] = []
     stats_rows: list[dict] = []
     for idx, label_id in enumerate(labels_sorted.tolist()):
         base = {
             "label_id": int(label_id),
+            "mask_name": mask_name,
             "area_px": int(counts[idx]),
+            "centroid_y_px": float(sum_y[idx] / counts[idx]),
+            "centroid_x_px": float(sum_x[idx] / counts[idx]),
+            "bbox_ymin_px": int(min_y[idx]),
+            "bbox_xmin_px": int(min_x[idx]),
+            "bbox_ymax_px": int(max_y[idx] + 1),
+            "bbox_xmax_px": int(max_x[idx] + 1),
         }
         mean_row = dict(base)
         stats_row = dict(base)
+        quant_row = dict(base)
         for ch_name, means, sums, maxes in zip(channel_names, means_by_channel, sums_by_channel, max_by_channel):
             safe_name = ch_name.strip() or "unnamed"
             mean_row[safe_name] = float(means[idx])
             stats_row[f"{safe_name}__mean"] = float(means[idx])
             stats_row[f"{safe_name}__sum"] = float(sums[idx])
             stats_row[f"{safe_name}__max"] = float(maxes[idx])
+            quant_row[f"{safe_name}__mean"] = float(means[idx])
+            quant_row[f"{safe_name}__sum"] = float(sums[idx])
+            quant_row[f"{safe_name}__max"] = float(maxes[idx])
+        quant_rows.append(quant_row)
         mean_rows.append(mean_row)
         stats_rows.append(stats_row)
 
-    return mean_rows, stats_rows
+    return quant_rows, mean_rows, stats_rows
 
 
 def write_csv(path: str, rows: list[dict]) -> None:
@@ -178,8 +209,14 @@ def main():
     args = parse_args()
     image_cyx, channel_names = _read_multichannel_image(args.image)
     mask_yx = _read_label_mask(args.mask)
-    mean_rows, stats_rows = quantify(image_cyx, mask_yx, channel_names)
+    quant_rows, mean_rows, stats_rows = quantify(
+        image_cyx,
+        mask_yx,
+        channel_names,
+        mask_name=args.mask_name,
+    )
 
+    write_csv(args.out_quant_csv, quant_rows)
     write_csv(args.out_mean_csv, mean_rows)
     write_csv(args.out_stats_csv, stats_rows)
 
@@ -190,11 +227,12 @@ def main():
         "image_shape_cyx": list(map(int, image_cyx.shape)),
         "mask_shape_yx": list(map(int, mask_yx.shape)),
         "channel_names": channel_names,
-        "objects_quantified": len(mean_rows),
+        "objects_quantified": len(quant_rows),
+        "quantification_csv": str(Path(args.out_quant_csv).resolve()),
     }
     Path(args.out_summary_json).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(
-        f"[OK] quantified {len(mean_rows)} objects for mask={args.mask_name} "
+        f"[OK] quantified {len(quant_rows)} objects for mask={args.mask_name} "
         f"channels={len(channel_names)} image={args.image}"
     )
 

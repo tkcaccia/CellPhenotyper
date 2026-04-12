@@ -942,7 +942,7 @@ workflow.onComplete {
         [folder: '04_roi_mask',       title: 'Input ROI Mask',          expected: ['_input_roi_mask.tif', '_input_roi_mask_preview.png', '_input_roi_mask_labels.json']],
         [folder: '05_cell_assignments', title: 'Cell Assignment',       expected: ['_objects_assigned.csv']],
         [folder: '06_cytoplasm',      title: 'Cytoplasm Expansion',     expected: ['_labels_cyto.tif']],
-        [folder: '06_marker_quantification', title: 'Marker Quantification', expected: ['_gigatime_mean_intensity.csv', '_gigatime_intensity_stats.csv', '_gigatime_intensity_summary.json']],
+        [folder: '06_marker_quantification', title: 'Marker Quantification', expected: ['_gigatime_quantification.csv', '_gigatime_mean_intensity.csv', '_gigatime_intensity_stats.csv', '_gigatime_intensity_summary.json']],
         [folder: '07_embeddings',     title: 'UNI-2 Embeddings',        expected: ['embeddings_']],
         [folder: '08_kodama',         title: 'KODAMA',                  expected: ['kodama_output']],
         [folder: '08_kodama_logs',    title: 'KODAMA Logs',             expected: ['.Rout']],

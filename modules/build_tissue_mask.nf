@@ -2,7 +2,7 @@ process BUILD_TISSUE_MASK {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/03_tissue_mask/${sample_id}", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/03_tissue_mask/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.tissue_mask_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.tissue_mask_memory_gb as int))} GB" }

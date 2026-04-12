@@ -4,7 +4,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     label 'gpu_capable'
     maxForks 1
 
-    publishDir "${params.outdir_base}/07_embeddings/${sample_id}", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/07_embeddings/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus {
       def requested = Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int))

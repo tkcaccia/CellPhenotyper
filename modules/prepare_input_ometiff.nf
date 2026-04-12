@@ -2,7 +2,7 @@ process PREPARE_INPUT_OMETIFF {
     tag "${sample_id}"
     label 'io_heavy'
 
-    publishDir "${params.outdir_base}/01_input/${sample_id}", mode: 'copy', overwrite: true
+    publishDir "${params.outdir_base}/01_input/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.convert_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.convert_memory_gb as int))} GB" }

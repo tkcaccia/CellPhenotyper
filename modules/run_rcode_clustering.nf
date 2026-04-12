@@ -2,8 +2,8 @@ process RUN_RCODE_CLUSTERING {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/09_clustering/${sample_id}", mode: 'copy', overwrite: true
-    publishDir "${params.outdir_base}/09_clustering_logs/${sample_id}", mode: 'copy', overwrite: true, pattern: '*.Rout'
+    publishDir "${params.outdir_base}/09_clustering/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/09_clustering_logs/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: '*.Rout'
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.cluster_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.cluster_memory_gb as int))} GB" }

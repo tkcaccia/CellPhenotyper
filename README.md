@@ -125,6 +125,13 @@ PY
 
 Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted cache for both UNI-2 and GigaTIME.
 
+## Input ROI mask
+
+When an input ROI GeoJSON is present, the pipeline writes a crop-aligned mask to `04_roi_mask/<sample>/` using the same cropped ROI coordinates generated for StarDist. The mask preserves distinct annotation classes from the input GeoJSON whenever those labels are present in properties such as `classification.name`, and it also writes:
+
+- a colored preview overlay PNG
+- a JSON value-to-label map recording the class IDs used in the rasterized mask
+
 ## GigaTIME marker quantification
 
 When `--gigatime_enable true`, the pipeline now also quantifies the crop-aligned GigaTIME marker stack over:
@@ -134,12 +141,14 @@ When `--gigatime_enable true`, the pipeline now also quantifies the crop-aligned
 
 Outputs are written per sample to:
 
+- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_quantification.csv`
 - `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv`
 - `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv`
+- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_quantification.csv`
 - `06_marker_quantification/<sample>/<sample>_cyto_gigatime_mean_intensity.csv`
 - `06_marker_quantification/<sample>/<sample>_cyto_gigatime_intensity_stats.csv`
 
-The mean-intensity CSV is designed to be easy to reuse downstream in the same spirit as mcMicro-style single-cell quantification tables. The stats CSV additionally records per-marker sum and max values together with object area.
+The new `*_gigatime_quantification.csv` file is a wide per-object table in the same spirit as mcMicro-style single-cell quantification outputs: one row per label with area, centroid, bounding box, and per-marker mean/sum/max columns. The mean-intensity CSV remains convenient for lightweight downstream modeling, while the stats CSV preserves the explicit summary fields.
 
 ## Linux quick run
 
@@ -393,6 +402,8 @@ Final output:
 - `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_preview.png` if `ROI_B.geojson` was supplied
 - `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_labels.json` if `ROI_A.geojson` was supplied
 - `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_labels.json` if `ROI_B.geojson` was supplied
+- `results_example/06_marker_quantification/ROI_A/ROI_A_nuclei_gigatime_quantification.csv` if `--gigatime_enable true`
+- `results_example/06_marker_quantification/ROI_A/ROI_A_cyto_gigatime_quantification.csv` if `--gigatime_enable true`
 
 Execution report:
 
