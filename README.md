@@ -27,6 +27,14 @@ nextflow run main.nf
 
 If `Data/<sample>.geojson` is missing, CellPhenotyper automatically uses the full image as ROI for that sample.
 
+For CZI inputs with multiple scan regions, place the `.czi` file and the region-specific GeoJSON files in the same folder using the naming pattern:
+
+- `<image>.czi`
+- `<image>.czi - ScanRegion0.geojson`
+- `<image>.czi - ScanRegion1.geojson`
+
+CellPhenotyper resolves one pipeline sample per matching `ScanRegionN` GeoJSON, converts only that CZI region to TIFF, and keeps the region-specific ROI paired with the derived TIFF.
+
 ## Runtime behavior (automatic container selection)
 
 Use one profile per run:
@@ -44,27 +52,21 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
-Target tag layout for `v2.2`:
+Currently verified and published for `v2.2`:
 
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
 - Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
-- Docker GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
-- Docker multi-arch CPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2`
-- Docker multi-arch GPU convenience tag: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu`
-- Singularity CPU amd64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
-- Singularity CPU arm64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
-- Singularity GPU amd64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64`
-- Singularity GPU arm64 ORAS tag: `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
-- Legacy GitHub Release `.sif` assets remain supported when present, but large SIFs are now published to GHCR over `oras://` to avoid the 2 GiB GitHub Release asset limit.
+- Verified local/cluster SIF filenames:
+  - `cellphenotyper-2.2-amd64.sif`
+  - `cellphenotyper-2.2-gpu-amd64.sif`
 
-Verify actual published tags before instructing users to pull them:
+`arm64`, multi-arch convenience tags, and GHCR `oras://` SIF publication should be treated as pending until they are explicitly published and inspected.
+
+Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
 ## UNI-2 token setup (required)
@@ -246,7 +248,7 @@ mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
 source /scratch/<project>/tokens.env
 
 # 2) pull prebuilt SIF once (on a node with internet)
-apptainer pull -F "$SIF" oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64
+apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 
 # 3) predownload StarDist model and normalize to expected local folder
 curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
@@ -317,7 +319,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, automatic resolution is now: local `.sif` -> GHCR `oras://` SIF tag -> legacy release asset -> `docker://` fallback.
+- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 

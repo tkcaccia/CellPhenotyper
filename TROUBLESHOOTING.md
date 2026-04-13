@@ -219,6 +219,17 @@ singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif
   docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 ```
 
+If that direct pull is too slow, convert from the already-local Docker image instead:
+
+```bash
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker save -o /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker-archive:///scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
+rm -f /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
+```
+
 Then:
 
 ```bash
