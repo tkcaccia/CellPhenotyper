@@ -24,6 +24,16 @@ process RUN_KODAMA_ANALYSIS {
 
     mkdir -p kodama_output
 
+    Rscript - <<'RS'
+    required_pkgs <- c("KODAMA", "KODAMAextra", "SPARK", "data.table", "irlba", "umap", "bluster")
+    missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
+    if (length(missing_pkgs) > 0L) {
+      stop(sprintf("Container is missing required R packages: %s", paste(missing_pkgs, collapse = ", ")))
+    }
+    cat(sprintf("[INFO] KODAMA runtime packages OK: %s\n", paste(required_pkgs, collapse = ",")))
+    cat(sprintf("[INFO] R library paths: %s\n", paste(.libPaths(), collapse = " | ")))
+    RS
+
     {
       Rscript "${r_loader_script}" \\
         "${tile_embeddings_dir}" \\

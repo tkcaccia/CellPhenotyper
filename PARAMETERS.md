@@ -22,8 +22,8 @@ nextflow run main.nf -profile singularity \
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `folder_input` | `null` | Input folder for multi-sample mode. Supported image extensions: `.ome.tif`, `.ome.tiff`, `.btf`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`. |
-| `image_input` | `null` | Single-sample input image (`.ome.tif` or `.btf`). Ignored when `folder_input` is set. |
+| `folder_input` | `null` | Input folder for multi-sample mode. Supported image extensions: `.ome.tif`, `.ome.tiff`, `.btf`, `.czi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.vms`, `.vmu`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`. |
+| `image_input` | `null` | Single-sample input image. Supports `.ome.tif`, `.ome.tiff`, `.btf`, `.czi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.vms`, `.vmu`, `.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`. Ignored when `folder_input` is set. |
 | `roi_geojson` | `null` | Single-sample ROI GeoJSON path. Ignored when `folder_input` is set. |
 | `outdir_base` | `results` | Base output directory. |
 | `run_full_pipeline` | `true` | Run complete workflow including UNI-2 and KODAMA. |
@@ -70,8 +70,9 @@ nextflow run main.nf -profile singularity \
 
 ROI resolution rules:
 - In `folder_input` mode, each image `<sample>.<supported_extension>` uses `<sample>.geojson` if present in the same folder.
+- For multi-region CZI inputs, use region-specific ROI files named `<image>.czi - ScanRegionN.geojson`; the pipeline resolves one sample per matching region and converts only that region to TIFF.
 - If `<sample>.geojson` is missing, the ROI defaults to the full image.
-- In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated.
+- In single-sample mode, `--roi_geojson` is optional; if omitted, `<image_root>.geojson` is searched next to `image_input`, otherwise full-image ROI is generated. For CZI, `--roi_geojson` may also be a region-specific file such as `<image>.czi - ScanRegion0.geojson`.
 
 GPU run notes:
 - amd64: use `--compute_device gpu --host_arch amd64`.

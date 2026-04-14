@@ -108,7 +108,7 @@ kodama_n_cores: 4
 
 # Clustering defaults (Louvain on KODAMA embedding)
 cluster_kodama_dim: 20
-cluster_snn_k: 50
+cluster_snn_k: 30
 cluster_resolution: auto
 
 # Cluster mask preview (overlay on crop_roi.tif)

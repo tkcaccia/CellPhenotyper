@@ -9,7 +9,7 @@ process PREPARE_INPUT_OMETIFF {
     time { params.convert_time as String }
 
     input:
-    tuple val(sample_id), path(image_file)
+    tuple val(sample_id), path(image_file), val(input_region)
 
     output:
     tuple val(sample_id), path("${sample_id}.ome.tif"), emit: ome_tif
@@ -32,6 +32,25 @@ process PREPARE_INPUT_OMETIFF {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
+
+    if [[ "${image_name}" == *.czi ]]; then
+      export CONVERT_PYDEPS="\$PWD/.pydeps"
+      mkdir -p "\$CONVERT_PYDEPS"
+      python - <<'PY'
+import importlib.util
+import os
+import subprocess
+import sys
+
+mods = ['aicsimageio', 'aicspylibczi']
+missing = [m for m in mods if importlib.util.find_spec(m) is None]
+if missing:
+    target = os.environ['CONVERT_PYDEPS']
+    print(f"[INFO] Installing missing CZI conversion packages: {', '.join(missing)}")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--target', target, *missing])
+PY
+      export PYTHONPATH="\$CONVERT_PYDEPS:\${PYTHONPATH:-}"
+    fi
 
     if [[ -s "${sample_id}.ome.tif" ]]; then
       echo "[SKIP] Existing non-empty output: ${sample_id}.ome.tif"
@@ -67,6 +86,7 @@ process PREPARE_INPUT_OMETIFF {
     python "${generic_converter_script}" \
       --input "${image_file}" \
       --output "${sample_id}.ome.tif" \
+      --input-region "${input_region}" \
       --compression "${params.convert_compression}" \
       --quality ${params.convert_jpeg_quality} \
       ${params.convert_pyramid ? '--pyramid' : ''} \
@@ -74,7 +94,7 @@ process PREPARE_INPUT_OMETIFF {
     exit 0
 
     echo "Unsupported input image format: ${image_file}" >&2
-    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .svs, .ndpi, .scn, .mrxs, .vms, .vmu, .tif, .tiff, .png, .jpg, .jpeg" >&2
+    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .czi, .svs, .ndpi, .scn, .mrxs, .vms, .vmu, .tif, .tiff, .png, .jpg, .jpeg" >&2
     exit 2
     """
 

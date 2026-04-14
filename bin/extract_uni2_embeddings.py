@@ -13,6 +13,7 @@ FIX in this version:
 """
 
 import argparse
+import json
 import os
 import sys
 import math
@@ -122,6 +123,36 @@ def _hf_offline_enabled() -> bool:
     return _env_flag("HF_HUB_OFFLINE", False) or _env_flag("TRANSFORMERS_OFFLINE", False)
 
 
+def _load_hf_repo_config(repo_id: str, local_files_only: bool = False) -> Dict[str, Any]:
+    from huggingface_hub import hf_hub_download
+
+    cfg_path = hf_hub_download(
+        repo_id=repo_id,
+        filename="config.json",
+        local_files_only=local_files_only,
+    )
+    with open(cfg_path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _create_timm_model_from_repo_config(repo_id: str, timm_kwargs: Dict[str, Any], local_files_only: bool = False):
+    import timm
+
+    repo_cfg = _load_hf_repo_config(repo_id, local_files_only=local_files_only)
+    architecture = repo_cfg.get("architecture")
+    if not architecture:
+        raise RuntimeError(f"HF repo config for '{repo_id}' does not define an architecture")
+
+    model = timm.create_model(architecture, pretrained=False, **timm_kwargs)
+    repo_pretrained_cfg = repo_cfg.get("pretrained_cfg") or {}
+    if repo_pretrained_cfg:
+        base_cfg = getattr(model, "pretrained_cfg", {}) or {}
+        merged_cfg = dict(base_cfg)
+        merged_cfg.update(repo_pretrained_cfg)
+        model.pretrained_cfg = merged_cfg
+    return model
+
+
 def _load_timm_hf_legacy_checkpoint(model: Any, repo_id: str, local_files_only: bool = False) -> Any:
     from huggingface_hub import hf_hub_download
 
@@ -217,7 +248,7 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
     # In strict offline mode, avoid timm's remote resolution path.
     if repo_id and _hf_offline_enabled():
         print(f"[INFO] HF offline mode enabled; loading '{repo_id}' from local cache only.", file=sys.stderr)
-        model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
+        model = _create_timm_model_from_repo_config(repo_id, timm_kwargs, local_files_only=True)
         return _load_timm_hf_checkpoint(model, repo_id, local_files_only=True)
 
     try:
@@ -244,16 +275,16 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
                         f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
                         file=sys.stderr,
                     )
-                    model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-                    return _load_timm_hf_checkpoint(model, repo_id)
+                    model = _create_timm_model_from_repo_config(repo_id, timm_kwargs, local_files_only=_hf_offline_enabled())
+                    return _load_timm_hf_checkpoint(model, repo_id, local_files_only=_hf_offline_enabled())
                 raise
         if repo_id and legacy_weights_msg in msg and legacy_tar_msg in msg:
             print(
                 f"[WARN] Falling back to legacy checkpoint load for '{repo_id}'.",
                 file=sys.stderr,
             )
-            model = timm.create_model(enc_id, pretrained=False, **timm_kwargs)
-            return _load_timm_hf_checkpoint(model, repo_id)
+            model = _create_timm_model_from_repo_config(repo_id, timm_kwargs, local_files_only=_hf_offline_enabled())
+            return _load_timm_hf_checkpoint(model, repo_id, local_files_only=_hf_offline_enabled())
         raise
 
 

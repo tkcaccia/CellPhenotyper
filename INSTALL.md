@@ -173,28 +173,45 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. For Singularity, the default is release-hosted `.sif` auto-selection.
+Use published runtime images. For now, the verified `v2.2` artifacts are the `amd64` CPU and `amd64` GPU Docker tags, plus locally created SIFs built from those tags.
+
+Container rule:
+
+- CellPhenotyper is intended to run from a self-contained Docker/Singularity image.
+- Do not depend on host Python environments, host `R_LIBS_USER`, or task-local package installs for normal runs.
+- After building a custom image, validate the runtime stack before launching Nextflow.
 
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
 - GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
-- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
 
-Reference Singularity assets (GitHub release `v2.2`):
+Reference Singularity filenames built from those tags:
 
 - `cellphenotyper-2.2-amd64.sif`
-- `cellphenotyper-2.2-arm64.sif`
 - `cellphenotyper-2.2-gpu-amd64.sif`
-- `cellphenotyper-2.2-gpu-arm64.sif` (optional)
+
+Treat `arm64`, multi-arch convenience tags, and GHCR `oras://` SIF references as pending until they are explicitly published and validated.
+
+Recommended validation after building a custom GPU image:
+
+```bash
+docker run --rm <image> \
+  Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R packages OK\n")'
+
+docker run --rm -i --gpus all <image> python - <<'PY'
+import torch, tensorflow as tf
+print("torch", torch.__version__, torch.version.cuda, torch.backends.cuda.is_built(), torch.cuda.is_available(), torch.cuda.device_count())
+print("tf", tf.__version__, tf.test.is_built_with_cuda(), len(tf.config.list_physical_devices("GPU")))
+PY
+```
 
 ## Step 6-S (Singularity/Apptainer via Nextflow)
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
-Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`
-(local `.sif` first, then GHCR `oras://` SIF tags, then legacy release assets, then `docker://`; on arm64 GPU runs, missing GPU assets fall back to CPU containers).
+Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`.
+For a stable `v2.2` run today, prefer a manually specified local `.sif` created from the verified Docker tag.
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
@@ -205,12 +222,14 @@ Default automatic runtime settings in `pipeline_paramers.yml`:
 To force a specific manual image, set:
 
 - `runtime_image_mode: manual`
-- `singularity_image: https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/cellphenotyper-2.2-amd64.sif` (example)
+- `singularity_image: /path/to/cellphenotyper-2.2-amd64.sif` (example)
 
-To force the prebuilt GHCR SIF directly, set:
+Build the SIF locally from GHCR:
 
-- `runtime_image_mode: manual`
-- `singularity_image: oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64` (example)
+```bash
+apptainer pull -F /path/to/cellphenotyper-2.2-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+```
 
 To force docker:// fallback instead of ORAS/release assets in auto mode:
 
@@ -230,16 +249,12 @@ Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
 Use:
 - `2.2-amd64` on Linux x86_64/amd64
-- `2.2-arm64` on arm64
 - `2.2-gpu-amd64` on Linux amd64 with NVIDIA
-- `2.2-gpu-arm64` on Linux arm64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
