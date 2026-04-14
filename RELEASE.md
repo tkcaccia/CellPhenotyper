@@ -10,11 +10,14 @@ Current default branch:
 
 - `main`
 
-Target runtime tags for `v2.2`:
+Verified Docker tags for the current `v2.2` runtime validation:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
 - GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+
+Planned/target tag layout for `v2.2` releases:
+
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
 - GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
 
 Runtime dependency note:
@@ -25,7 +28,7 @@ Runtime dependency note:
 - `Nextflow` still launches on the host and therefore still needs a host-side Java 17+ runtime even when every pipeline tool runs inside Docker or Singularity.
 - Internal tissue masks should be written as plain compressed TIFFs, not pyramidal TIFFs, because downstream `tifffile` readers must be able to reopen them reliably during `GROW_TO_TISSUE`.
 
-Target Singularity assets for release `v2.2`:
+Expected Singularity filenames for release `v2.2` when built or uploaded:
 
 - `cellphenotyper-2.2-amd64.sif`
 - `cellphenotyper-2.2-arm64.sif`
@@ -35,6 +38,7 @@ Target Singularity assets for release `v2.2`:
 Operational notes:
 
 - GPU SIF files can be large; if GitHub Release asset upload limits are hit, keep Docker images on GHCR as authoritative source and document manual pre-pull + `runtime_image_mode: manual`.
+- For the currently validated amd64 CPU/GPU path, the stable workflow is `docker://ghcr.io/tkcaccia/cellphenotyper:<tag>` -> local `apptainer pull`/`singularity pull` -> manual `--singularity_image`.
 - For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
 - Verify GHCR/ORAS availability before telling users to pull a `2.2` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.
 
