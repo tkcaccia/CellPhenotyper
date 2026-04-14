@@ -7,14 +7,14 @@ kodama_dir <- args[1]
 out_csv <- args[2]
 
 selected_file_dim <- 20L
-requested_k <- 50L
+requested_k <- 30L
 resolution_mode <- "auto"
-fixed_resolution <- 0.03
-resolution_grid <- c(0.005, 0.01, 0.02, 0.03, 0.04, 0.05)
-score_margin <- 0.015
+fixed_resolution <- 0.05
+resolution_grid <- c(0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08)
+score_margin <- 0.02
 silhouette_max_cells <- 4000L
-merge_min_size_fraction <- 0.01
-merge_min_size_floor <- 15L
+merge_min_size_fraction <- 0.0075
+merge_min_size_floor <- 10L
 
 if (length(args) > 2L) {
   i <- 3L
@@ -199,7 +199,7 @@ run_louvain <- function(graph_obj, resolution_value) {
 }
 
 preferred_cluster_cap <- function(n_cells) {
-  max(4L, min(25L, as.integer(round(sqrt(max(1L, n_cells)) * 0.75))))
+  max(6L, min(40L, as.integer(round(sqrt(max(1L, n_cells)) * 1.1))))
 }
 
 picked <- {
@@ -237,10 +237,10 @@ if (resolution_mode == "auto") {
     over_cap <- max(0L, out$raw_cluster_count - cluster_cap)
     out$score <- sil_term +
       0.20 * out$modularity -
-      0.08 * out$raw_cluster_count -
-      0.60 * out$tiny_fraction -
-      0.05 * out$tiny_count -
-      0.12 * over_cap
+      0.05 * out$raw_cluster_count -
+      0.45 * out$tiny_fraction -
+      0.03 * out$tiny_count -
+      0.06 * over_cap
     out$cluster_cap <- cluster_cap
     out
   })

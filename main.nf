@@ -428,6 +428,7 @@ workflow {
         [suffix: '.ome.tif',  priority: 80],
         [suffix: '.ome.tiff', priority: 75],
         [suffix: '.btf',      priority: 70],
+        [suffix: '.czi',      priority: 69],
         [suffix: '.svs',      priority: 68],
         [suffix: '.ndpi',     priority: 67],
         [suffix: '.scn',      priority: 66],
@@ -461,6 +462,28 @@ workflow {
         }
         def dot = name.lastIndexOf('.')
         dot > 0 ? name.substring(0, dot) : name
+    }
+
+    def extractCziRegionLabel = { String rawName ->
+        def matcher = ((rawName ?: '') =~ /(?i)(ScanRegion\d+)/)
+        matcher.find() ? matcher.group(1) : ''
+    }
+
+    def extractCziRegionOrder = { String rawName ->
+        def matcher = ((rawName ?: '') =~ /(?i)ScanRegion(\d+)/)
+        if (!matcher.find()) {
+            return Integer.MAX_VALUE
+        }
+        try {
+            return matcher.group(1).toInteger()
+        } catch (Throwable ignored) {
+            return Integer.MAX_VALUE
+        }
+    }
+
+    def buildSampleId = { imageFile, String regionLabel = '' ->
+        def baseId = deriveSampleId(imageFile)
+        regionLabel ? "${baseId}__${regionLabel}" : baseId
     }
 
     def folder_input = (params.folder_input ?: '').toString().trim()
@@ -505,10 +528,49 @@ workflow {
 
         sample_map.keySet().sort().each { sample_id ->
             def image_file = sample_map[sample_id].file as File
+            def suffix = detectImageSuffix(image_file.name)
+            if (suffix == '.czi') {
+                def czi_geojsons = []
+                input_dir.eachFile(FileType.FILES) { File roiFile ->
+                    if (!roiFile.name.toLowerCase().endsWith('.geojson')) {
+                        return
+                    }
+                    def matchesImagePrefix = roiFile.name.startsWith("${image_file.name} - ")
+                    if (!matchesImagePrefix) {
+                        return
+                    }
+                    def regionLabel = extractCziRegionLabel(roiFile.name)
+                    if (!regionLabel) {
+                        return
+                    }
+                    czi_geojsons << [file: roiFile, region: regionLabel, order: extractCziRegionOrder(roiFile.name)]
+                }
+
+                if (czi_geojsons) {
+                    czi_geojsons
+                        .sort { a, b -> (a.order as int) <=> (b.order as int) ?: (a.file.name as String) <=> (b.file.name as String) }
+                        .each { entry ->
+                            def roi_file = entry.file as File
+                            def region_label = entry.region as String
+                            def region_sample_id = buildSampleId(image_file, region_label)
+                            sample_rows << tuple(
+                                region_sample_id,
+                                file(image_file.absolutePath, checkIfExists: true),
+                                region_label,
+                                roi_file.name,
+                                roi_file.bytes.encodeBase64().toString()
+                            )
+                        }
+                    return
+                }
+
+                println "WARN: No region-specific ScanRegion GeoJSON files found for CZI input ${image_file.name}. The pipeline will treat it as a single sample."
+            }
+
             def roi_candidate = new File(input_dir, "${sample_id}.geojson")
             def roi_hint_name = roi_candidate.exists() ? roi_candidate.name : ''
             def roi_hint_b64 = roi_candidate.exists() ? roi_candidate.bytes.encodeBase64().toString() : ''
-            sample_rows << tuple(sample_id, file(image_file.absolutePath, checkIfExists: true), roi_hint_name, roi_hint_b64)
+            sample_rows << tuple(sample_id, file(image_file.absolutePath, checkIfExists: true), '', roi_hint_name, roi_hint_b64)
         }
     } else {
         if (!image_input_param) {
@@ -519,21 +581,32 @@ workflow {
         if (!single_suffix) {
             error "Unsupported image extension for --image_input '${image_file.name}'. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
         }
-        def sample_id = deriveSampleId(image_file)
+        def base_sample_id = deriveSampleId(image_file)
         def roi_hint_name = ''
         def roi_hint_b64 = ''
+        def input_region = ''
         if (roi_geojson_param) {
             def roi_file = file(roi_geojson_param, checkIfExists: true)
             roi_hint_name = roi_file.name
             roi_hint_b64 = roi_file.bytes.encodeBase64().toString()
+            if (single_suffix == '.czi') {
+                input_region = extractCziRegionLabel(roi_file.name)
+                if (!input_region) {
+                    println "WARN: --roi_geojson ${roi_file.name} does not contain a ScanRegion selector for CZI input ${image_file.name}."
+                }
+            }
         } else {
-            def roi_candidate = new File(image_file.parentFile, "${sample_id}.geojson")
+            def roi_candidate = new File(image_file.parentFile, "${base_sample_id}.geojson")
             if (roi_candidate.exists()) {
                 roi_hint_name = roi_candidate.name
                 roi_hint_b64 = roi_candidate.bytes.encodeBase64().toString()
+                if (single_suffix == '.czi') {
+                    input_region = extractCziRegionLabel(roi_candidate.name)
+                }
             }
         }
-        sample_rows << tuple(sample_id, image_file, roi_hint_name, roi_hint_b64)
+        def sample_id = buildSampleId(image_file, input_region)
+        sample_rows << tuple(sample_id, image_file, input_region, roi_hint_name, roi_hint_b64)
     }
 
     if (!sample_rows) {
@@ -545,13 +618,18 @@ workflow {
         .fromList(sample_rows)
         .set { input_spec_ch }
 
+    def convert_input_ch = input_spec_ch
+        .map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
+            tuple(sample_id, image_file, input_region ?: '')
+        }
+
     def image_input_ch = input_spec_ch
-        .map { sample_id, image_file, roi_hint_name, roi_hint_b64 ->
+        .map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
             tuple(sample_id, image_file)
         }
 
     def roi_hint_ch = input_spec_ch
-        .map { sample_id, image_file, roi_hint_name, roi_hint_b64 ->
+        .map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
             tuple(sample_id, roi_hint_name ?: '', roi_hint_b64 ?: '')
         }
     def roi_provided_ch = roi_hint_ch
@@ -561,10 +639,10 @@ workflow {
 
     def ome_tif_ch
     if (run_convert) {
-        PREPARE_INPUT_OMETIFF(image_input_ch)
+        PREPARE_INPUT_OMETIFF(convert_input_ch)
         ome_tif_ch = PREPARE_INPUT_OMETIFF.out.ome_tif
     } else {
-        ome_tif_ch = image_input_ch.map { sample_id, image_file ->
+        ome_tif_ch = convert_input_ch.map { sample_id, image_file, input_region ->
             def is_ome = image_file.name.toLowerCase().endsWith('.ome.tif')
             def ome_tif = is_ome
                 ? image_file

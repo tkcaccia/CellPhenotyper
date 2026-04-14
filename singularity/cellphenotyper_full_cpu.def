@@ -101,13 +101,14 @@ PY
   micromamba install -y -n stardist \
     -c conda-forge -c bioconda --channel-priority strict \
     rasterio affine \
-    r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
+    r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph r-umap \
     bioconductor-bluster
 
   # Bioconductor / GitHub packages
   micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'
   micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")'
   micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")'
+  micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\n")'
 
   micromamba clean -a -y
 

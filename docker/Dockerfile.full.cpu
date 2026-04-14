@@ -46,7 +46,7 @@ RUN set -euo pipefail && \
     if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then \
       micromamba run -n stardist pip install --no-cache-dir "imagecodecs<2025" ; \
     fi && \
-    micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python && \
+    micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi && \
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \
@@ -59,12 +59,13 @@ RUN set -euo pipefail && \
     done && \
     micromamba install -y -n stardist \
       -c conda-forge -c bioconda --channel-priority strict \
-      r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph \
+      r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph r-umap \
       bioconductor-bluster && \
-    micromamba run -n stardist python -c "import importlib; mods=['tensorflow','stardist','csbdeep','torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
+    micromamba run -n stardist python -c "import importlib; mods=['tensorflow','stardist','csbdeep','torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide','aicsimageio','aicspylibczi']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \
+    micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\\n")' && \
     micromamba clean -a -y
 
 WORKDIR /opt/cellphenotyper

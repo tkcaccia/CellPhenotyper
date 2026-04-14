@@ -71,6 +71,36 @@ export NXF_HOME=/var/tmp/nextflow_home
 mkdir -p "$NXF_HOME"
 ```
 
+## 3b) Nextflow fails after a restart because Java comes from conda
+
+Symptoms:
+
+- `Nextflow` starts with the wrong `JAVA_HOME`
+- Java 11 from `miniconda3` is picked up
+- resume attempts fail even though the container itself is correct
+
+Cause: `Nextflow` runs on the host, not inside the Singularity image. A conda `base`
+environment can override `JAVA_HOME` and `PATH` with an incompatible host Java.
+
+Fix: launch `Nextflow` with a system Java 17+ explicitly.
+
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export PATH="$JAVA_HOME/bin:$PATH"
+unset JAVA_CMD JAVA_LD_LIBRARY_PATH
+java -version
+nextflow -version
+```
+
+If a previous run was killed abruptly, also verify the session lock is stale before deleting it:
+
+```bash
+lsof .nextflow/cache/*/db/LOCK
+ps aux | grep -E 'nextflow|java' | grep -v grep
+```
+
+Only remove the lock if no live `Nextflow`/`java` process is still using it.
+
 ## 4) StarDist model download times out
 
 Error:
@@ -96,6 +126,29 @@ Run pipeline with:
 --stardist_keras_home /scratch/<project>/keras \
 --stardist_pretrained_zip /scratch/<project>/keras/models/python_2D_versatile_he.zip
 ```
+
+## 4b) `GROW_TO_TISSUE` fails with `tifffile.TiffFileError: missing data offset`
+
+Error:
+
+```text
+TiffFileError: missing data offset
+```
+
+Cause: an internal tissue mask written as a pyramidal TIFF can be unreadable for
+later `tifffile`-based steps, especially on small crops.
+
+Fix:
+
+- Use the current pipeline version, where `bin/build_tissue_mask.py` writes a
+  standard compressed TIFF for the intermediate tissue mask.
+- If recovering a partially completed run, regenerate the failed tissue mask in
+  its work directory and then rerun with `-resume`.
+
+Why this is safe:
+
+- the tissue mask is an internal pipeline artifact
+- downstream reliability matters more than pyramidal storage for this file
 
 ## 5) UNI-2 fails with 401 / gated model
 
@@ -217,6 +270,91 @@ Fix: pre-pull manually once, then run in manual mode.
 ```bash
 singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
   docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+```
+
+## 9) Image builds "successfully" but KODAMA is still missing at runtime
+
+Symptom:
+
+```text
+Error in library(KODAMA) : there is no package called ‘KODAMA’
+```
+
+Cause:
+
+- The container dependency layer did not actually contain the full R stack.
+- A previous cached Docker layer can hide this problem and make the build appear successful.
+
+Required rule:
+
+- Do not rely on host `R_LIBS_USER`, host Python environments, or task-local package bootstrapping for normal runs.
+- The Docker/Singularity image itself must contain `KODAMA`, `KODAMAextra`, `SPARK`, `umap`, and the rest of the runtime stack.
+
+Fix:
+
+1. Ensure the container recipes install and validate the full R runtime:
+
+```bash
+micromamba install -y -n stardist \
+  -c conda-forge -c bioconda --channel-priority strict \
+  r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph r-umap \
+  bioconductor-bluster
+
+micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'
+micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")'
+micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")'
+micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\n")'
+```
+
+2. Keep the Nextflow KODAMA step as a validator, not an installer. It should fail clearly if the container is incomplete.
+
+Quick check on a finished image:
+
+```bash
+docker run --rm <image> \
+  Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R packages OK\n")'
+```
+
+## 10) Docker dependency changes do not show up because the build reused an old layer
+
+Symptom:
+
+- You edit `docker/Dockerfile.full.cpu` or `docker/Dockerfile.full.gpu`.
+- The next image build finishes quickly.
+- Runtime behavior still matches the older image.
+
+Cause:
+
+- Docker reused a previously cached dependency layer.
+
+Fix:
+
+Use a forced rebuild when changing the dependency/install layer:
+
+```bash
+docker build --no-cache --pull \
+  -f docker/Dockerfile.full.gpu \
+  -t cellphenotyper:2.2-gpu-amd64-fresh .
+```
+
+If needed, verify the image immediately after build:
+
+```bash
+docker run --rm cellphenotyper:2.2-gpu-amd64-fresh \
+  Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R packages OK\n")'
+```
+
+Do not assume a "successful" build is valid until these runtime checks pass.
+
+If that direct pull is too slow, convert from the already-local Docker image instead:
+
+```bash
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker save -o /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker-archive:///scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
+rm -f /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
 ```
 
 Then:

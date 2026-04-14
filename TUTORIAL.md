@@ -123,6 +123,7 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
 - Multi-image input folder: `folder_input` in `pipeline_paramers.yml` (example: `Data`)
 - Single-image mode (optional): `image_input` + optional `roi_geojson`
 - If a `<sample>.geojson` file is missing, the full image is used as ROI.
+- For CZI with multiple scan regions, place `<image>.czi` beside region-specific ROI files such as `<image>.czi - ScanRegion0.geojson`; the pipeline will create one sample per matching region.
 
 ## Endpoint
 
@@ -236,6 +237,17 @@ If singularity pull is slow or appears stuck, pre-pull once to monitor progress:
 ```bash
 singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
   docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+```
+
+If Docker already has the image locally, converting from a local archive avoids a second large registry download:
+
+```bash
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker save -o /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar \
+  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+singularity pull /scratch/<project>/singularity/cellphenotyper-2.2-gpu-amd64.sif \
+  docker-archive:///scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
+rm -f /scratch/<project>/cellphenotyper-2.2-gpu-amd64.tar
 ```
 
 Then run in manual image mode:

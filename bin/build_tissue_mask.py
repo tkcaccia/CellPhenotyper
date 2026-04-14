@@ -101,43 +101,49 @@ def build_tissue_mask(image: np.ndarray,
 
     return mask.astype(bool)
 
-def write_pyramidal_tiff(mask: np.ndarray,
-                         out_tif: str,
-                         tile: int,
-                         compression: str,
-                         bigtiff: bool):
+def write_mask_tiff(mask: np.ndarray,
+                    out_tif: str,
+                    tile: int,
+                    compression: str,
+                    bigtiff: bool):
     """
-    Writes a *tiled pyramidal* TIFF using pyvips (best for WSI-style pyramids).
+    Write a compressed TIFF that tifffile can reopen reliably.
+
+    This mask is an internal pipeline artifact that is consumed by later
+    tifffile-based steps. Reliability matters more than pyramidal storage.
+    Keep ``tile`` in the signature for CLI compatibility even though it is not
+    used by the plain TIFF writer.
     """
     out_dir = os.path.dirname(out_tif)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     u8 = (mask.astype(np.uint8) * 255)
+    _ = tile
 
-    try:
-        import pyvips
+    from tifffile import imread, imwrite
 
-        h, w = u8.shape
-        img = pyvips.Image.new_from_memory(u8.tobytes(), w, h, 1, format="uchar")
-        img.tiffsave(
-            out_tif,
-            tile=True,
-            tile_width=tile,
-            tile_height=tile,
-            pyramid=True,
-            bigtiff=bigtiff,
-            compression=compression,
-            predictor=True,
+    imwrite(
+        out_tif,
+        u8,
+        compression=compression,
+        bigtiff=bool(bigtiff),
+        photometric="minisblack",
+        metadata=None,
+    )
+
+    check = imread(out_tif)
+    if isinstance(check, list):
+        check = check[0]
+    if tuple(check.shape[:2]) != tuple(u8.shape[:2]):
+        raise RuntimeError(
+            f"Tissue mask sanity check failed for {out_tif}: "
+            f"expected {u8.shape}, got {getattr(check, 'shape', None)}"
         )
-    except Exception:
-        # Fallback for environments without libvips/pyvips support.
-        from tifffile import imwrite
-        imwrite(out_tif, u8, compression=compression)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True, help="Input RGB TIFF (cropped ROI)")
-    ap.add_argument("--out-mask", required=True, help="Output pyramidal mask TIFF")
+    ap.add_argument("--out-mask", required=True, help="Output tissue mask TIFF")
     ap.add_argument("--preview", default=None, help="Optional preview PNG")
     ap.add_argument("--preview-factor", type=int, default=10)
     ap.add_argument("--work-downsample", type=int, default=8,
@@ -197,8 +203,8 @@ def main():
     if args.preview:
         save_preview(mask, args.preview, factor=args.preview_factor)
 
-    # Write pyramidal, tiled, compressed TIFF
-    write_pyramidal_tiff(
+    # Write a compressed TIFF that downstream tifffile readers can reopen.
+    write_mask_tiff(
         mask,
         args.out_mask,
         tile=args.tile,

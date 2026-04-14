@@ -81,6 +81,7 @@ library(KODAMAextra)
 library(SPARK)
 library(data.table)
 library(irlba)
+library(umap)
 
 if (!file.exists(rawdata_path)) {
   stop(paste("Raw data RData does not exist:", rawdata_path))
@@ -317,7 +318,7 @@ dev.off()
 pca_rdata <- file.path(output_dir, paste0("pca_full_", ncol(pca), ".RData"))
 save(pca, xy, file = pca_rdata)
 
-u <- umap(pca)$layout
+u <- umap::umap(pca)$layout
 rownames(u) <- common_ids
 umap_pdf <- file.path(output_dir, paste0("umap_full_", ncol(pca), ".pdf"))
 pdf(umap_pdf)
@@ -348,7 +349,7 @@ jj <- KODAMA.matrix(
   ancestry = FALSE
 )
 
-config <- umap.defaults
+config <- umap::umap.defaults
 config$n_neighbors <- min(30L, nrow(pca) - 1L)
 config$n_threads <- as.integer(n_cores)
 vis <- KODAMA.visualization(jj, config = config)
