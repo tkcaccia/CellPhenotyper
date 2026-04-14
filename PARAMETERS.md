@@ -132,7 +132,7 @@ GPU run notes:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `gigatime_enable` | `false` | Enable the crop-image GigaTIME virtual mIF stage after StarDist. |
+| `gigatime_enable` | `true` | Enable the crop-image GigaTIME virtual mIF stage after StarDist. Set to `false` only when you intentionally want to skip both GigaTIME inference and the downstream marker quantification outputs. |
 | `gigatime_repo_id` | `prov-gigatime/GigaTIME` | Hugging Face repo used for model weights. |
 | `gigatime_hf_token_env_var_name` | `HF_GIGATIME` | Preferred environment variable name for the GigaTIME token. The workflow also falls back to `HF_TOKEN` and `HF_UNI2`. |
 | `gigatime_page` | `0` | TIFF page index used as the crop-image source. |

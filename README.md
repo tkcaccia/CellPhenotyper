@@ -137,7 +137,7 @@ When an input ROI GeoJSON is present, the pipeline writes a crop-aligned mask to
 
 ## GigaTIME marker quantification
 
-When `--gigatime_enable true`, the pipeline now also quantifies the crop-aligned GigaTIME marker stack over:
+GigaTIME is enabled by default, so the pipeline also quantifies the crop-aligned GigaTIME marker stack over:
 
 - StarDist nuclei labels
 - expanded cytoplasm labels
@@ -405,8 +405,8 @@ Final output:
 - `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_preview.png` if `ROI_B.geojson` was supplied
 - `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_labels.json` if `ROI_A.geojson` was supplied
 - `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_labels.json` if `ROI_B.geojson` was supplied
-- `results_example/06_marker_quantification/ROI_A/ROI_A_nuclei_gigatime_quantification.csv` if `--gigatime_enable true`
-- `results_example/06_marker_quantification/ROI_A/ROI_A_cyto_gigatime_quantification.csv` if `--gigatime_enable true`
+- `results_example/06_marker_quantification/ROI_A/ROI_A_nuclei_gigatime_quantification.csv`
+- `results_example/06_marker_quantification/ROI_A/ROI_A_cyto_gigatime_quantification.csv`
 
 Execution report:
 

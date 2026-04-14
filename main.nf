@@ -413,6 +413,12 @@ workflow {
     def run_cluster_mask = should_run_stage('cluster_mask')
     def run_grow_tissue = should_run_stage('grow_tissue')
     def run_cluster_geojson = should_run_stage('cluster_geojson')
+    if (should_run_stage('gigatime') && !gigatime_enabled) {
+        log.warn "GigaTIME stage is within the requested stage window but gigatime_enable=false, so GigaTIME outputs will be skipped."
+    }
+    if (should_run_stage('marker_quantification') && marker_quantification_enabled && !gigatime_enabled) {
+        log.warn "marker_quantification_enable=true but gigatime_enable=false. Marker quantification requires the GigaTIME marker stack and will be skipped."
+    }
     def include_uni2_nuclei = params.uni2_include_nuclei == null ? true : (params.uni2_include_nuclei as boolean)
     def include_uni2_cyto = params.uni2_include_cyto == null ? true : (params.uni2_include_cyto as boolean)
     def include_uni2_inner_square = params.uni2_include_inner_square == null ? true : (params.uni2_include_inner_square as boolean)
