@@ -174,6 +174,7 @@ cd CellPhenotyper
 ## Step 6: Configure runtime image source
 
 Use published runtime images. For now, the verified `v2.2` artifacts are the `amd64` CPU and `amd64` GPU Docker tags, plus locally created SIFs built from those tags.
+The current amd64 SIF builds are larger than ordinary GitHub release asset limits, so prefer local `apptainer pull` / `singularity pull` from the verified Docker tags.
 
 Container rule:
 

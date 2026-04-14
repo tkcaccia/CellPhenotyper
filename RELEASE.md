@@ -37,7 +37,12 @@ Expected Singularity filenames for release `v2.2` when built or uploaded:
 
 Operational notes:
 
-- GPU SIF files can be large; if GitHub Release asset upload limits are hit, keep Docker images on GHCR as authoritative source and document manual pre-pull + `runtime_image_mode: manual`.
+- Current amd64 SIF builds are too large for reliable GitHub Release asset distribution:
+  - `cellphenotyper-2.2-amd64.sif` is approximately `2.6G`
+  - `cellphenotyper-2.2-gpu-amd64.sif` is approximately `6.6G`
+- Therefore, GHCR Docker images remain the authoritative amd64 release artifacts, and amd64 SIF usage should be documented as:
+  - local `apptainer pull` / `singularity pull` from `docker://...`
+  - or registry-backed `oras://` publication when available
 - For the currently validated amd64 CPU/GPU path, the stable workflow is `docker://ghcr.io/tkcaccia/cellphenotyper:<tag>` -> local `apptainer pull`/`singularity pull` -> manual `--singularity_image`.
 - For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
 - Verify GHCR/ORAS availability before telling users to pull a `2.2` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.

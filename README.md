@@ -61,6 +61,7 @@ Currently verified and published for `v2.2`:
   - `cellphenotyper-2.2-gpu-amd64.sif`
 
 `arm64`, multi-arch convenience tags, and GHCR `oras://` SIF publication should be treated as pending until they are explicitly published and inspected.
+The currently built amd64 SIF files are too large for ordinary GitHub release assets, so the stable amd64 Singularity workflow is still local `apptainer pull` / `singularity pull` from the verified Docker tags.
 
 Verify actual published Docker tags before instructing users to pull them:
 
