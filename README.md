@@ -52,13 +52,13 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
-Currently verified and published for `v2.2`:
+Currently verified and published for `v2.3`:
 
-- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
+- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
 - Verified local/cluster SIF filenames:
-  - `cellphenotyper-2.2-amd64.sif`
-  - `cellphenotyper-2.2-gpu-amd64.sif`
+  - `cellphenotyper-2.3-amd64.sif`
+  - `cellphenotyper-2.3-gpu-amd64.sif`
 
 `arm64`, multi-arch convenience tags, and GHCR `oras://` SIF publication should be treated as pending until they are explicitly published and inspected.
 The currently built amd64 SIF files are too large for ordinary GitHub release assets, so the stable amd64 Singularity workflow is still local `apptainer pull` / `singularity pull` from the verified Docker tags.
@@ -66,8 +66,8 @@ The currently built amd64 SIF files are too large for ordinary GitHub release as
 Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
 ```
 
 ## UNI-2 token setup (required)
@@ -205,7 +205,7 @@ nextflow run main.nf \
   --compute_device gpu \
   --host_arch amd64 \
   --runtime_image_mode manual \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```
@@ -242,14 +242,14 @@ export SIF_DIR=$BASE/singularity
 export KERAS_HOME=$BASE/keras
 export HF_HOME=$BASE/hf
 export HF_HUB_CACHE=$HF_HOME/hub
-export SIF=$SIF_DIR/cellphenotyper-2.2-amd64.sif
+export SIF=$SIF_DIR/cellphenotyper-2.3-amd64.sif
 mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
 
 # 1) token file must define HF_TOKEN=...
 source /scratch/<project>/tokens.env
 
 # 2) pull prebuilt SIF once (on a node with internet)
-apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
 
 # 3) predownload StarDist model and normalize to expected local folder
 curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
@@ -320,7 +320,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`.
+- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.3-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
@@ -335,7 +335,7 @@ nextflow run main.nf \
   --enable_gpu_on_arm64 true
 ```
 
-Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v2.2` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
+Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v2.3` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
 
 Rerun only `10_cluster_mask` and `11_grown_tissue`:
 
@@ -433,7 +433,7 @@ Minimal Docker publish example:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="2.2-amd64"
+export TAG="2.3-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .

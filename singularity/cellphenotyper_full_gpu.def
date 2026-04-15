@@ -6,6 +6,11 @@ From: ubuntu:22.04
 
 %post
   set -e
+  mkdir -p /opt/cellphenotyper/third_party
+  git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM
+  mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM
+  wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1"
+  chmod -R a+rX /opt/cellphenotyper/third_party/MedSAM
   export DEBIAN_FRONTEND=noninteractive
 
   apt-get update && apt-get install -y --no-install-recommends \
@@ -126,6 +131,8 @@ PY
   export MAMBA_ROOT_PREFIX=/opt/micromamba
   export PATH=/opt/micromamba/envs/stardist/bin:$PATH
   export LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+  export MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
+  export MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
 
 %runscript
   exec "$@"

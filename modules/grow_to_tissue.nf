@@ -2,7 +2,7 @@ process GROW_TO_TISSUE {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/11_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/16_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.grow_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.grow_memory_gb as int))} GB" }
@@ -17,6 +17,7 @@ process GROW_TO_TISSUE {
 
     script:
     def grow_script = "${projectDir}/${params.grow_script}"
+    def grow_method = 'classic_existing'
     def restrict_flag = (params.grow_restrict_to_seeded_components as boolean) ? '--restrict-to-seeded-components' : ''
     def add_nuclei_flag = (params.grow_add_nuclei as boolean) ? '' : '--no-add-nuclei'
     def legacy_flag = (params.grow_legacy as boolean) ? '--legacy' : ''
@@ -36,6 +37,7 @@ process GROW_TO_TISSUE {
       --preview-threshold-mb ${params.grow_preview_threshold_mb} \
       --preview-alpha ${params.grow_preview_alpha} \
       --sigma ${params.grow_sigma} \
+      --method ${grow_method} \
       ${restrict_flag} \
       --min-seed-area ${params.grow_min_seed_area} \
       --fill-holes-area ${params.grow_fill_holes_area} \

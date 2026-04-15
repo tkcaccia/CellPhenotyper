@@ -65,7 +65,7 @@ RUN set -euo pipefail && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \
-    micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\\n")' && \
+    micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\n")' && \
     micromamba clean -a -y
 
 WORKDIR /opt/cellphenotyper
@@ -75,11 +75,18 @@ COPY modules /opt/cellphenotyper/modules
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+RUN mkdir -p /opt/cellphenotyper/third_party && \
+    git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM && \
+    mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM && \
+    wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1" && \
+    chmod -R a+rX /opt/cellphenotyper/third_party/MedSAM
 
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
 ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib
 ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
+ENV MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
+ENV MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
 
 CMD ["/bin/bash"]

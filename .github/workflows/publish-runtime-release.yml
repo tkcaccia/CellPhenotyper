@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version/tag suffix (for example 2.2)
+        description: Release version/tag suffix (for example 2.3)
         required: true
-        default: "2.2"
+        default: "2.3"
 
 env:
   IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper

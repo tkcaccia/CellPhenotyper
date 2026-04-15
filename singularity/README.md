@@ -56,7 +56,7 @@ gh auth status
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --upload \
   --upload-mode auto
@@ -66,7 +66,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --tmpdir /var/tmp/apptainer/tmp \
   --cachedir /var/tmp/apptainer/cache \
@@ -80,7 +80,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --upload \
   --upload-mode auto
@@ -91,7 +91,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device gpu \
   --upload \
   --upload-mode auto
@@ -102,7 +102,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device gpu \
   --upload \
   --upload-mode auto
@@ -117,14 +117,14 @@ Notes for arm64 GPU builds:
 ## Verify Published SIFs
 
 ```bash
-apptainer pull -F /tmp/cellphenotyper-2.2-amd64.sif \
-  oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64
+apptainer pull -F /tmp/cellphenotyper-2.3-amd64.sif \
+  oras://ghcr.io/tkcaccia/cellphenotyper:2.3-sif-amd64
 ```
 
 You can still inspect mirrored GitHub Release assets with:
 
 ```bash
-gh release view v2.2 \
+gh release view v2.3 \
   --repo tkcaccia/CellPhenotyper \
   --json assets \
   --jq '.assets[].name'
@@ -134,7 +134,7 @@ gh release view v2.2 \
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --source docker \
   --device cpu \
   --upload \
@@ -180,7 +180,7 @@ Then rerun:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --outdir /var/tmp/apptainer/out \
   --upload
@@ -189,7 +189,7 @@ cd /path/to/CellPhenotyper
 If `/Users/...` mount is read-only in Lima, always write SIF to `/var/tmp/apptainer/out` and copy back to macOS:
 
 ```bash
-limactl copy default:/var/tmp/apptainer/out/cellphenotyper-2.2-arm64.sif \
+limactl copy default:/var/tmp/apptainer/out/cellphenotyper-2.3-arm64.sif \
   /Users/<your-user>/Documents/CellPhenotyper/
 ```
 

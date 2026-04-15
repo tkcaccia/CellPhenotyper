@@ -10,15 +10,15 @@ Current default branch:
 
 - `main`
 
-Verified Docker tags for the current `v2.2` runtime validation:
+Verified Docker tags for the current `v2.3` runtime validation:
 
-- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
 
-Planned/target tag layout for `v2.2` releases:
+Planned/target tag layout for `v2.3` releases:
 
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-arm64`
-- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64`
+- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.3-arm64`
+- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64`
 
 Runtime dependency note:
 
@@ -28,24 +28,24 @@ Runtime dependency note:
 - `Nextflow` still launches on the host and therefore still needs a host-side Java 17+ runtime even when every pipeline tool runs inside Docker or Singularity.
 - Internal tissue masks should be written as plain compressed TIFFs, not pyramidal TIFFs, because downstream `tifffile` readers must be able to reopen them reliably during `GROW_TO_TISSUE`.
 
-Expected Singularity filenames for release `v2.2` when built or uploaded:
+Expected Singularity filenames for release `v2.3` when built or uploaded:
 
-- `cellphenotyper-2.2-amd64.sif`
-- `cellphenotyper-2.2-arm64.sif`
-- `cellphenotyper-2.2-gpu-amd64.sif`
-- `cellphenotyper-2.2-gpu-arm64.sif`
+- `cellphenotyper-2.3-amd64.sif`
+- `cellphenotyper-2.3-arm64.sif`
+- `cellphenotyper-2.3-gpu-amd64.sif`
+- `cellphenotyper-2.3-gpu-arm64.sif`
 
 Operational notes:
 
 - Current amd64 SIF builds are too large for reliable GitHub Release asset distribution:
-  - `cellphenotyper-2.2-amd64.sif` is approximately `2.6G`
-  - `cellphenotyper-2.2-gpu-amd64.sif` is approximately `6.6G`
+  - `cellphenotyper-2.3-amd64.sif` is approximately `2.6G`
+  - `cellphenotyper-2.3-gpu-amd64.sif` is approximately `6.6G`
 - Therefore, GHCR Docker images remain the authoritative amd64 release artifacts, and amd64 SIF usage should be documented as:
   - local `apptainer pull` / `singularity pull` from `docker://...`
   - or registry-backed `oras://` publication when available
 - For the currently validated amd64 CPU/GPU path, the stable workflow is `docker://ghcr.io/tkcaccia/cellphenotyper:<tag>` -> local `apptainer pull`/`singularity pull` -> manual `--singularity_image`.
 - For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
-- Verify GHCR/ORAS availability before telling users to pull a `2.2` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.
+- Verify GHCR/ORAS availability before telling users to pull a `2.3` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.
 
 ## Versioning policy
 
@@ -76,67 +76,67 @@ docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null
 # amd64 GPU build prerequisite:
 # upload the custom TensorFlow wheel asset
 # tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
-# to the GitHub release v2.2 before building docker/Dockerfile.full.gpu.
+# to the GitHub release v2.3 before building docker/Dockerfile.full.gpu.
 
 # When the dependency-install layer changes, force a fresh rebuild.
 # Do not trust cached layers for release validation.
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2-amd64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3-amd64 \
   --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2-arm64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3-arm64 \
   --push .
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
   --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64 \
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64 \
   --push .
 
 docker buildx imagetools create \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2 \
-  ghcr.io/tkcaccia/cellphenotyper:2.2-amd64 \
-  ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3 \
+  ghcr.io/tkcaccia/cellphenotyper:2.3-amd64 \
+  ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
 
 docker buildx imagetools create \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.2-gpu \
-  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
-  ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
+  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu \
+  ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
+  ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
 ```
 
 3. Verify pushed Docker tags (explicit inspect commands):
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu
 
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-arm64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-gpu
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu
 ```
 
 Before publishing or tagging an image as validated, run these checks on the built artifact:
 
 ```bash
-docker run --rm ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 \
+docker run --rm ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
   Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R packages OK\n")'
 
-docker run --rm -i --gpus all ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64 python - <<'PY'
+docker run --rm -i --gpus all ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 python - <<'PY'
 import torch, tensorflow as tf
 print("torch", torch.__version__, torch.version.cuda, torch.backends.cuda.is_built(), torch.cuda.is_available(), torch.cuda.device_count())
 print("tf", tf.__version__, tf.test.is_built_with_cuda(), len(tf.config.list_physical_devices("GPU")))
@@ -148,14 +148,14 @@ PY
 ```bash
 # On arm64 host (Mac M1/M2 or Linux arm64)
 singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --upload \
   --upload-mode auto
 
 # On amd64 host (Linux x86_64)
 singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device cpu \
   --upload \
   --upload-mode auto
@@ -165,7 +165,7 @@ Optional GPU Singularity asset (amd64):
 
 ```bash
 singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device gpu \
   --upload \
   --upload-mode auto
@@ -175,10 +175,10 @@ Optional GPU Singularity asset (arm64/aarch64 Spark):
 
 ```bash
 singularity/publish_sif_release_asset.sh \
-  --version 2.2 \
+  --version 2.3 \
   --device gpu \
   --source docker \
-  --docker-tag 2.2-gpu-arm64 \
+  --docker-tag 2.3-gpu-arm64 \
   --upload \
   --upload-mode auto
 ```

@@ -1,3 +1,4 @@
+ 
 #!/usr/bin/env python3
 """
 grow_to_tissue.py
@@ -31,10 +32,12 @@ python grow_to_tissue.py \
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 import numpy as np
 
 from tifffile import imread, imwrite
@@ -46,6 +49,13 @@ try:
     from PIL import Image
 except Exception:
     Image = None
+
+from medsam_border_refine import (
+    DEFAULT_MEDSAM_CHECKPOINT,
+    MedSAMConfig,
+    MedSAMUnavailableError,
+    run_medsam_border_refine,
+)
 
 
 DEFAULT_PALETTE = np.array([
@@ -342,11 +352,16 @@ def pyramidize_with_raw2ometiff(in_tif: str,
     stamp = time.strftime("%Y%m%d_%H%M%S")
     tmpdir = os.path.join(outdir, f"{base}.{stamp}.{os.getpid():06d}.rawdir")
 
+    tool_env = os.environ.copy()
+    if tool_env.get("JAVA_HOME") and not os.path.isdir(tool_env["JAVA_HOME"]):
+        tool_env.pop("JAVA_HOME", None)
+
     try:
         print(f"[INFO] bioformats2raw -> {tmpdir}")
         subprocess.run(
             ["bioformats2raw", "--downsample-type", downsample, in_tif, tmpdir],
-            check=True
+            check=True,
+            env=tool_env,
         )
 
         r2o = ["raw2ometiff", f"--compression={compression}", f"--max_workers={max_workers}"]
@@ -354,7 +369,7 @@ def pyramidize_with_raw2ometiff(in_tif: str,
             r2o.append("--legacy")
 
         print(f"[INFO] raw2ometiff -> {out_ome_tif}")
-        subprocess.run(r2o + [tmpdir, out_ome_tif], check=True)
+        subprocess.run(r2o + [tmpdir, out_ome_tif], check=True, env=tool_env)
 
         print(f"[OK] pyramidal OME-TIFF written: {out_ome_tif}")
 
@@ -364,6 +379,11 @@ def pyramidize_with_raw2ometiff(in_tif: str,
                 shutil.rmtree(tmpdir)
             except Exception:
                 pass
+
+
+def _debug_dir_for(out_path: str | Path, suffix: str = 'medsam_debug') -> Path:
+    out_path = Path(out_path)
+    return out_path.parent / f"{out_path.stem}_{suffix}"
 
 
 def main():
@@ -414,6 +434,21 @@ def main():
     ap.add_argument("--overwrite", action="store_true", help="Overwrite existing output.")
     ap.add_argument("--keep-tmp", action="store_true", help="Keep intermediate .rawdir.")
 
+    ap.add_argument("--method", default="classic_existing", choices=["classic_existing", "medsam_border_refine"],
+                    help="Step-16 method: original baseline or MedSAM border refinement.")
+    ap.add_argument("--medsam-checkpoint", default=str(DEFAULT_MEDSAM_CHECKPOINT))
+    ap.add_argument("--medsam-device", default="cuda")
+    ap.add_argument("--medsam-bbox-margin", type=int, default=144)
+    ap.add_argument("--medsam-component-min-area", type=int, default=200)
+    ap.add_argument("--medsam-component-merge-distance", type=int, default=24)
+    ap.add_argument("--medsam-seed-dilation-radius", type=int, default=8)
+    ap.add_argument("--medsam-core-erosion-radius", type=int, default=36)
+    ap.add_argument("--medsam-outer-dilation-radius", type=int, default=44)
+    ap.add_argument("--medsam-min-object-size", type=int, default=5000)
+    ap.add_argument("--medsam-smooth-radius", type=int, default=2)
+    ap.add_argument("--medsam-force-core-preservation", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=False)
+
     args = ap.parse_args()
 
     seeds = load_mask_2d(args.mask, "seed mask").astype(np.int32)
@@ -450,8 +485,62 @@ def main():
         tissue = restrict_tissue_to_seeded_components(tissue, seeds)
         seeds[~tissue] = 0
 
-    # Grow clusters within tissue (fills everything inside tissue, so no holes remain in grown mask)
-    grown = grow_clusters_with_nearest_seed(seeds, tissue)
+    # Original step-16 baseline grown mask from the current tissue mask.
+    classic_grown = grow_clusters_with_nearest_seed(seeds, tissue)
+
+    if args.method == "classic_existing":
+        grown = classic_grown
+        print(f"[INFO] step16 method={args.method}")
+    elif args.method == "medsam_border_refine":
+        if image_rgb is None:
+            raise RuntimeError("MedSAM border refinement requires --image so the border can be refined from the ROI crop.")
+        print(f"[INFO] step16 method={args.method}")
+        med_cfg = MedSAMConfig(
+            checkpoint=str(args.medsam_checkpoint),
+            device=str(args.medsam_device),
+            bbox_margin=int(args.medsam_bbox_margin),
+            component_min_area=int(args.medsam_component_min_area),
+            component_merge_distance=int(args.medsam_component_merge_distance),
+            seed_dilation_radius=int(args.medsam_seed_dilation_radius),
+            core_erosion_radius=int(args.medsam_core_erosion_radius),
+            outer_dilation_radius=int(args.medsam_outer_dilation_radius),
+            min_object_size=int(args.medsam_min_object_size),
+            smooth_radius=int(args.medsam_smooth_radius),
+            force_core_preservation=bool(args.medsam_force_core_preservation),
+            save_debug=bool(args.medsam_save_debug),
+        )
+        debug_dir = _debug_dir_for(args.out, "medsam_debug")
+        baseline_tissue = classic_grown > 0
+        try:
+            refined_tissue, probability_map, runtime_sec, med_meta, artifacts = run_medsam_border_refine(
+                image=image_rgb,
+                seed_labels=seeds,
+                baseline_tissue_mask=baseline_tissue,
+                config=med_cfg,
+                baseline_label_map=classic_grown,
+            )
+        except MedSAMUnavailableError as exc:
+            if med_cfg.save_debug:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                (debug_dir / "ERROR.txt").write_text(f"{exc}\n")
+            raise RuntimeError(f"MedSAM unavailable: {exc}") from exc
+        label_map = np.asarray(artifacts.get("label_map")) if isinstance(artifacts, dict) and "label_map" in artifacts else None
+        if label_map is not None and label_map.shape == seeds.shape:
+            grown = label_map.astype(seeds.dtype, copy=False)
+        else:
+            grown = grow_clusters_with_nearest_seed(seeds, refined_tissue)
+        if med_cfg.save_debug:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            meta = dict(med_meta)
+            meta["classic_existing_pixels"] = int(baseline_tissue.sum())
+            meta["grown_pixels"] = int((grown > 0).sum())
+            (debug_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+            np.save(debug_dir / "probability_map.npy", probability_map.astype(np.float32))
+            for name, arr in artifacts.items():
+                np.save(debug_dir / f"{name}.npy", np.asarray(arr))
+        print(f"[INFO] medsam runtime={runtime_sec:.2f}s baseline_pixels={int(baseline_tissue.sum())} refined_pixels={int((grown > 0).sum())}")
+    else:
+        raise RuntimeError(f"Unsupported method: {args.method}")
 
     # Write a temporary single-level label TIFF (raw2ometiff will pyramidize/compress)
     outdir = os.path.dirname(args.out) or "."
@@ -505,7 +594,7 @@ def main():
         pass
 
     frac = float((grown > 0).mean()) if grown.size else 0.0
-    print(f"[OK] labeled tissue fraction: {frac:.4f}")
+    print(f"[OK] method={args.method} labeled tissue fraction: {frac:.4f}")
     print(f"[OK] done: {args.out}")
 
 
