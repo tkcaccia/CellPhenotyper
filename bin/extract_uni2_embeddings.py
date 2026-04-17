@@ -840,7 +840,7 @@ def parse_args():
     p.add_argument("--img-size", type=int, default=224)
     p.add_argument("--hf-token", type=str, default=None)
 
-    p.add_argument("--device", type=str, default="cpu", help="cpu|cuda")
+    p.add_argument("--device", type=str, default="cpu", help="cpu|cuda|mps")
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--torch-threads", type=int, default=16)
 
@@ -872,7 +872,13 @@ def main():
     if args.torch_threads and args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
 
-    device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
+    requested_device = str(args.device).strip().lower()
+    if requested_device == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif requested_device == "mps" and getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"[INFO] device={device}")
 
     # Load encoder

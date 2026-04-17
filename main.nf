@@ -943,18 +943,57 @@ workflow {
             }
         }
 
+        def cluster_primary_variant = (params.cluster_primary_variant ?: 'standard').toString().trim()
+        def cluster_secondary_variant = (params.cluster_secondary_variant ?: 'fine').toString().trim()
+        def cluster_secondary_profile = (params.cluster_secondary_profile ?: 'fine').toString().trim().toLowerCase()
+        if (!cluster_primary_variant) cluster_primary_variant = 'standard'
+        if (!cluster_secondary_variant) cluster_secondary_variant = 'fine'
+        if (cluster_primary_variant == cluster_secondary_variant) {
+            error "cluster_primary_variant and cluster_secondary_variant must be different."
+        }
+        def cluster_resolution_value = (params.cluster_resolution ?: 'auto').toString().trim()
+        if (!cluster_resolution_value) cluster_resolution_value = 'auto'
+        def cluster_variant_defs = [
+            [variant: cluster_primary_variant, profile: 'standard', resolution: cluster_resolution_value],
+            [variant: cluster_secondary_variant, profile: cluster_secondary_profile ?: 'fine', resolution: cluster_resolution_value]
+        ]
+        def cluster_variant_request_ch = image_input_ch.flatMap { sample_id, _ ->
+            cluster_variant_defs.collect { spec ->
+                def sample_key = "${sample_id}::${spec.variant}"
+                tuple(sample_id, sample_key, spec.variant, spec.profile, spec.resolution)
+            }
+        }
+
         def cluster_csv_ch = Channel.empty()
+        def cluster_kodama_png_ch = Channel.empty()
         if (run_clustering) {
-            def clustering_input_ch = kodama_dir_ch
+            def clustering_base_ch = kodama_dir_ch
                 .join(objects_assigned_ch)
                 .map { sample_id, kodama_dir, objects_assigned_csv ->
                     tuple(sample_id, kodama_dir, objects_assigned_csv)
                 }
+            def clustering_input_ch = clustering_base_ch
+                .flatMap { sample_id, kodama_dir, objects_assigned_csv ->
+                    cluster_variant_defs.collect { spec ->
+                        def sample_key = "${sample_id}::${spec.variant}"
+                        tuple(sample_key, sample_id, spec.variant, spec.profile, cluster_resolution_value, kodama_dir, objects_assigned_csv)
+                    }
+                }
             RUN_RCODE_CLUSTERING(clustering_input_ch)
             cluster_csv_ch = RUN_RCODE_CLUSTERING.out.cluster_csv
+            cluster_kodama_png_ch = RUN_RCODE_CLUSTERING.out.membership_png
         } else if (run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
-            cluster_csv_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/13_clustering/${sample_id}/${sample_id}_cluster.csv", checkIfExists: true))
+            cluster_csv_ch = image_input_ch.flatMap { sample_id, _ ->
+                cluster_variant_defs.collect { spec ->
+                    def sample_key = "${sample_id}::${spec.variant}"
+                    tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster.csv", checkIfExists: true))
+                }
+            }
+            cluster_kodama_png_ch = image_input_ch.flatMap { sample_id, _ ->
+                cluster_variant_defs.collect { spec ->
+                    def sample_key = "${sample_id}::${spec.variant}"
+                    tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster_kodama_membership.png", checkIfExists: true))
+                }
             }
         }
 
@@ -975,53 +1014,99 @@ workflow {
                     tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
                 }
 
-            def cluster_mask_input_ch = labels_for_cluster_ch
-                .join(cluster_csv_ch)
-                .join(preview_image_for_cluster_mask_ch)
-                .map { sample_id, labels_tif, cluster_csv, preview_tif ->
-                    tuple(sample_id, labels_tif, cluster_csv, preview_tif)
+            def labels_for_cluster_variant_ch = labels_for_cluster_ch
+                .flatMap { sample_id, labels_tif ->
+                    cluster_variant_defs.collect { spec ->
+                        def sample_key = "${sample_id}::${spec.variant}"
+                        tuple(sample_key, labels_tif)
+                    }
+                }
+
+            def preview_image_for_cluster_variant_ch = preview_image_for_cluster_mask_ch
+                .flatMap { sample_id, preview_tif ->
+                    cluster_variant_defs.collect { spec ->
+                        def sample_key = "${sample_id}::${spec.variant}"
+                        tuple(sample_key, preview_tif)
+                    }
+                }
+
+            def cluster_mask_input_ch = cluster_csv_ch
+                .join(labels_for_cluster_variant_ch)
+                .join(preview_image_for_cluster_variant_ch)
+                .map { sample_key, sample_id, cluster_variant, cluster_csv, labels_tif, preview_tif ->
+                    tuple(sample_key, sample_id, cluster_variant, labels_tif, cluster_csv, preview_tif)
                 }
             LABELS_TO_CLUSTER_MASK(cluster_mask_input_ch)
             cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask
         } else if (run_grow_tissue || run_cluster_geojson) {
-            cluster_mask_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/15_cluster_mask/${sample_id}/${sample_id}_cluster_mask.tif", checkIfExists: true))
+            cluster_mask_ch = image_input_ch.flatMap { sample_id, _ ->
+                cluster_variant_defs.collect { spec ->
+                    def sample_key = "${sample_id}::${spec.variant}"
+                    tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/15_cluster_mask/${sample_id}/${sample_id}_${spec.variant}_cluster_mask.tif", checkIfExists: true))
+                }
             }
         }
 
-        def image_for_growth_ch = Channel.empty()
+        def image_for_growth_variant_ch = Channel.empty()
+        def tissue_mask_variant_ch = Channel.empty()
         if (run_grow_tissue || run_cluster_geojson) {
-            image_for_growth_ch = run_stardist
+            def image_for_growth_ch = run_stardist
                 ? crop_roi_ch
                 : image_input_ch.map { sample_id, _ ->
                     tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+                }
+
+            image_for_growth_variant_ch = image_for_growth_ch
+                .flatMap { sample_id, image_tif ->
+                    cluster_variant_defs.collect { spec ->
+                        def sample_key = "${sample_id}::${spec.variant}"
+                        tuple(sample_key, image_tif)
+                    }
+                }
+
+            tissue_mask_variant_ch = tissue_mask_ch
+                .flatMap { sample_id, tissue_mask_tif ->
+                    cluster_variant_defs.collect { spec ->
+                        def sample_key = "${sample_id}::${spec.variant}"
+                        tuple(sample_key, tissue_mask_tif)
+                    }
                 }
         }
 
         def grown_mask_ch = Channel.empty()
         if (run_grow_tissue) {
-            def grow_input_ch = image_for_growth_ch
-                .join(cluster_mask_ch)
-                .join(tissue_mask_ch)
-                .map { sample_id, image_tif, cluster_mask_tif, tissue_mask_tif ->
-                    tuple(sample_id, image_tif, cluster_mask_tif, tissue_mask_tif)
+            def grow_input_ch = cluster_mask_ch
+                .join(image_for_growth_variant_ch)
+                .join(tissue_mask_variant_ch)
+                .map { sample_key, sample_id, cluster_variant, cluster_mask_tif, image_tif, tissue_mask_tif ->
+                    tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, tissue_mask_tif)
                 }
             GROW_TO_TISSUE(grow_input_ch)
             grown_mask_ch = GROW_TO_TISSUE.out.grown_mask
         } else if (run_cluster_geojson) {
-            grown_mask_ch = image_input_ch.map { sample_id, _ ->
-                tuple(sample_id, file("${params.outdir_base}/16_grown_tissue/${sample_id}/${sample_id}_grown_mask.ome.tif", checkIfExists: true))
+            grown_mask_ch = image_input_ch.flatMap { sample_id, _ ->
+                cluster_variant_defs.collect { spec ->
+                    def sample_key = "${sample_id}::${spec.variant}"
+                    tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/16_grown_tissue/${sample_id}/${sample_id}_${spec.variant}_grown_mask.ome.tif", checkIfExists: true))
+                }
             }
         }
 
         def refined_mask_ch = grown_mask_ch
         def grown_refine_method = (params.grown_tissue_refine_method ?: 'medsam_border_refine').toString()
         if (run_cluster_geojson && grown_refine_method == 'medsam_border_refine') {
-            def refine_input_ch = image_for_growth_ch
-                .join(cluster_mask_ch)
-                .join(grown_mask_ch)
-                .map { sample_id, image_tif, cluster_mask_tif, grown_mask_tif ->
-                    tuple(sample_id, image_tif, cluster_mask_tif, grown_mask_tif)
+            def cluster_mask_file_ch = cluster_mask_ch.map { sample_key, sample_id, cluster_variant, cluster_mask_tif ->
+                tuple(sample_key, cluster_mask_tif)
+            }
+            def cluster_kodama_png_file_ch = cluster_kodama_png_ch.map { sample_key, sample_id, cluster_variant, membership_png ->
+                tuple(sample_key, membership_png)
+            }
+            def refine_input_ch = grown_mask_ch
+                .join(image_for_growth_variant_ch)
+                .join(cluster_mask_file_ch)
+                .join(cluster_kodama_png_file_ch)
+                .map { sample_key, sample_id, cluster_variant, grown_mask_tif, image_tif, cluster_mask_tif, kodama_membership_png ->
+                    tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, grown_mask_tif, kodama_membership_png)
                 }
             REFINE_GROWN_TISSUE_MEDSAM(refine_input_ch)
             refined_mask_ch = REFINE_GROWN_TISSUE_MEDSAM.out.refined_mask
@@ -1057,7 +1142,7 @@ workflow.onComplete {
         [folder: '14_clustering_logs', title: 'Clustering Logs',        expected: ['.Rout']],
         [folder: '15_cluster_mask',   title: 'Cluster Mask',            expected: ['_cluster_mask.tif']],
         [folder: '16_grown_tissue',   title: 'Grown Tissue',            expected: ['_grown_mask.ome.tif']],
-        [folder: '17_medsam_refined_tissue', title: 'MedSAM Refinement', expected: ['_grown_mask_refined.ome.tif', '_medsam_editable_band.png', '_medsam_raw_vs_final_panel.png']],
+        [folder: '17_medsam_refined_tissue', title: 'MedSAM Refinement', expected: ['_grown_mask_refined.ome.tif', '_medsam_editable_band.png', '_medsam_raw_vs_final_panel.png', '_medsam_kodama_membership.png']],
         [folder: '18_cluster_geojson', title: 'Cluster GeoJSON',        expected: ['.geojson']],
         [folder: '00_execution',      title: 'Execution Metadata',      expected: ['trace.tsv', 'timeline.html', 'dag.html']]
     ]

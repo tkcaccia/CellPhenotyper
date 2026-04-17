@@ -1,6 +1,6 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs StarDist segmentation, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and generates a final tissue cluster GeoJSON.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs StarDist segmentation, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and generates final tissue-cluster GeoJSON outputs.
 
 Main command:
 
@@ -152,6 +152,37 @@ Outputs are written per sample to:
 - `06_marker_quantification/<sample>/<sample>_cyto_gigatime_intensity_stats.csv`
 
 The new `*_gigatime_quantification.csv` file is a wide per-object table in the same spirit as mcMicro-style single-cell quantification outputs: one row per label with area, centroid, bounding box, and per-marker mean/sum/max columns. The mean-intensity CSV remains convenient for lightweight downstream modeling, while the stats CSV preserves the explicit summary fields.
+
+## Dual clustering outputs
+
+After KODAMA, CellPhenotyper now produces two clustering variants for every sample:
+
+- `standard`: the current/default clustering behavior
+- `fine`: a slightly higher-resolution clustering that prefers a few more clusters when the KODAMA clustering score stays close to the standard solution
+
+Downstream stages run independently for both variants:
+
+- `13_clustering`
+- `15_cluster_mask`
+- `16_grown_tissue`
+- `17_medsam_refined_tissue`
+- `18_cluster_geojson`
+
+Variant-specific filenames are written inside the per-sample folders, for example:
+
+- `<sample>_standard_cluster.csv`
+- `<sample>_fine_cluster.csv`
+- `<sample>_standard_grown_mask_refined.ome.tif`
+- `<sample>_fine_grown_mask_refined.ome.tif`
+- `<sample>_standard_grown_mask_smooth_class.geojson`
+- `<sample>_fine_grown_mask_smooth_class.geojson`
+
+Step `17_medsam_refined_tissue` also copies the corresponding KODAMA membership PNG for each variant into the MedSAM output folder as:
+
+- `<sample>_standard_medsam_kodama_membership.png`
+- `<sample>_fine_medsam_kodama_membership.png`
+
+That keeps the refined tissue result side by side with the clustering visualization that produced it.
 
 ## Linux quick run
 

@@ -1,5 +1,5 @@
 process REFINE_GROWN_TISSUE_MEDSAM {
-    tag "${sample_id}"
+    tag "${sample_id}:${cluster_variant}"
     label 'gpu_capable'
 
     publishDir "${params.outdir_base}/17_medsam_refined_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
@@ -9,14 +9,15 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     time { params.medsam_refine_time as String }
 
     input:
-    tuple val(sample_id), path(image_tif), path(cluster_mask_tif), path(grown_mask_tif)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(grown_mask_tif), path(kodama_membership_png)
 
     output:
-    tuple val(sample_id), path("${sample_id}_grown_mask_refined.ome.tif"), emit: refined_mask
-    tuple val(sample_id), path("${sample_id}_grown_refined_qc_preview.png"), emit: refined_preview
-    path("${sample_id}_medsam_*.png"), emit: medsam_pngs
-    path("${sample_id}_medsam_summary.json"), emit: medsam_summary
-    path("${sample_id}_medsam_debug"), optional: true, emit: medsam_debug
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif"), emit: refined_mask
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_refined_qc_preview.png"), emit: refined_preview
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_medsam_kodama_membership.png"), emit: kodama_plot_png
+    path("${sample_id}_${cluster_variant}_medsam_*.png"), emit: medsam_pngs
+    path("${sample_id}_${cluster_variant}_medsam_summary.json"), emit: medsam_summary
+    path("${sample_id}_${cluster_variant}_medsam_debug"), optional: true, emit: medsam_debug
 
     script:
     def refine_script = "${projectDir}/${params.grown_tissue_refine_script}"
@@ -40,12 +41,12 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     set -euo pipefail
 
     python "${refine_script}" \
-      --sample-id "${sample_id}" \
+      --sample-id "${sample_id}_${cluster_variant}" \
       --image "${image_tif}" \
       --seed-mask "${cluster_mask_tif}" \
       --grown-mask "${grown_mask_tif}" \
-      --out "${sample_id}_grown_mask_refined.ome.tif" \
-      --preview "${sample_id}_grown_refined_qc_preview.png" \
+      --out "${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif" \
+      --preview "${sample_id}_${cluster_variant}_grown_refined_qc_preview.png" \
       --preview-factor ${params.grow_preview_factor} \
       --preview-threshold-mb ${params.grow_preview_threshold_mb} \
       --preview-alpha ${params.grow_preview_alpha} \
@@ -65,14 +66,17 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       ${medsamCorePreservation} \
       ${medsamSaveDebug} \
       ${tail_flags}
+
+    cp "${kodama_membership_png}" "${sample_id}_${cluster_variant}_medsam_kodama_membership.png"
     """
 
     stub:
     """
-    touch "${sample_id}_grown_mask_refined.ome.tif"
-    touch "${sample_id}_grown_refined_qc_preview.png"
-    touch "${sample_id}_medsam_editable_band.png"
-    touch "${sample_id}_medsam_summary.json"
-    mkdir -p "${sample_id}_medsam_debug"
+    touch "${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif"
+    touch "${sample_id}_${cluster_variant}_grown_refined_qc_preview.png"
+    touch "${sample_id}_${cluster_variant}_medsam_kodama_membership.png"
+    touch "${sample_id}_${cluster_variant}_medsam_editable_band.png"
+    touch "${sample_id}_${cluster_variant}_medsam_summary.json"
+    mkdir -p "${sample_id}_${cluster_variant}_medsam_debug"
     """
 }

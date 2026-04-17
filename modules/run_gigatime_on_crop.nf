@@ -4,7 +4,7 @@ process RUN_GIGATIME_ON_CROP {
     label 'gpu_capable'
     maxForks 1
 
-    publishDir "${params.outdir_base}/02_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/03_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.gigatime_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.gigatime_memory_gb as int))} GB" }

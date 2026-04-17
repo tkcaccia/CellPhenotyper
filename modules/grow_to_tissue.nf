@@ -1,5 +1,5 @@
 process GROW_TO_TISSUE {
-    tag "${sample_id}"
+    tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/16_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
@@ -9,11 +9,11 @@ process GROW_TO_TISSUE {
     time { params.grow_time as String }
 
     input:
-    tuple val(sample_id), path(image_tif), path(cluster_mask_tif), path(tissue_mask_tif)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(tissue_mask_tif)
 
     output:
-    tuple val(sample_id), path("${sample_id}_grown_mask.ome.tif"), emit: grown_mask
-    tuple val(sample_id), path("${sample_id}_grown_qc_preview.png"), emit: grown_preview
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask.ome.tif"), emit: grown_mask
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_qc_preview.png"), emit: grown_preview
 
     script:
     def grow_script = "${projectDir}/${params.grow_script}"
@@ -31,8 +31,8 @@ process GROW_TO_TISSUE {
       --image "${image_tif}" \
       --mask "${cluster_mask_tif}" \
       --tissue-mask "${tissue_mask_tif}" \
-      --out "${sample_id}_grown_mask.ome.tif" \
-      --preview "${sample_id}_grown_qc_preview.png" \
+      --out "${sample_id}_${cluster_variant}_grown_mask.ome.tif" \
+      --preview "${sample_id}_${cluster_variant}_grown_qc_preview.png" \
       --preview-factor ${params.grow_preview_factor} \
       --preview-threshold-mb ${params.grow_preview_threshold_mb} \
       --preview-alpha ${params.grow_preview_alpha} \
@@ -53,7 +53,7 @@ process GROW_TO_TISSUE {
 
     stub:
     """
-    touch "${sample_id}_grown_mask.ome.tif"
-    touch "${sample_id}_grown_qc_preview.png"
+    touch "${sample_id}_${cluster_variant}_grown_mask.ome.tif"
+    touch "${sample_id}_${cluster_variant}_grown_qc_preview.png"
     """
 }

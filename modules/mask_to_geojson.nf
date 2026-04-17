@@ -1,18 +1,18 @@
 process MASK_TO_GEOJSON {
-    tag "${sample_id}"
+    tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/12_cluster_geojson/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/18_cluster_geojson/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.cluster_geojson_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.cluster_geojson_memory_gb as int))} GB" }
     time { params.cluster_geojson_time as String }
 
     input:
-    tuple val(sample_id), path(mask_tif)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(mask_tif)
 
     output:
-    tuple val(sample_id), path("${sample_id}_grown_mask_smooth_class.geojson"), emit: cluster_geojson
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask_smooth_class.geojson"), emit: cluster_geojson
 
     script:
     def geojson_script = "${projectDir}/${params.cluster_geojson_script}"
@@ -27,7 +27,7 @@ process MASK_TO_GEOJSON {
     python "${geojson_script}" \
       --mask "${mask_tif}" \
       --page ${params.cluster_geojson_page} \
-      --out "${sample_id}_grown_mask_smooth_class.geojson" \
+      --out "${sample_id}_${cluster_variant}_grown_mask_smooth_class.geojson" \
       --min-area ${params.cluster_geojson_min_area} \
       --smooth-buffer ${params.cluster_geojson_smooth_buffer} \
       --smooth-passes ${params.cluster_geojson_smooth_passes} \
@@ -38,6 +38,6 @@ process MASK_TO_GEOJSON {
 
     stub:
     """
-    touch "${sample_id}_grown_mask_smooth_class.geojson"
+    touch "${sample_id}_${cluster_variant}_grown_mask_smooth_class.geojson"
     """
 }

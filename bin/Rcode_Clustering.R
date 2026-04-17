@@ -1,20 +1,23 @@
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 2L) {
-  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N (selects kodama_full_N.RData only)] [--k N] [--resolution auto|X]")
+  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N (selects kodama_full_N.RData only)] [--k N] [--resolution auto|X] [--profile standard|fine]")
 }
 
 kodama_dir <- args[1]
 out_csv <- args[2]
 
 selected_file_dim <- 20L
-requested_k <- 30L
+requested_k <- 50L
 resolution_mode <- "auto"
-fixed_resolution <- 0.05
-resolution_grid <- c(0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08)
-score_margin <- 0.02
+fixed_resolution <- 0.03
+resolution_grid <- c(0.005, 0.01, 0.02, 0.03, 0.04, 0.05)
+score_margin <- 0.015
+cluster_profile <- "standard"
+fine_resolution_multiplier <- 1.35
+fine_score_margin <- 0.03
 silhouette_max_cells <- 4000L
-merge_min_size_fraction <- 0.0075
-merge_min_size_floor <- 10L
+merge_min_size_fraction <- 0.01
+merge_min_size_floor <- 15L
 
 if (length(args) > 2L) {
   i <- 3L
@@ -41,6 +44,21 @@ if (length(args) > 2L) {
       i <- i + 2L
       next
     }
+    if (flag == "--profile" && i + 1L <= length(args)) {
+      cluster_profile <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--fine-multiplier" && i + 1L <= length(args)) {
+      fine_resolution_multiplier <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--fine-score-margin" && i + 1L <= length(args)) {
+      fine_score_margin <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
     i <- i + 1L
   }
 }
@@ -53,6 +71,15 @@ if (!is.finite(requested_k) || requested_k < 2L) {
 }
 if (resolution_mode == "fixed" && (!is.finite(fixed_resolution) || fixed_resolution <= 0)) {
   stop("--resolution must be 'auto' or a positive number.")
+}
+if (!(cluster_profile %in% c("standard", "fine"))) {
+  stop("--profile must be 'standard' or 'fine'.")
+}
+if (!is.finite(fine_resolution_multiplier) || fine_resolution_multiplier <= 1) {
+  stop("--fine-multiplier must be a number > 1.")
+}
+if (!is.finite(fine_score_margin) || fine_score_margin < 0) {
+  stop("--fine-score-margin must be >= 0.")
 }
 
 require_namespace <- function(pkg) {
@@ -199,7 +226,56 @@ run_louvain <- function(graph_obj, resolution_value) {
 }
 
 preferred_cluster_cap <- function(n_cells) {
-  max(6L, min(40L, as.integer(round(sqrt(max(1L, n_cells)) * 1.1))))
+  max(4L, min(25L, as.integer(round(sqrt(max(1L, n_cells)) * 0.75))))
+}
+
+select_auto_best <- function(evals, cluster_cap, score_margin) {
+  scores <- vapply(evals, function(x) x$score, numeric(1))
+  best_score <- max(scores)
+  near_best_idx <- which(scores >= (best_score - score_margin))
+  near_best <- evals[near_best_idx]
+
+  near_counts <- vapply(near_best, function(x) x$raw_cluster_count, integer(1))
+  near_best <- near_best[near_counts == min(near_counts)]
+
+  near_tiny_fraction <- vapply(near_best, function(x) x$tiny_fraction, numeric(1))
+  near_best <- near_best[near_tiny_fraction == min(near_tiny_fraction)]
+
+  near_tiny_count <- vapply(near_best, function(x) x$tiny_count, integer(1))
+  near_best <- near_best[near_tiny_count == min(near_tiny_count)]
+
+  near_sil <- vapply(near_best, function(x) if (is.finite(x$silhouette)) x$silhouette else -1, numeric(1))
+  near_best <- near_best[near_sil == max(near_sil)]
+
+  near_best[[which.max(vapply(near_best, function(x) x$modularity, numeric(1)))]]
+}
+
+select_auto_fine <- function(evals, base_best, fine_score_margin) {
+  more <- evals[vapply(
+    evals,
+    function(x) x$raw_cluster_count > base_best$raw_cluster_count && x$score >= (base_best$score - fine_score_margin),
+    logical(1)
+  )]
+  if (length(more) == 0L) {
+    more <- evals[vapply(evals, function(x) x$resolution > base_best$resolution, logical(1))]
+  }
+  if (length(more) == 0L) {
+    return(base_best)
+  }
+
+  counts <- vapply(more, function(x) x$raw_cluster_count, integer(1))
+  more <- more[counts == min(counts)]
+
+  tiny_fraction <- vapply(more, function(x) x$tiny_fraction, numeric(1))
+  more <- more[tiny_fraction == min(tiny_fraction)]
+
+  tiny_count <- vapply(more, function(x) x$tiny_count, integer(1))
+  more <- more[tiny_count == min(tiny_count)]
+
+  sil <- vapply(more, function(x) if (is.finite(x$silhouette)) x$silhouette else -1, numeric(1))
+  more <- more[sil == max(sil)]
+
+  more[[which.max(vapply(more, function(x) x$modularity, numeric(1)))]]
 }
 
 picked <- {
@@ -237,34 +313,22 @@ if (resolution_mode == "auto") {
     over_cap <- max(0L, out$raw_cluster_count - cluster_cap)
     out$score <- sil_term +
       0.20 * out$modularity -
-      0.05 * out$raw_cluster_count -
-      0.45 * out$tiny_fraction -
-      0.03 * out$tiny_count -
-      0.06 * over_cap
+      0.08 * out$raw_cluster_count -
+      0.60 * out$tiny_fraction -
+      0.05 * out$tiny_count -
+      0.12 * over_cap
     out$cluster_cap <- cluster_cap
     out
   })
-
-  scores <- vapply(evals, function(x) x$score, numeric(1))
-  best_score <- max(scores)
-  near_best_idx <- which(scores >= (best_score - score_margin))
-  near_best <- evals[near_best_idx]
-
-  near_counts <- vapply(near_best, function(x) x$raw_cluster_count, integer(1))
-  near_best <- near_best[near_counts == min(near_counts)]
-
-  near_tiny_fraction <- vapply(near_best, function(x) x$tiny_fraction, numeric(1))
-  near_best <- near_best[near_tiny_fraction == min(near_tiny_fraction)]
-
-  near_tiny_count <- vapply(near_best, function(x) x$tiny_count, integer(1))
-  near_best <- near_best[near_tiny_count == min(near_tiny_count)]
-
-  near_sil <- vapply(near_best, function(x) if (is.finite(x$silhouette)) x$silhouette else -1, numeric(1))
-  near_best <- near_best[near_sil == max(near_sil)]
-
-  best <- near_best[[which.max(vapply(near_best, function(x) x$modularity, numeric(1)))]]
+  base_best <- select_auto_best(evals, cluster_cap, score_margin)
+  best <- if (cluster_profile == "fine") {
+    select_auto_fine(evals, base_best, fine_score_margin)
+  } else {
+    base_best
+  }
 
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
   cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid), collapse = ", ")))
   cat(sprintf("[INFO] Preferred raw cluster cap for auto mode: %d\n", cluster_cap))
   cat("[INFO] Auto-resolution candidates:\n")
@@ -288,8 +352,13 @@ if (resolution_mode == "auto") {
     best$score
   ))
 } else {
-  best <- run_louvain(graph_obj, fixed_resolution)
+  effective_resolution <- fixed_resolution
+  if (cluster_profile == "fine") {
+    effective_resolution <- fixed_resolution * fine_resolution_multiplier
+  }
+  best <- run_louvain(graph_obj, effective_resolution)
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
   cat(sprintf("[INFO] Fixed resolution %.3f with raw_clusters=%d modularity=%.4f\n", best$resolution, best$raw_cluster_count, best$modularity))
 }
 
@@ -314,6 +383,7 @@ sample_id <- sub("_cluster$", "", tools::file_path_sans_ext(basename(out_csv)))
 summary_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_summary.csv"))
 summary_df <- data.frame(
   sample_id = sample_id,
+  cluster_profile = cluster_profile,
   vis_dims = actual_vis_dims,
   requested_dim = as.integer(selected_file_dim),
   loaded_dim = as.integer(picked$dim),
@@ -335,6 +405,11 @@ pdf(pdf_path)
 plot(vis, pch = 20, col = as.integer(final_membership), cex = 1)
 dev.off()
 
+png_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.png"))
+png(filename = png_path, width = 1800, height = 1400, res = 180)
+plot(vis, pch = 20, col = as.integer(final_membership), cex = 1)
+dev.off()
+
 cat(sprintf("[INFO] Requested --dim=%d loaded kodama_full_%d.RData\n", selected_file_dim, picked$dim))
 if (!isTRUE(picked$exact)) {
   cat("[INFO] Requested dim file was not present; nearest lower available file was used.\n")
@@ -346,3 +421,4 @@ cat(sprintf("[INFO] Final cluster sizes=%s\n", final_cluster_sizes))
 cat(sprintf("[INFO] Wrote: %s\n", out_csv))
 cat(sprintf("[INFO] Wrote: %s\n", summary_path))
 cat(sprintf("[INFO] Wrote: %s\n", pdf_path))
+cat(sprintf("[INFO] Wrote: %s\n", png_path))

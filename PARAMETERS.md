@@ -210,14 +210,24 @@ GPU run notes:
 | Cytoplasm expansion | `expand_*` (`expand_mode`, `expand_tile_size`, `expand_auto_threshold_mpix` control memory-safe tiled expansion; `expand_full_labels=false` skips full-image expansion) |
 | UNI-2 embeddings | `uni2_*`, `hf_*`, `hf_token_env_var_name` |
 | KODAMA R step | `r_*` |
-| KODAMA clustering | `cluster_*` |
+| KODAMA clustering | `cluster_*`, `cluster_primary_variant`, `cluster_secondary_variant`, `cluster_secondary_profile`, `cluster_fine_resolution_multiplier`, `cluster_fine_score_margin` |
 | Cluster mask build | `cluster_mask_*` |
 | Grow clusters to tissue | `grow_*` |
 | Final cluster GeoJSON | `cluster_geojson_*` |
 
+Dual clustering behavior:
+
+- `cluster_primary_variant` defaults to `standard` and preserves the existing clustering choice.
+- `cluster_secondary_variant` defaults to `fine` and runs a second clustering branch with slightly higher cluster granularity.
+- `cluster_secondary_profile=fine` tells `bin/Rcode_Clustering.R` to keep the same KODAMA embedding input but prefer a nearby higher-cluster solution when the score remains close to the standard branch.
+- `cluster_fine_resolution_multiplier` is used when `cluster_resolution` is fixed instead of `auto`.
+- `cluster_fine_score_margin` controls how far the fine branch is allowed to deviate from the best standard auto-clustering score.
+
 Additional automatic outputs:
 
-- `02_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
+- `03_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
 - `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
 - `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
 - If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `04_roi_mask/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `04_roi_mask/<sample>/<sample>_input_roi_mask_labels.json`.
+- `13_clustering/<sample>/` now contains both `standard` and `fine` clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG.
+- `17_medsam_refined_tissue/<sample>/` now contains the variant-specific KODAMA membership PNG copied next to the MedSAM-refined mask outputs for both clustering branches as `<sample>_<variant>_medsam_kodama_membership.png`.
