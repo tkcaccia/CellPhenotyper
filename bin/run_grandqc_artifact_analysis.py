@@ -773,18 +773,30 @@ def refine_small_fov_foreign_object_mask(full_mask, thumb_rgb, source_mpp: float
     """
     h, w = map(int, full_mask.shape[:2])
     patch_grid = artifact_meta.get("patch_grid_yx", [0, 0]) or [0, 0]
+    processed_shape_yx = artifact_meta.get("processed_level0_shape_yx", [0, 0]) or [0, 0]
     artifact_candidate = np_mod.isin(full_mask, [2, 3, 4, 5, 6])
     artifact_fraction = float(artifact_candidate.mean())
+    level0_h = int(processed_shape_yx[0]) if len(processed_shape_yx) > 0 else 0
+    level0_w = int(processed_shape_yx[1]) if len(processed_shape_yx) > 1 else 0
+    fov_h_um = float(level0_h * source_mpp) if level0_h > 0 else 0.0
+    fov_w_um = float(level0_w * source_mpp) if level0_w > 0 else 0.0
+    max_fov_um = max(fov_h_um, fov_w_um)
+    min_fov_um = min(fov_h_um, fov_w_um)
     meta = {
         "enabled": False,
         "reason": "not_applicable",
         "artifact_fraction_before": artifact_fraction,
+        "patch_grid_yx": [int(patch_grid[0]), int(patch_grid[1])],
+        "fov_um_yx": [float(fov_h_um), float(fov_w_um)],
     }
     if source_mpp > 0.12:
         meta["reason"] = "source_mpp_too_coarse"
         return full_mask, meta
-    if max(int(patch_grid[0]), int(patch_grid[1])) > 8:
-        meta["reason"] = "patch_grid_not_small_fov"
+    # Gate the special refinement by physical field-of-view, not just the number
+    # of GrandQC tiles. Small high-magnification images can still require more
+    # than 8 tiles after overlap while remaining exactly the regime we want here.
+    if max_fov_um > 2600.0 or min_fov_um > 1800.0:
+        meta["reason"] = "field_of_view_not_small"
         return full_mask, meta
     if artifact_fraction < 0.10:
         meta["reason"] = "artifact_fraction_too_small"
@@ -1060,7 +1072,7 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
         valid = weight_sum > 0
         score_sum[:, valid] /= weight_sum[valid][None, :]
         full_mask = np_mod.full((target_h, target_w), 7, dtype=np_mod.uint8)
-        pred_idx = score_sum[:, valid].argmax(axis=0).astype(np.uint8)
+        pred_idx = score_sum[:, valid].argmax(axis=0).astype(np_mod.uint8)
         n_classes = int(score_sum.shape[0])
         artifact_ids = np_mod.array([cid for cid in [2, 3, 4, 5, 6] if cid < n_classes], dtype=np_mod.int64)
         tissue_id = 1 if 1 < n_classes else 0
@@ -1073,7 +1085,7 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
                 (artifact_prob < confidence_meta["artifact_probability_threshold"]) |
                 ((artifact_prob - context_prob) < confidence_meta["artifact_margin_threshold"])
             )
-            fallback = np_mod.where(score_sum[tissue_id, valid] >= score_sum[background_id, valid], tissue_id, background_id).astype(np.uint8)
+            fallback = np_mod.where(score_sum[tissue_id, valid] >= score_sum[background_id, valid], tissue_id, background_id).astype(np_mod.uint8)
             pred_idx[uncertain] = fallback[uncertain]
             confidence_meta["enabled"] = True
             confidence_meta["suppressed_pixels"] = int(uncertain.sum())
