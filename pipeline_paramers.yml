@@ -23,8 +23,8 @@ runtime_image_mode: auto   # auto | manual
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, stardist, tissue_mask, cell_assignment, cytoplasm, uni2,
-# kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
+# convert, grandqc, stardist, tissue_mask, cell_assignment, cytoplasm, gigatime,
+# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
 # In `runtime_image_mode: auto`, singularity tries local .sif first, then ORAS-hosted
@@ -33,22 +33,22 @@ end_point: auto
 # `gpu_container_image` is explicitly provided.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
-container_cpu_tag: 2.2   # legacy generic fallback; use arch-specific tags below
-container_cpu_tag_amd64: 2.2-amd64
-container_cpu_tag_arm64: 2.2-arm64
-container_gpu_tag: 2.2-gpu
+container_cpu_tag: 2.4   # legacy generic fallback; use arch-specific tags below
+container_cpu_tag_amd64: 2.4-amd64
+container_cpu_tag_arm64: 2.4-arm64
+container_gpu_tag: 2.4-gpu
 singularity_image_source: auto   # auto | oras | release | docker
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
-singularity_cpu_oras_tag_amd64: 2.2-sif-amd64
-singularity_cpu_oras_tag_arm64: 2.2-sif-arm64
-singularity_gpu_oras_tag_amd64: 2.2-sif-gpu-amd64
-singularity_gpu_oras_tag_arm64: 2.2-sif-gpu-arm64
+singularity_cpu_oras_tag_amd64: 2.4-sif-amd64
+singularity_cpu_oras_tag_arm64: 2.4-sif-arm64
+singularity_gpu_oras_tag_amd64: 2.4-sif-gpu-amd64
+singularity_gpu_oras_tag_arm64: 2.4-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
-singularity_release_tag: v2.2
-singularity_cpu_asset_amd64: cellphenotyper-2.2-amd64.sif
-singularity_cpu_asset_arm64: cellphenotyper-2.2-arm64.sif
-singularity_gpu_asset_amd64: cellphenotyper-2.2-gpu-amd64.sif
-singularity_gpu_asset_arm64: cellphenotyper-2.2-gpu-arm64.sif
+singularity_release_tag: v2.4
+singularity_cpu_asset_amd64: cellphenotyper-2.4-amd64.sif
+singularity_cpu_asset_arm64: cellphenotyper-2.4-arm64.sif
+singularity_gpu_asset_amd64: cellphenotyper-2.4-gpu-amd64.sif
+singularity_gpu_asset_arm64: cellphenotyper-2.4-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
 cpu_container_image: ""     # optional explicit CPU container path/URI
@@ -67,6 +67,11 @@ stardist_min_area: 120
 stardist_crop_pad: 0
 stardist_autoinstall_runtime: true
 stardist_tensorflow_version: "2.16.2"
+stardist_big_mode: auto
+stardist_big_threshold_mpix: 120.0
+write_full_labels: false
+full_format: zarr
+allow_huge_tif: false
 tissue_auto_no_downsample_max_side: 1024
 expand_full_labels: true
 expand_mode: auto
@@ -76,6 +81,19 @@ expand_preview_factor: 10
 expand_preview_threshold_mb: 100.0
 expand_preview_alpha: 0.45
 publish_dir_mode: rellink
+grandqc_enable: true
+grandqc_device: auto
+grandqc_bootstrap_deps: false
+grandqc_download_models: false
+grandqc_create_geojson: true
+grandqc_cache_dir: .cache/grandqc
+grandqc_default_source_mpp: 0.25
+grandqc_artifact_mpp_model: auto
+grandqc_tissue_mpp_model: 10.0
+grandqc_patch_size: 512
+grandqc_artifact_overlap_fraction: 0.5
+grandqc_overlay_factor: 10
+grandqc_preview_max_side: 4096
 input_roi_mask_label_mode: auto
 input_roi_mask_value_prop: value
 input_roi_mask_annotation_props: classification.name,classification.label,class,label,type,name
@@ -84,14 +102,39 @@ input_roi_mask_preview_factor: 10
 input_roi_mask_preview_threshold_mb: 100.0
 input_roi_mask_preview_alpha: 0.45
 gigatime_enable: true
+gigatime_target_mpp: 0.25
+gigatime_strict_target_mpp: true
+gigatime_output_format: ome_tiff
+gigatime_output_dtype: uint8
+gigatime_output_channels: DAPI,PD-1
+gigatime_output_pyramid: true
+gigatime_blockwise: true
+gigatime_block_size: 2048
+gigatime_output_predictor: false
+gigatime_output_compression: jpeg
+gigatime_jpg_markers: ""
+gigatime_jpg_quality: 75
+gigatime_jpg_preview_max_side: 4096
+gigatime_jpg_save_tiles: false
+gigatime_skip_background_blocks: true
+gigatime_skip_background_downsample: 32
+gigatime_skip_background_min_fraction: 0.02
+gigatime_skip_background_close_radius: 8
+gigatime_skip_background_min_obj_area: 2048
+gigatime_skip_background_hole_area: 2048
+gigatime_max_output_gib: 32.0
+gigatime_disk_buffer_threshold_gib: 4.0
 marker_quantification_enable: true
 
 # UNI-2 token variable name
+# Hugging Face model cache defaults are resolved in `nextflow.config` to a
+# parent-level shared cache so sibling pipeline clones reuse the same blobs.
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
-uni2_include_nuclei: true
-uni2_include_cyto: true
+uni2_include_nuclei: false
+uni2_include_cyto: false
 uni2_include_inner_square: true
+uni2_fuse_tile_inner_square: true
 uni2_force_full_image: false
 uni2_save_tiles: true
 uni2_mask_context_mode: label
@@ -102,7 +145,7 @@ uni2_inner_square_fixed_px: 90
 
 # KODAMA embedding source:
 # tile | nuclei | cyto | inner_square | any comma-separated combination | all
-kodama_embedding_mode: all
+kodama_embedding_mode: tile,inner_square
 kodama_dims_to_run: 20
 kodama_spark_top_features: 100
 kodama_n_cores: 4

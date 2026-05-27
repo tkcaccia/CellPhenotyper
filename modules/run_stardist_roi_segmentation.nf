@@ -15,17 +15,27 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     output:
     tuple val(sample_id), path("stardist_out/crop_roi.tif"), emit: crop_roi
     tuple val(sample_id), path("stardist_out/labels.tif"), emit: labels_tif
-    tuple val(sample_id), path("stardist_out/labels_full.tif"), optional: true, emit: labels_full_tif
+    tuple val(sample_id), path("stardist_out/labels_full*"), optional: true, emit: labels_full
     tuple val(sample_id), path("stardist_out/objects.csv"), emit: objects_csv
     tuple val(sample_id), path("stardist_out/roi_all_crop.geojson"), emit: roi_crop_geojson
     tuple val(sample_id), path("stardist_out/shift.json"), emit: shift_json
     tuple val(sample_id), path("stardist_out"), emit: stardist_dir
 
     script:
-    def write_full_flag = params.write_full_labels ? '--write-full-labels' : ''
-    def allow_huge_flag = params.allow_huge_tif ? '--allow-huge-tif' : ''
+    def resolvedWriteFullLabels = params.containsKey('_resolved_stardist_write_full_labels') && params.get('_resolved_stardist_write_full_labels') != null
+      ? (params.get('_resolved_stardist_write_full_labels') as boolean)
+      : (params.write_full_labels as boolean)
+    def resolvedFullFormat = params.containsKey('_resolved_stardist_full_format') && params.get('_resolved_stardist_full_format')
+      ? params.get('_resolved_stardist_full_format').toString()
+      : (params.full_format ?: 'tif').toString()
+    def resolvedAllowHugeTif = params.containsKey('_resolved_allow_huge_tif') && params.get('_resolved_allow_huge_tif') != null
+      ? (params.get('_resolved_allow_huge_tif') as boolean)
+      : (params.allow_huge_tif as boolean)
+    def write_full_flag = resolvedWriteFullLabels ? '--write-full-labels' : ''
+    def allow_huge_flag = resolvedAllowHugeTif ? '--allow-huge-tif' : ''
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
+    def memoryBudgetGb = Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))
     """
     set -euo pipefail
 
@@ -35,6 +45,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
+    export TF_GPU_ALLOCATOR="\${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
     export LOKY_MAX_CPU_COUNT=${task.cpus}
     export MPLCONFIGDIR="\$PWD/.mplconfig"
     STARDIST_SHARED_KERAS_HOME="${params.stardist_keras_home}"
@@ -226,22 +237,42 @@ PY
       \${MIN_AREA_FLAG} \\
       --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
       --pad ${params.stardist_crop_pad} \\
-      --full-format "${params.full_format}" \\
-      --full-out "stardist_out/labels_full.tif" \\
+      --full-format "${resolvedFullFormat}" \\
+      --full-out "stardist_out/labels_full.${resolvedFullFormat}" \\
+      --big-mode "${params.stardist_big_mode}" \\
+      --big-threshold-mpix ${params.stardist_big_threshold_mpix} \\
+      --big-block-size ${params.stardist_big_block_size} \\
+      --big-min-overlap ${params.stardist_big_min_overlap} \\
+      --big-context ${params.stardist_big_context} \\
+      --big-tiles ${params.stardist_big_tiles_y} ${params.stardist_big_tiles_x} \\
+      --big-preview-max-side ${params.stardist_big_preview_max_side} \\
+      --big-tiff-tile ${params.stardist_big_tiff_tile} \\
+      --memory-budget-gb ${memoryBudgetGb} \\
       ${precomputed_flag} \\
       ${write_full_flag} \\
       ${allow_huge_flag}
     """
 
     stub:
+    def stubWriteFullLabels = params.containsKey('_resolved_stardist_write_full_labels') && params.get('_resolved_stardist_write_full_labels') != null
+      ? (params.get('_resolved_stardist_write_full_labels') as boolean)
+      : (params.write_full_labels as boolean)
+    def stubFullFormat = params.containsKey('_resolved_stardist_full_format') && params.get('_resolved_stardist_full_format')
+      ? params.get('_resolved_stardist_full_format').toString()
+      : (params.full_format ?: 'tif').toString()
     """
     mkdir -p stardist_out
     touch stardist_out/crop_roi.tif
     touch stardist_out/labels.tif
     touch stardist_out/objects.csv
+    touch stardist_out/roi_all_crop.geojson
     touch stardist_out/shift.json
-    if [[ "${params.write_full_labels}" == "true" ]]; then
-      touch stardist_out/labels_full.tif
+    if [[ "${stubWriteFullLabels}" == "true" ]]; then
+      if [[ "${stubFullFormat}" == "zarr" ]]; then
+        mkdir -p stardist_out/labels_full.zarr
+      else
+        touch "stardist_out/labels_full.${stubFullFormat}"
+      fi
     fi
     """
 }

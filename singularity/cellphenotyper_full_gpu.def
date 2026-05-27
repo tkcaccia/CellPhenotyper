@@ -3,6 +3,8 @@ From: ubuntu:22.04
 
 %files
   stardist.yml /opt/stardist.yml
+  docker/requirements.grandqc.base.txt /opt/cellphenotyper/docker/requirements.grandqc.base.txt
+  docker/requirements.grandqc.infer.txt /opt/cellphenotyper/docker/requirements.grandqc.infer.txt
 
 %post
   set -e
@@ -13,14 +15,17 @@ From: ubuntu:22.04
     libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev libicu-dev \
     libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
     libharfbuzz-dev libfribidi-dev libglpk-dev \
+    libopenslide0 \
+    libvips42 \
     gfortran \
     openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-  mkdir -p /opt/cellphenotyper/third_party
+  mkdir -p /opt/cellphenotyper/third_party /opt/cellphenotyper/docker
   git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM
   mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM
   wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1"
+  mkdir -p /opt/cellphenotyper/third_party/grandqc/pydeps /opt/cellphenotyper/third_party/grandqc/models/td /opt/cellphenotyper/third_party/grandqc/models/qc
   chmod -R a+rX /opt/cellphenotyper/third_party/MedSAM
 
   # micromamba install (arch-aware)
@@ -89,8 +94,8 @@ PY
       pytorch torchvision pytorch-cuda=12.4
   else
     micromamba remove -y -n stardist pytorch torchvision libtorch torchvision-extra-decoders || true
-    micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip
-    micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre \
+      micromamba run -n stardist python -m pip install --no-cache-dir --upgrade pip
+      micromamba run -n stardist pip install --no-cache-dir --force-reinstall --pre \
       --index-url https://download.pytorch.org/whl/nightly/cu130 \
       torch torchvision
     # Re-install UNI-2 runtime deps that can be removed together with conda pytorch.
@@ -108,6 +113,8 @@ if not torch.version.cuda:
 print(f"[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}")
 PY
 
+  micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi
+
   # OME tools
   micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff
 
@@ -117,12 +124,43 @@ PY
     rasterio affine \
     r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph r-umap \
     bioconductor-bluster
+  mkdir -p /root/.R
+  printf '%s\n' 'CXX11STD=-std=gnu++14' 'CXX14STD=-std=gnu++14' > /root/.R/Makevars
 
   # Bioconductor / GitHub packages
   micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'
   micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")'
   micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")'
   micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R runtime package check passed\n")'
+
+  micromamba run -n stardist python -m pip install --no-cache-dir --upgrade \
+    --target /opt/cellphenotyper/third_party/grandqc/pydeps \
+    -r /opt/cellphenotyper/docker/requirements.grandqc.base.txt
+  micromamba run -n stardist python -m pip install --no-cache-dir --upgrade --no-deps \
+    --target /opt/cellphenotyper/third_party/grandqc/pydeps \
+    -r /opt/cellphenotyper/docker/requirements.grandqc.infer.txt
+  wget -q -O /opt/cellphenotyper/third_party/grandqc/models/td/Tissue_Detection_MPP10.pth "https://zenodo.org/records/14507273/files/Tissue_Detection_MPP10.pth?download=1"
+  wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP1.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP1.pth?download=1"
+  wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP15.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP15.pth?download=1"
+  wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP2.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP2.pth?download=1"
+  printf '%s\n' 'GrandQC bundled runtime' 'License: CC BY-NC-SA 4.0' 'Source: https://github.com/cpath-ukk/grandqc' 'Paper DOI: 10.1038/s41467-024-54769-y' > /opt/cellphenotyper/third_party/grandqc/NOTICE.txt
+  env PYTHONPATH=/opt/cellphenotyper/third_party/grandqc/pydeps micromamba run -n stardist python - <<'PY'
+import importlib
+mods = [
+    "cv2", "numpy", "PIL", "tifffile", "zarr", "numcodecs", "skimage", "imagecodecs",
+    "segmentation_models_pytorch", "timm", "pretrainedmodels", "efficientnet_pytorch",
+]
+missing = []
+for m in mods:
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        missing.append(f"{m}: {e}")
+if missing:
+    raise SystemExit("GrandQC bundled runtime check failed:\n" + "\n".join(missing))
+print("GrandQC bundled runtime check passed")
+PY
+  chmod -R a+rX /opt/cellphenotyper/third_party/grandqc
 
   micromamba clean -a -y
 
@@ -132,6 +170,7 @@ PY
   export MAMBA_ROOT_PREFIX=/opt/micromamba
   export PATH=/opt/micromamba/envs/stardist/bin:$PATH
   export LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib:$LD_LIBRARY_PATH
+  export GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
   export MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
   export MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
 

@@ -77,6 +77,83 @@ def pool_tokens(x: torch.Tensor, mode: str) -> torch.Tensor:
     raise ValueError(f"Unknown pooling mode: {mode}")
 
 
+def pool_from_token_parts(cls: Optional[torch.Tensor],
+                          patch: Optional[torch.Tensor],
+                          mode: str) -> torch.Tensor:
+    if cls is None and patch is None:
+        raise ValueError("Cannot pool embeddings without cls or patch tokens")
+
+    if patch is None and cls is not None:
+        # Preserve legacy behavior for backends that already return pooled 2D embeddings.
+        return cls
+
+    if patch is not None and patch.dim() != 3:
+        raise ValueError(f"Unexpected patch token shape: {tuple(patch.shape)}")
+    if cls is not None and cls.dim() != 2:
+        raise ValueError(f"Unexpected cls token shape: {tuple(cls.shape)}")
+
+    if patch is not None and patch.size(1) > 0:
+        mean_patch = patch.mean(1)
+    elif cls is not None:
+        mean_patch = cls
+    else:
+        raise ValueError("Cannot compute mean_patch without cls or patch tokens")
+
+    cls_token = cls if cls is not None else mean_patch
+
+    if mode == "cls":
+        return cls_token
+    if mode == "mean_patch":
+        return mean_patch
+    if mode == "mean_all":
+        if cls is not None and patch is not None and patch.size(1) > 0:
+            return torch.cat([cls.unsqueeze(1), patch], dim=1).mean(1)
+        return mean_patch
+    if mode == "cls_mean_concat":
+        return torch.cat([cls_token, mean_patch], dim=-1)
+    raise ValueError(f"Unknown pooling mode: {mode}")
+
+
+def extract_cls_and_patch_tokens(feats: Any) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    if isinstance(feats, dict):
+        if "x_norm_patchtokens" in feats or "x_norm_clstoken" in feats:
+            cls = feats.get("x_norm_clstoken")
+            patch = feats.get("x_norm_patchtokens")
+            if cls is not None and cls.dim() == 3 and cls.size(1) == 1:
+                cls = cls[:, 0]
+            return cls, patch
+        if "last_hidden_state" in feats:
+            feats = feats["last_hidden_state"]
+        else:
+            feats = next(iter(feats.values()))
+
+    if torch.is_tensor(feats):
+        if feats.dim() == 2:
+            return feats, None
+        if feats.dim() == 3:
+            cls = feats[:, 0]
+            patch = feats[:, 1:] if feats.size(1) > 1 else None
+            # Some ViT variants, including UNI2-h, prepend extra prefix/register
+            # tokens after CLS. For inner-square-style derivation we need only the
+            # square patch-token grid, so strip any leading non-patch tokens if a
+            # perfect-square tail exists.
+            if patch is not None and patch.size(1) > 0:
+                n = int(patch.size(1))
+                side = int(round(math.sqrt(n)))
+                if side * side != n:
+                    for extra_prefix in range(1, min(32, n)):
+                        tail = n - extra_prefix
+                        if tail <= 0:
+                            break
+                        tail_side = int(round(math.sqrt(tail)))
+                        if tail_side * tail_side == tail:
+                            patch = patch[:, extra_prefix:]
+                            break
+            return cls, patch
+
+    raise ValueError(f"Unsupported feature container for token extraction: {type(feats)}")
+
+
 def _maybe_hf_login(token: Optional[str]):
     if token:
         try:
@@ -581,6 +658,18 @@ class LabelReader:
         self._np = None
         self.shape = None  # (H,W)
 
+        if self.path.is_dir() or str(self.path).lower().endswith(".zarr"):
+            try:
+                import zarr
+                self._z = _resolve_zarr_array(zarr.open(str(self.path), mode="r"), level=0)
+                if len(self._z.shape) != 2:
+                    raise RuntimeError(f"Mask zarr must be 2D, got {self._z.shape}")
+                self.backend = "tifffile_zarr"
+                self.shape = (self._z.shape[0], self._z.shape[1])
+                return
+            except Exception:
+                pass
+
         # Try tifffile + zarr
         try:
             import zarr
@@ -757,7 +846,7 @@ def cell_subfolder(tile_base: Path, cell_id: int, per_dir: int = 5000) -> Path:
     return p
 
 
-def build_inner_square_mask(
+def compute_inner_square_bounds(
     tile_size: int,
     center_x_local: int,
     center_y_local: int,
@@ -766,11 +855,7 @@ def build_inner_square_mask(
     factor: float,
     min_px: int,
     max_px: int,
-) -> np.ndarray:
-    """Build a centered square mask in tile coordinates.
-
-    Side length is computed from equivalent diameter unless fixed_px is provided.
-    """
+) -> Tuple[int, int, int, int]:
     if fixed_px > 0:
         side = int(fixed_px)
     else:
@@ -787,13 +872,103 @@ def build_inner_square_mask(
     x1 = min(tile_size, x0 + side)
     y1 = min(tile_size, y0 + side)
 
-    # Re-center when clamped at image borders.
     x0 = max(0, x1 - side)
     y0 = max(0, y1 - side)
+    return int(x0), int(y0), int(x1), int(y1)
+
+
+def build_inner_square_mask(
+    tile_size: int,
+    center_x_local: int,
+    center_y_local: int,
+    area_px: int,
+    fixed_px: int,
+    factor: float,
+    min_px: int,
+    max_px: int,
+) -> np.ndarray:
+    """Build a centered square mask in tile coordinates.
+
+    Side length is computed from equivalent diameter unless fixed_px is provided.
+    """
+    x0, y0, x1, y1 = compute_inner_square_bounds(
+        tile_size=tile_size,
+        center_x_local=center_x_local,
+        center_y_local=center_y_local,
+        area_px=area_px,
+        fixed_px=fixed_px,
+        factor=factor,
+        min_px=min_px,
+        max_px=max_px,
+    )
 
     keep = np.zeros((tile_size, tile_size), dtype=bool)
     keep[y0:y1, x0:x1] = True
     return keep
+
+
+def derive_inner_square_style_embeddings(
+    cls: Optional[torch.Tensor],
+    patch: Optional[torch.Tensor],
+    batch_meta: List[Dict[str, Any]],
+    tile_size: int,
+    img_size: int,
+    pooling_mode: str,
+    fixed_px: int,
+    factor: float,
+    min_px: int,
+    max_px: int,
+) -> Optional[np.ndarray]:
+    if patch is None or patch.dim() != 3:
+        return None
+
+    n_tokens = int(patch.shape[1])
+    token_side = int(round(math.sqrt(n_tokens)))
+    if token_side * token_side != n_tokens:
+        return None
+
+    patch_pitch = float(img_size) / float(token_side)
+    token_centers = (np.arange(token_side, dtype=np.float32) + 0.5) * patch_pitch
+    grid_x, grid_y = np.meshgrid(token_centers, token_centers, indexing="xy")
+    token_x = grid_x.reshape(-1)
+    token_y = grid_y.reshape(-1)
+
+    center_local = tile_size // 2
+    scale = float(img_size) / float(tile_size)
+    keep_rows = []
+    for meta in batch_meta:
+        area_px = int(meta.get("area_px", 0))
+        x0, y0, x1, y1 = compute_inner_square_bounds(
+            tile_size=tile_size,
+            center_x_local=center_local,
+            center_y_local=center_local,
+            area_px=area_px,
+            fixed_px=fixed_px,
+            factor=factor,
+            min_px=min_px,
+            max_px=max_px,
+        )
+        keep = (
+            (token_x >= (x0 * scale)) &
+            (token_x < (x1 * scale)) &
+            (token_y >= (y0 * scale)) &
+            (token_y < (y1 * scale))
+        )
+        if not np.any(keep):
+            center_idx = (token_side // 2) * token_side + (token_side // 2)
+            keep[min(center_idx, n_tokens - 1)] = True
+        keep_rows.append(keep)
+
+    keep_mask = torch.as_tensor(np.stack(keep_rows, axis=0), device=patch.device, dtype=patch.dtype)
+    denom = keep_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+    selected_mean = (patch * keep_mask.unsqueeze(-1)).sum(dim=1) / denom
+    cls_token = cls if cls is not None else selected_mean
+
+    if pooling_mode == "cls_mean_concat":
+        out = torch.cat([cls_token, selected_mean], dim=-1)
+    else:
+        out = selected_mean
+    return out.detach().cpu().numpy()
 
 
 # --------------------------
@@ -805,6 +980,8 @@ def parse_args():
     p.add_argument("--image", required=True)
     p.add_argument("--mask", required=True)
     p.add_argument("--outdir", required=True)
+    p.add_argument("--paired-inner-square-outdir", default="",
+                   help="Optional second output directory that stores inner_square-style embeddings derived from the same tile forward pass")
 
     p.add_argument("--image-level", type=int, default=0, help="Pyramid level for IMAGE (mask assumed same grid)")
     p.add_argument("--force-full-image", action="store_true",
@@ -861,6 +1038,9 @@ def main():
     args = parse_args()
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
+    secondary_outdir = Path(args.paired_inner_square_outdir).resolve() if args.paired_inner_square_outdir else None
+    if secondary_outdir is not None:
+        secondary_outdir.mkdir(parents=True, exist_ok=True)
 
     gr, gc = args.grid.lower().split("x")
     GR, GC = int(gr), int(gc)
@@ -945,22 +1125,35 @@ def main():
 
     half = args.tile_size // 2
 
-    row_parts: List[pd.DataFrame] = []
-    row_count = 0
-    shard_idx = 0
-    feat_dim = None
-    feat_cols: Optional[List[str]] = None
+    def init_writer_state(tile_out: Path) -> Dict[str, Any]:
+        return {
+            "tile_out": tile_out,
+            "row_parts": [],
+            "row_count": 0,
+            "shard_idx": 0,
+            "feat_dim": None,
+            "feat_cols": None,
+        }
 
-    def flush_csv(tile_out: Path):
-        nonlocal row_parts, row_count, shard_idx
-        if row_count == 0:
+    def append_writer_rows(state: Dict[str, Any], meta_df: pd.DataFrame, feats_np: np.ndarray):
+        if feats_np is None:
             return
-        df = pd.concat(row_parts, ignore_index=True)
-        out_path = tile_out / f"{tag}_embeddings_shard{shard_idx:04d}.csv.gz"
+        if state["feat_dim"] is None:
+            state["feat_dim"] = int(feats_np.shape[1])
+            state["feat_cols"] = [f"feat_{j+1}" for j in range(state["feat_dim"])]
+        feat_df = pd.DataFrame(feats_np, columns=state["feat_cols"])
+        state["row_parts"].append(pd.concat([meta_df.reset_index(drop=True), feat_df], axis=1))
+        state["row_count"] += feats_np.shape[0]
+
+    def flush_writer(state: Dict[str, Any]):
+        if state["row_count"] == 0:
+            return
+        df = pd.concat(state["row_parts"], ignore_index=True)
+        out_path = state["tile_out"] / f"{tag}_embeddings_shard{state['shard_idx']:04d}.csv.gz"
         df.to_csv(out_path, index=False, compression="gzip")
-        row_parts = []
-        row_count = 0
-        shard_idx += 1
+        state["row_parts"] = []
+        state["row_count"] = 0
+        state["shard_idx"] += 1
 
     batch_items = []
     batch_meta = []
@@ -973,8 +1166,8 @@ def main():
             batch_items.append(transform(pil))
         batch_meta.append(meta)
 
-    def run_batch(tile_out: Path):
-        nonlocal feat_dim, feat_cols, batch_items, batch_meta, row_parts, row_count
+    def run_batch(primary_state: Dict[str, Any], secondary_state: Optional[Dict[str, Any]]):
+        nonlocal batch_items, batch_meta
         if not batch_items:
             return
 
@@ -983,33 +1176,43 @@ def main():
                 inputs = processor(list(batch_items), return_tensors="pt")
                 images = inputs["pixel_values"].to(device, non_blocking=True)
                 outputs = model(pixel_values=images)
-                feats = getattr(outputs, "last_hidden_state", None) or outputs[0]
+                raw_feats = getattr(outputs, "last_hidden_state", None) or outputs[0]
             else:
                 images = torch.stack(batch_items, dim=0).to(device, non_blocking=True)
-                feats = model(images)
+                raw_feats = model.forward_features(images) if secondary_state is not None and hasattr(model, "forward_features") else model(images)
 
-            if isinstance(feats, dict):
-                if "last_hidden_state" in feats:
-                    feats = feats["last_hidden_state"]
-                elif "x_norm_clstoken" in feats:
-                    feats = feats["x_norm_clstoken"]
-                else:
-                    feats = next(iter(feats.values()))
-
-            feats = pool_tokens(feats, pooling_used).detach().cpu().numpy()
-
-        if feat_dim is None:
-            feat_dim = int(feats.shape[1])
-            feat_cols = [f"feat_{j+1}" for j in range(feat_dim)]
+            cls_tokens, patch_tokens = extract_cls_and_patch_tokens(raw_feats)
+            tile_feats = pool_from_token_parts(cls_tokens, patch_tokens, pooling_used).detach().cpu().numpy()
+            inner_square_style_feats = None
+            if secondary_state is not None:
+                inner_square_style_feats = derive_inner_square_style_embeddings(
+                    cls=cls_tokens,
+                    patch=patch_tokens,
+                    batch_meta=batch_meta,
+                    tile_size=int(args.tile_size),
+                    img_size=int(args.img_size),
+                    pooling_mode=pooling_used,
+                    fixed_px=int(args.inner_square_fixed_px),
+                    factor=float(args.inner_square_factor),
+                    min_px=int(args.inner_square_min_px),
+                    max_px=int(args.inner_square_max_px),
+                )
+                if inner_square_style_feats is None:
+                    raise RuntimeError(
+                        "Combined tile+inner_square_style UNI2 path requires patch-token access; "
+                        f"backend={backend_used} encoder={args.encoder} did not expose compatible tokens."
+                    )
 
         meta_df = pd.DataFrame.from_records(batch_meta)
-        feat_df = pd.DataFrame(feats, columns=feat_cols)
-        row_parts.append(pd.concat([meta_df.reset_index(drop=True), feat_df], axis=1))
-        row_count += feats.shape[0]
+        append_writer_rows(primary_state, meta_df, tile_feats)
+        if secondary_state is not None:
+            append_writer_rows(secondary_state, meta_df, inner_square_style_feats)
 
         batch_items, batch_meta = [], []
-        if row_count >= args.rows_per_csv:
-            flush_csv(tile_out)
+        if primary_state["row_count"] >= args.rows_per_csv:
+            flush_writer(primary_state)
+        if secondary_state is not None and secondary_state["row_count"] >= args.rows_per_csv:
+            flush_writer(secondary_state)
 
     # Pass 2: process grid tiles
     for tr in range(GR):
@@ -1025,13 +1228,11 @@ def main():
             y1_core = min(H, y0_core + tile_h)
 
             tile_out = tile_folder(outdir, tr, tc)
+            secondary_tile_out = tile_folder(secondary_outdir, tr, tc) if secondary_outdir is not None else None
             tile_tiles = tile_folder(tiles_root, tr, tc) if args.save_tiles else None
 
-            shard_idx = 0
-            row_parts = []
-            row_count = 0
-            feat_dim = None
-            feat_cols = None
+            primary_state = init_writer_state(tile_out)
+            secondary_state = init_writer_state(secondary_tile_out) if secondary_tile_out is not None else None
 
             for i in tqdm(range(s, e), desc=f"grid {tr:02d},{tc:02d}", leave=False):
                 lab = int(labels[i])
@@ -1116,10 +1317,12 @@ def main():
 
                 add_example(img_tile, meta)
                 if len(batch_items) >= int(args.batch):
-                    run_batch(tile_out)
+                    run_batch(primary_state, secondary_state)
 
-            run_batch(tile_out)
-            flush_csv(tile_out)
+            run_batch(primary_state, secondary_state)
+            flush_writer(primary_state)
+            if secondary_state is not None:
+                flush_writer(secondary_state)
 
     print("🎉 Done.")
 

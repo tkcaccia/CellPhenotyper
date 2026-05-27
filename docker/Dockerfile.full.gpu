@@ -87,6 +87,8 @@ RUN set -euo pipefail && \
       -c conda-forge -c bioconda --channel-priority strict \
       r-base r-devtools r-data.table r-irlba r-biocmanager r-remotes r-r.utils r-igraph r-umap \
       bioconductor-bluster && \
+    mkdir -p /root/.R && \
+    printf '%s\n' 'CXX11STD=-std=gnu++14' 'CXX14STD=-std=gnu++14' > /root/.R/Makevars && \
     micromamba run -n stardist python -c "import importlib; mods=['torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide','aicsimageio','aicspylibczi']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
@@ -103,8 +105,22 @@ COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
 RUN mkdir -p /opt/cellphenotyper/third_party && \
     git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM && \
+    mkdir -p /opt/cellphenotyper/third_party/grandqc/pydeps /opt/cellphenotyper/third_party/grandqc/models/td /opt/cellphenotyper/third_party/grandqc/models/qc && \
     mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM && \
     wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1" && \
+    micromamba run -n stardist python -m pip install --no-cache-dir --upgrade \
+      --target /opt/cellphenotyper/third_party/grandqc/pydeps \
+      -r /opt/cellphenotyper/docker/requirements.grandqc.base.txt && \
+    micromamba run -n stardist python -m pip install --no-cache-dir --upgrade --no-deps \
+      --target /opt/cellphenotyper/third_party/grandqc/pydeps \
+      -r /opt/cellphenotyper/docker/requirements.grandqc.infer.txt && \
+    wget -q -O /opt/cellphenotyper/third_party/grandqc/models/td/Tissue_Detection_MPP10.pth "https://zenodo.org/records/14507273/files/Tissue_Detection_MPP10.pth?download=1" && \
+    wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP1.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP1.pth?download=1" && \
+    wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP15.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP15.pth?download=1" && \
+    wget -q -O /opt/cellphenotyper/third_party/grandqc/models/qc/GrandQC_MPP2.pth "https://zenodo.org/records/14041538/files/GrandQC_MPP2.pth?download=1" && \
+    printf '%s\n' 'GrandQC bundled runtime' 'License: CC BY-NC-SA 4.0' 'Source: https://github.com/cpath-ukk/grandqc' 'Paper DOI: 10.1038/s41467-024-54769-y' > /opt/cellphenotyper/third_party/grandqc/NOTICE.txt && \
+    env PYTHONPATH=/opt/cellphenotyper/third_party/grandqc/pydeps micromamba run -n stardist python -c "import importlib; mods=['cv2','numpy','PIL','tifffile','zarr','numcodecs','skimage','imagecodecs','segmentation_models_pytorch','timm','pretrainedmodels','efficientnet_pytorch']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('GrandQC bundled runtime check passed') if not missing else (_ for _ in ()).throw(SystemExit('GrandQC bundled runtime check failed:\\n' + '\\n'.join(missing)))" && \
+    chmod -R a+rX /opt/cellphenotyper/third_party/grandqc && \
     chmod -R a+rX /opt/cellphenotyper/third_party/MedSAM
 
 ENV LANG=C.UTF-8
@@ -113,6 +129,7 @@ ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
 ENV LD_LIBRARY_PATH=/opt/micromamba/envs/stardist/lib/tf-nvidia:/opt/micromamba/envs/stardist/lib
 ENV XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/micromamba/envs/stardist/lib/python3.11/site-packages/nvidia/cuda_nvcc
 ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
+ENV GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
 ENV MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
 ENV MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
 

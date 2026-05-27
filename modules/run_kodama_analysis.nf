@@ -10,7 +10,7 @@ process RUN_KODAMA_ANALYSIS {
     time { params.r_time as String }
 
     input:
-    tuple val(sample_id), path(tile_embeddings_dir), path(cyto_embeddings_dir), path(inner_square_embeddings_dir), path(nuclei_embeddings_dir), path(objects_assigned_csv)
+    tuple val(sample_id), path(tile_embeddings_dir, stageAs: 'tile_embeddings_dir'), path(cyto_embeddings_dir, stageAs: 'cyto_embeddings_dir'), path(inner_square_embeddings_dir, stageAs: 'inner_square_embeddings_dir'), path(nuclei_embeddings_dir, stageAs: 'nuclei_embeddings_dir'), path(objects_assigned_csv)
 
     output:
     tuple val(sample_id), path("kodama_output"), emit: kodama_dir
@@ -42,7 +42,8 @@ RS
         "${inner_square_embeddings_dir}" \
         "${nuclei_embeddings_dir}" \
         "${objects_assigned_csv}" \
-        "kodama_output"
+        "kodama_output" \
+        "${params.kodama_embedding_mode}"
 
       Rscript "${r_script}" \
         "kodama_output/rawdata.RData" \

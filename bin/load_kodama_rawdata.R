@@ -6,7 +6,7 @@ if (length(args) < 6) {
     paste(
       "Usage: Rscript load_kodama_rawdata.R",
       "<tile_embeddings_dir> <cyto_embeddings_dir> <inner_square_embeddings_dir> <nuclei_embeddings_dir>",
-      "<objects_assigned_csv> <output_dir>"
+      "<objects_assigned_csv> <output_dir> [embedding_modes]"
     )
   )
 }
@@ -17,11 +17,39 @@ inner_square_dir <- args[3]
 nuclei_dir <- args[4]
 annot_csv <- args[5]
 output_dir <- args[6]
+embedding_mode <- if (length(args) >= 7) args[7] else "all"
+
+normalize_modes <- function(mode_string) {
+  x <- tolower(trimws(mode_string))
+  if (!nzchar(x) || x %in% c("all", "default")) {
+    return(c("tile", "inner_square"))
+  }
+  if (x %in% c("full", "all4", "all_four", "full_stack")) {
+    return(c("tile", "nuclei", "cyto", "inner_square"))
+  }
+  tokens <- unlist(strsplit(gsub("\\+", ",", x), ",", fixed = FALSE), use.names = FALSE)
+  tokens <- trimws(tokens)
+  tokens <- tokens[nzchar(tokens)]
+  mapped <- vapply(tokens, function(tk) {
+    if (tk %in% c("tile", "full", "full_tile", "full-tile")) return("tile")
+    if (tk %in% c("nuclei", "nucleus", "nuclear", "label", "labels")) return("nuclei")
+    if (tk %in% c("cyto", "cytoplasm")) return("cyto")
+    if (tk %in% c("inner", "inner_square", "inner-square", "square")) return("inner_square")
+    stop(paste("Unknown embedding mode token:", tk))
+  }, character(1))
+  unique(mapped)
+}
+
+selected_modes <- normalize_modes(embedding_mode)
 
 library(data.table)
 
-load_embedding_matrix <- function(dir_path, mode_name) {
+load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
   if (!dir.exists(dir_path)) {
+    if (!required) {
+      cat(sprintf("[INFO] mode=%s skipped (directory missing and mode not selected): %s\n", mode_name, dir_path))
+      return(NULL)
+    }
     stop(paste("Embedding directory does not exist for mode", mode_name, ":", dir_path))
   }
 
@@ -32,6 +60,10 @@ load_embedding_matrix <- function(dir_path, mode_name) {
     pattern = "\\.csv(\\.gz)?$"
   )
   if (length(files) == 0L) {
+    if (!required) {
+      cat(sprintf("[INFO] mode=%s skipped (no embedding CSVs and mode not selected): %s\n", mode_name, dir_path))
+      return(NULL)
+    }
     stop(paste("No embedding CSV files found for mode", mode_name, "in", dir_path))
   }
 
@@ -93,11 +125,15 @@ mode_dirs <- list(
 
 available_modes <- c("tile", "nuclei", "cyto", "inner_square")
 cat(sprintf("[INFO] Loading embedding families: %s\n", paste(available_modes, collapse = ",")))
+cat(sprintf("[INFO] Selected embedding families: %s\n", paste(selected_modes, collapse = ",")))
 
 loaded <- list()
 for (m in available_modes) {
-  loaded[[m]] <- load_embedding_matrix(mode_dirs[[m]], m)
-  cat(sprintf("[INFO] mode=%s cells=%d features=%d\n", m, loaded[[m]]$n_cells, loaded[[m]]$n_features))
+  required_mode <- m %in% selected_modes
+  loaded[[m]] <- load_embedding_matrix(mode_dirs[[m]], m, required = required_mode)
+  if (!is.null(loaded[[m]])) {
+    cat(sprintf("[INFO] mode=%s cells=%d features=%d\n", m, loaded[[m]]$n_cells, loaded[[m]]$n_features))
+  }
 }
 
 ann_ids <- sort(unique(ann$label))
@@ -133,10 +169,9 @@ cat(
 # Backward-compatible object: global intersection across all loaded modes.
 common_ids <- Reduce(
   intersect,
-  c(list(ann_ids), lapply(embeddings_raw, rownames))
+  c(list(ann_ids), lapply(selected_modes, function(m) rownames(embeddings_raw[[m]])))
 )
 common_ids <- sort(unique(common_ids))
-selected_modes <- available_modes
 
 if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)

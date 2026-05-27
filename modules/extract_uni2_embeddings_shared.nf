@@ -1,5 +1,5 @@
-process EXTRACT_UNI2_EMBEDDINGS {
-    tag "${sample_id}:${embedding_mode}"
+process EXTRACT_UNI2_EMBEDDINGS_SHARED {
+    tag "${sample_id}:tile_inner_square_style"
     label 'compute_heavy'
     label 'gpu_capable'
     maxForks 1
@@ -16,22 +16,16 @@ process EXTRACT_UNI2_EMBEDDINGS {
     time { params.uni2_time as String }
 
     input:
-    tuple val(sample_id), path(image_tif), path(mask_tif), val(embedding_mode), val(zero_outside_mask), val(mask_context_mode), val(outside_fill)
+    tuple val(sample_id), path(image_tif), path(mask_tif)
 
     output:
-    tuple val(sample_id), val(embedding_mode), path("embeddings_${sample_id}_${embedding_mode}"), emit: embeddings_dir
+    tuple val(sample_id), val('tile'), path("embeddings_${sample_id}_tile"), emit: tile_embeddings_dir
+    tuple val(sample_id), val('inner_square'), path("embeddings_${sample_id}_inner_square"), emit: inner_square_embeddings_dir
 
     script:
-    def zero_outside_flag = zero_outside_mask ? "--zero-outside-mask --outside-fill ${outside_fill}" : ''
     def force_full_flag = params.uni2_force_full_image ? '--force-full-image' : ''
     def save_tiles_flag = params.uni2_save_tiles ? '--save-tiles' : ''
-    def resolved_mask_context = mask_context_mode ?: params.uni2_mask_context_mode
-    def mask_context_flag = resolved_mask_context ? "--mask-context-mode ${resolved_mask_context}" : ''
-    def inner_square_factor_flag = "--inner-square-factor ${params.uni2_inner_square_factor}"
-    def inner_square_min_flag = "--inner-square-min-px ${params.uni2_inner_square_min_px}"
-    def inner_square_max_flag = "--inner-square-max-px ${params.uni2_inner_square_max_px}"
-    def inner_square_fixed_flag = "--inner-square-fixed-px ${params.uni2_inner_square_fixed_px}"
-    def tiles_root_path = "embeddings_${sample_id}_${embedding_mode}/${params.uni2_tiles_root}"
+    def tiles_root_path = "embeddings_${sample_id}_tile/${params.uni2_tiles_root}"
     def device_value = params.compute_device == 'gpu' ? 'cuda' : (params.compute_device == 'auto' ? params.uni2_device_auto : 'cpu')
     def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
     def requested_batch = Math.max(1, params.uni2_batch as int)
@@ -92,48 +86,35 @@ process EXTRACT_UNI2_EMBEDDINGS {
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
 
-    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
-      echo "[DEBUG] UNI-2 GPU diagnostics"
-      nvidia-smi -L || true
-      python - <<'PY'
-try:
-    import torch
-    print(f"[DEBUG] torch={torch.__version__} cuda={torch.version.cuda} cuda_available={torch.cuda.is_available()} device_count={torch.cuda.device_count()}")
-    if torch.cuda.is_available():
-        print(f"[DEBUG] cuda_device_0={torch.cuda.get_device_name(0)}")
-except Exception as exc:
-    print(f"[DEBUG] Torch diagnostics unavailable: {exc}")
-PY
-    fi
-
-    OUTDIR="embeddings_${sample_id}_${embedding_mode}"
+    OUTDIR_TILE="embeddings_${sample_id}_tile"
+    OUTDIR_INNER="embeddings_${sample_id}_inner_square"
     ATTEMPT_BATCH=${initial_batch}
-    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=${initial_batch}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
+    echo "[INFO] UNI2 shared runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=${initial_batch}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
-      rm -rf "\$OUTDIR"
-      mkdir -p "\$OUTDIR"
+      rm -rf "\$OUTDIR_TILE" "\$OUTDIR_INNER"
+      mkdir -p "\$OUTDIR_TILE" "\$OUTDIR_INNER"
 
-      ATTEMPT_ERR=".uni2_attempt_batch_\${ATTEMPT_BATCH}.err"
+      ATTEMPT_ERR=".uni2_shared_attempt_batch_\${ATTEMPT_BATCH}.err"
       set +e
       python "${uni2_script}" \\
         --image "${image_tif}" \\
         --mask "${mask_tif}" \\
-        --outdir "\$OUTDIR" \\
+        --outdir "\$OUTDIR_TILE" \\
+        --paired-inner-square-outdir "\$OUTDIR_INNER" \\
         --image-level ${params.uni2_image_level} \\
         ${force_full_flag} \\
         --grid "${params.uni2_grid}" \\
         --tile-size ${params.uni2_tile_size} \\
-        ${zero_outside_flag} \\
         ${save_tiles_flag} \\
         --tiles-root "${tiles_root_path}" \\
         --bucket-size ${params.uni2_bucket_size} \\
         --min-area ${params.uni2_min_area} \\
-        ${mask_context_flag} \\
-        ${inner_square_factor_flag} \\
-        ${inner_square_min_flag} \\
-        ${inner_square_max_flag} \\
-        ${inner_square_fixed_flag} \\
+        --mask-context-mode none \\
+        --inner-square-factor ${params.uni2_inner_square_factor} \\
+        --inner-square-min-px ${params.uni2_inner_square_min_px} \\
+        --inner-square-max-px ${params.uni2_inner_square_max_px} \\
+        --inner-square-fixed-px ${params.uni2_inner_square_fixed_px} \\
         --encoder "${params.uni2_encoder}" \\
         --backend "${params.uni2_backend}" \\
         --pooling "${params.uni2_pooling}" \\
@@ -148,22 +129,22 @@ PY
       set -e
 
       if [[ "\$RC" -eq 0 ]]; then
-        echo "[INFO] UNI2 succeeded with batch=\$ATTEMPT_BATCH"
+        echo "[INFO] UNI2 shared tile+inner_square succeeded with batch=\$ATTEMPT_BATCH"
         break
       fi
 
       if grep -Eiq 'No space left on device|not enough free disk space' "\$ATTEMPT_ERR"; then
-        echo "[ERROR] UNI2 cache path has insufficient free disk. Free disk space and rerun." >&2
+        echo "[ERROR] UNI2 shared cache path has insufficient free disk. Free disk space and rerun." >&2
         exit "\$RC"
       fi
 
       if [[ "\$RC" -ne 137 && "\$RC" -ne 134 && "\$RC" -ne 9 ]] && ! grep -Eiq 'Killed|out of memory|cannot allocate memory' "\$ATTEMPT_ERR"; then
-        echo "[ERROR] UNI2 failed with non-OOM error (exit=\$RC)." >&2
+        echo "[ERROR] UNI2 shared failed with non-OOM error (exit=\$RC)." >&2
         exit "\$RC"
       fi
 
       if [[ "\$ATTEMPT_BATCH" -le 1 ]]; then
-        echo "[ERROR] UNI2 failed even at batch=1 (exit=\$RC)." >&2
+        echo "[ERROR] UNI2 shared failed even at batch=1 (exit=\$RC)." >&2
         exit "\$RC"
       fi
 
@@ -174,14 +155,15 @@ PY
       if [[ "\$NEXT_BATCH" -ge "\$ATTEMPT_BATCH" ]]; then
         NEXT_BATCH=\$(( ATTEMPT_BATCH - 1 ))
       fi
-      echo "[WARN] UNI2 failed with batch=\$ATTEMPT_BATCH (exit=\$RC). Retrying with batch=\$NEXT_BATCH." >&2
+      echo "[WARN] UNI2 shared failed with batch=\$ATTEMPT_BATCH (exit=\$RC). Retrying with batch=\$NEXT_BATCH." >&2
       ATTEMPT_BATCH="\$NEXT_BATCH"
     done
     """
 
     stub:
     """
-    mkdir -p "embeddings_${sample_id}_${embedding_mode}"
-    touch "embeddings_${sample_id}_${embedding_mode}/embeddings_000000.csv"
+    mkdir -p "embeddings_${sample_id}_tile" "embeddings_${sample_id}_inner_square"
+    touch "embeddings_${sample_id}_tile/embeddings_000000.csv"
+    touch "embeddings_${sample_id}_inner_square/embeddings_000000.csv"
     """
 }

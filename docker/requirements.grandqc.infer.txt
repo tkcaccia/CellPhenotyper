@@ -1,0 +1,5 @@
+timm==0.4.12
+pretrainedmodels==0.7.4
+efficientnet-pytorch==0.7.1
+munch==4.0.0
+segmentation-models-pytorch==0.3.1

@@ -4,23 +4,31 @@ process RUN_GIGATIME_ON_CROP {
     label 'gpu_capable'
     maxForks 1
 
-    publishDir "${params.outdir_base}/03_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/03_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "gigatime_${sample_id}/**"
+    publishDir "${params.outdir_base}/06_marker_quantification/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "quantification_${sample_id}/**"
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.gigatime_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.gigatime_memory_gb as int))} GB" }
     time { params.gigatime_time as String }
 
     input:
-    tuple val(sample_id), path(crop_tif)
+    tuple val(sample_id), path(crop_tif), path(nuclei_mask_tif), path(cyto_mask_tif)
 
     output:
     tuple val(sample_id), path("gigatime_${sample_id}"), emit: gigatime_dir
-    tuple val(sample_id), path("gigatime_${sample_id}/gigatime_probs.ome.tif"), emit: gigatime_tif
+    tuple val(sample_id), path("quantification_${sample_id}"), emit: quant_dir
 
     script:
     def gigatime_script = "${projectDir}/${params.gigatime_script}"
     def device_value = params.compute_device == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
+    def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
+    def pyramid_flag = params.gigatime_output_pyramid ? '--pyramid' : ''
+    def blockwise_flag = params.gigatime_blockwise ? '--blockwise' : ''
+    def predictor_flag = params.gigatime_output_predictor ? '--predictor' : ''
+    def skip_background_flag = params.gigatime_skip_background_blocks ? '--skip-background-blocks' : ''
+    def jpg_save_tiles_flag = params.gigatime_jpg_save_tiles ? '--jpg-save-tiles' : ''
+    def output_format = params.gigatime_output_format ?: 'ome_tiff'
     """
     set -euo pipefail
 
@@ -74,22 +82,49 @@ PY
     fi
 
     mkdir -p "gigatime_${sample_id}"
+    mkdir -p "quantification_${sample_id}"
 
     python "${gigatime_script}" \\
       --image "${crop_tif}" \\
       --outdir "gigatime_${sample_id}" \\
+      --nuclei-mask "${nuclei_mask_tif}" \\
+      --cyto-mask "${cyto_mask_tif}" \\
+      --quant-dir "quantification_${sample_id}" \\
       --repo-id "${params.gigatime_repo_id}" \\
       --page ${params.gigatime_page} \\
       --patch-size ${params.gigatime_patch_size} \\
       --stride ${params.gigatime_stride} \\
       --batch-size ${params.gigatime_batch_size} \\
       --device "${device_value}" \\
+      --auto-threshold-mpix ${params.gigatime_auto_threshold_mpix} \\
+      --max-side ${params.gigatime_max_side} \\
+      --target-mpp ${params.gigatime_target_mpp} \\
+      --output-format "${output_format}" \\
+      --output-dtype "${params.gigatime_output_dtype}" \\
+      --output-channels "${params.gigatime_output_channels ?: ''}" \\
+      --jpg-markers "${params.gigatime_jpg_markers}" \\
+      --jpg-quality ${params.gigatime_jpg_quality} \\
+      --jpg-preview-max-side ${params.gigatime_jpg_preview_max_side} \\
+      ${jpg_save_tiles_flag} \\
+      --block-size ${params.gigatime_block_size} \\
+      --skip-background-downsample ${params.gigatime_skip_background_downsample} \\
+      --skip-background-min-fraction ${params.gigatime_skip_background_min_fraction} \\
+      --skip-background-close-radius ${params.gigatime_skip_background_close_radius} \\
+      --skip-background-min-obj-area ${params.gigatime_skip_background_min_obj_area} \\
+      --skip-background-hole-area ${params.gigatime_skip_background_hole_area} \\
+      --max-output-gib ${params.gigatime_max_output_gib} \\
+      --disk-buffer-threshold-gib ${params.gigatime_disk_buffer_threshold_gib} \\
+      ${strict_target_flag} \\
+      ${pyramid_flag} \\
+      ${blockwise_flag} \\
+      ${predictor_flag} \\
+      ${skip_background_flag} \\
       --compression "${params.gigatime_output_compression}"
     """
 
     stub:
     """
     mkdir -p "gigatime_${sample_id}"
-    touch "gigatime_${sample_id}/gigatime_probs.ome.tif"
+    mkdir -p "quantification_${sample_id}"
     """
 }

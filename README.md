@@ -14,6 +14,7 @@ nextflow run main.nf
 - [How to run](TUTORIAL.md)
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
+- [Pipeline step differences vs upstream tools](UPSTREAM_DIFFS.md)
 - [Release](RELEASE.md)
 - [Linux update playbook](LINUX_UPDATE.md)
 - [Singularity maintainer guide](singularity/README.md)

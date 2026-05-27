@@ -9,7 +9,7 @@ process QUANTIFY_GIGATIME_INTENSITY {
     time { params.marker_quantification_time as String }
 
     input:
-    tuple val(sample_id), path(gigatime_tif), path(mask_tif), val(mask_name)
+    tuple val(sample_id), path(gigatime_input), path(mask_tif), val(mask_name)
 
     output:
     tuple val(sample_id), val(mask_name), path("${sample_id}_${mask_name}_gigatime_quantification.csv"), emit: quant_csv
@@ -23,7 +23,7 @@ process QUANTIFY_GIGATIME_INTENSITY {
     set -euo pipefail
 
     python "${quantify_script}" \\
-      --image "${gigatime_tif}" \\
+      --image "${gigatime_input}" \\
       --mask "${mask_tif}" \\
       --mask-name "${mask_name}" \\
       --out-quant-csv "${sample_id}_${mask_name}_gigatime_quantification.csv" \\

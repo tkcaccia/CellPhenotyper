@@ -6,7 +6,7 @@ if (length(args) < 2) {
     paste(
       "Usage: Rscript run_kodama_analysis.R",
       "<rawdata_rdata> <output_dir>",
-      "[--embedding-mode tile|nuclei|cyto|inner_square|all|tile,nuclei,...]",
+      "[--embedding-mode tile|nuclei|cyto|inner_square|all|full|tile,inner_square,...]",
       "[--dims-to-run N] [--spark-top N] [--n-cores N]"
     )
   )
@@ -60,7 +60,10 @@ if (!is.finite(n_cores) || n_cores < 1L) {
 
 normalize_modes <- function(mode_string) {
   x <- tolower(trimws(mode_string))
-  if (!nzchar(x) || x == "all") {
+  if (!nzchar(x) || x %in% c("all", "default")) {
+    return(c("tile", "inner_square"))
+  }
+  if (x %in% c("full", "all4", "all_four", "full_stack")) {
     return(c("tile", "nuclei", "cyto", "inner_square"))
   }
   tokens <- unlist(strsplit(gsub("\\+", ",", x), ",", fixed = FALSE), use.names = FALSE)
