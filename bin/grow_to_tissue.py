@@ -50,12 +50,23 @@ try:
 except Exception:
     Image = None
 
-from medsam_border_refine import (
-    DEFAULT_MEDSAM_CHECKPOINT,
-    MedSAMConfig,
-    MedSAMUnavailableError,
-    run_medsam_border_refine,
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_MEDSAM_REPO = Path(os.environ.get("MEDSAM_REPO_DIR", str(PROJECT_ROOT / "third_party" / "MedSAM")))
+DEFAULT_MEDSAM_CHECKPOINT = Path(
+    os.environ.get(
+        "MEDSAM_CHECKPOINT",
+        str(DEFAULT_MEDSAM_REPO / "work_dir" / "MedSAM" / "medsam_vit_b.pth"),
+    )
 )
+
+
+def load_medsam_runtime():
+    from medsam_border_refine import (
+        MedSAMConfig,
+        MedSAMUnavailableError,
+        run_medsam_border_refine,
+    )
+    return MedSAMConfig, MedSAMUnavailableError, run_medsam_border_refine
 
 
 DEFAULT_PALETTE = np.array([
@@ -494,6 +505,7 @@ def main():
     elif args.method == "medsam_border_refine":
         if image_rgb is None:
             raise RuntimeError("MedSAM border refinement requires --image so the border can be refined from the ROI crop.")
+        MedSAMConfig, MedSAMUnavailableError, run_medsam_border_refine = load_medsam_runtime()
         print(f"[INFO] step16 method={args.method}")
         med_cfg = MedSAMConfig(
             checkpoint=str(args.medsam_checkpoint),
