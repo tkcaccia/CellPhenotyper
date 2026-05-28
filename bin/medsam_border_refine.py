@@ -222,17 +222,7 @@ def _build_protected_core(baseline: np.ndarray, seed_binary: np.ndarray, radius:
 
 
 def _nearest_seed_labels(seed_labels: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    seeds = np.asarray(seed_labels)
-    mask = np.asarray(mask).astype(bool)
-    out = np.zeros(seeds.shape, dtype=seeds.dtype)
-    fg = seeds > 0
-    if not fg.any() or not mask.any():
-        return out
-    _, indices = ndi.distance_transform_edt(~fg, return_indices=True)
-    nearest = seeds[tuple(indices)]
-    out[mask] = nearest[mask]
-    out[fg & mask] = seeds[fg & mask]
-    return out
+    return _nearest_existing_labels(seed_labels, mask)
 
 
 def _nearest_existing_labels(label_map: np.ndarray, target_mask: np.ndarray | None = None) -> np.ndarray:
@@ -241,14 +231,31 @@ def _nearest_existing_labels(label_map: np.ndarray, target_mask: np.ndarray | No
     fg = labels > 0
     if not fg.any():
         return out
-    _, indices = ndi.distance_transform_edt(~fg, return_indices=True)
-    nearest = labels[tuple(indices)]
-    if target_mask is None:
-        out[:] = nearest.astype(labels.dtype, copy=False)
-        out[fg] = labels[fg]
-        return out
     target_mask = np.asarray(target_mask).astype(bool)
-    out[target_mask] = nearest[target_mask]
+    if not target_mask.any():
+        return out
+    cc = measure.label(target_mask, connectivity=2)
+    for prop in measure.regionprops(cc):
+        y0, x0, y1, x1 = prop.bbox
+        pad = 32
+        while True:
+            yy0 = max(0, y0 - pad)
+            xx0 = max(0, x0 - pad)
+            yy1 = min(labels.shape[0], y1 + pad)
+            xx1 = min(labels.shape[1], x1 + pad)
+            sub_labels = labels[yy0:yy1, xx0:xx1]
+            sub_target = cc[yy0:yy1, xx0:xx1] == prop.label
+            fg_sub = sub_labels > 0
+            if fg_sub.any() or (yy0 == 0 and xx0 == 0 and yy1 == labels.shape[0] and xx1 == labels.shape[1]):
+                break
+            pad *= 2
+        if not fg_sub.any():
+            continue
+        _, indices = ndi.distance_transform_edt(~fg_sub, return_indices=True)
+        nearest = sub_labels[tuple(indices)]
+        sub_out = out[yy0:yy1, xx0:xx1]
+        sub_out[sub_target] = nearest[sub_target].astype(labels.dtype, copy=False)
+        out[yy0:yy1, xx0:xx1] = sub_out
     out[fg & target_mask] = labels[fg & target_mask]
     return out
 
@@ -364,16 +371,24 @@ def run_medsam_border_refine(
     baseline_tissue_mask: np.ndarray,
     config: MedSAMConfig,
     baseline_label_map: np.ndarray | None = None,
-) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, object], Dict[str, np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray | None, float, Dict[str, object], Dict[str, np.ndarray]]:
     start = time.perf_counter()
     seed_labels = np.asarray(seed_labels)
+    label_dtype = seed_labels.dtype
+    if np.issubdtype(label_dtype, np.integer):
+        min_label = int(seed_labels.min(initial=0))
+        max_label = int(seed_labels.max(initial=0))
+        if min_label >= 0 and max_label <= np.iinfo(np.uint16).max:
+            label_dtype = np.uint16
+    if seed_labels.dtype != label_dtype:
+        seed_labels = seed_labels.astype(label_dtype, copy=False)
     seed_binary = seed_labels > 0
     baseline = np.asarray(baseline_tissue_mask).astype(bool)
     if baseline.shape != seed_binary.shape:
         raise ValueError(f"Baseline mask and seed mask shape mismatch: {baseline.shape} vs {seed_binary.shape}")
 
     if baseline_label_map is not None:
-        baseline_labels = np.asarray(baseline_label_map).astype(seed_labels.dtype, copy=False)
+        baseline_labels = np.asarray(baseline_label_map).astype(label_dtype, copy=False)
         if baseline_labels.shape != seed_labels.shape:
             raise ValueError(
                 f"Baseline label map and seed mask shape mismatch: {baseline_labels.shape} vs {seed_labels.shape}"
@@ -386,17 +401,18 @@ def run_medsam_border_refine(
             baseline_labels[unlabeled_baseline] = fallback_labels[unlabeled_baseline]
     else:
         baseline_labels = _nearest_seed_labels(seed_labels, baseline)
-    final_labels = baseline_labels.copy()
-    best_score = np.full(baseline.shape, -np.inf, dtype=np.float32)
+    final_labels = baseline_labels.copy() if config.save_debug else baseline_labels
+    score_dtype = np.float16
+    best_score = np.full(baseline.shape, -np.inf, dtype=score_dtype)
     best_score[baseline] = 0.25
-    probability_map = np.zeros(baseline.shape, dtype=np.float32)
+    probability_map = np.zeros(baseline.shape, dtype=score_dtype) if config.save_debug else None
     background_mask = _obvious_background_mask(image)
     region_meta: List[Dict[str, object]] = []
 
     protected_core = np.zeros(baseline.shape, dtype=bool)
     editable_band = np.zeros(baseline.shape, dtype=bool)
     outer_envelope = np.zeros(baseline.shape, dtype=bool)
-    protected_core_labels = np.zeros(seed_labels.shape, dtype=seed_labels.dtype)
+    protected_core_labels = np.zeros(seed_labels.shape, dtype=label_dtype)
 
     unique_labels = [int(x) for x in np.unique(seed_labels) if x > 0]
 
@@ -472,10 +488,11 @@ def run_medsam_border_refine(
             sub_scores[crop_seed] = 2.0
             final_labels[y0:y1, x0:x1] = sub_labels
             best_score[y0:y1, x0:x1] = sub_scores
-            probability_map[y0:y1, x0:x1] = np.maximum(
-                probability_map[y0:y1, x0:x1],
-                pred_prob * crop_band.astype(np.float32),
-            )
+            if probability_map is not None:
+                probability_map[y0:y1, x0:x1] = np.maximum(
+                    probability_map[y0:y1, x0:x1],
+                    (pred_prob * crop_band.astype(np.float32)).astype(score_dtype, copy=False),
+                )
             region_meta.append(
                 {
                     "label_id": int(lid),
@@ -487,8 +504,8 @@ def run_medsam_border_refine(
                 }
             )
 
-    raw_medsam_labels = final_labels.copy()
-    raw_medsam_mask = raw_medsam_labels > 0
+    raw_medsam_labels = final_labels.copy() if config.save_debug else None
+    raw_medsam_mask = (raw_medsam_labels > 0) if raw_medsam_labels is not None else None
 
     final_mask = _conservative_cleanup(final_labels > 0, baseline, seed_binary, protected_core, editable_band, outer_envelope, background_mask, config)
     final_labels[~final_mask] = 0
@@ -542,16 +559,19 @@ def run_medsam_border_refine(
         "regions": region_meta,
     }
     artifacts = {
-        "baseline_mask": baseline.astype(np.uint8),
-        "baseline_labels": baseline_labels.astype(seed_labels.dtype),
         "protected_core": protected_core.astype(np.uint8),
-        "protected_core_labels": protected_core_labels.astype(seed_labels.dtype),
+        "protected_core_labels": protected_core_labels.astype(label_dtype, copy=False),
         "editable_band": editable_band.astype(np.uint8),
-        "outer_envelope": outer_envelope.astype(np.uint8),
-        "probability_map": probability_map.astype(np.float32),
-        "raw_medsam_mask": raw_medsam_mask.astype(np.uint8),
-        "raw_medsam_label_map": raw_medsam_labels.astype(seed_labels.dtype),
         "final_mask": final_mask.astype(np.uint8),
-        "label_map": final_labels.astype(seed_labels.dtype),
+        "label_map": final_labels.astype(label_dtype, copy=False),
     }
-    return final_mask.astype(bool), probability_map.astype(np.float32), float(runtime), meta, artifacts
+    if config.save_debug:
+        artifacts["baseline_mask"] = baseline.astype(np.uint8)
+        artifacts["baseline_labels"] = baseline_labels.astype(label_dtype, copy=False)
+        artifacts["outer_envelope"] = outer_envelope.astype(np.uint8)
+        artifacts["raw_medsam_mask"] = raw_medsam_mask.astype(np.uint8)
+        artifacts["raw_medsam_label_map"] = raw_medsam_labels.astype(label_dtype, copy=False)
+    if probability_map is not None:
+        artifacts["probability_map"] = probability_map.astype(np.float16, copy=False)
+    prob_out = probability_map.astype(np.float16, copy=False) if probability_map is not None else None
+    return final_mask.astype(bool), prob_out, float(runtime), meta, artifacts

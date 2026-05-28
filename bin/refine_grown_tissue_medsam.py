@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from tifffile import imwrite
+import tifffile
 
 from grow_to_tissue import (
     DEFAULT_PALETTE,
@@ -125,6 +126,30 @@ def save_png(path: Path, arr: np.ndarray) -> None:
     Image.fromarray(arr).save(path)
 
 
+def preview_step_for_shape(shape: Tuple[int, int], max_side: int = 2048) -> int:
+    h, w = int(shape[0]), int(shape[1])
+    return max(1, int(np.ceil(max(h, w) / float(max_side))))
+
+
+def preview_subsample(arr: np.ndarray, step: int) -> np.ndarray:
+    step = max(1, int(step))
+    if step == 1:
+        return np.asarray(arr)
+    arr = np.asarray(arr)
+    if arr.ndim == 2:
+        return arr[::step, ::step]
+    return arr[::step, ::step, ...]
+
+
+def load_tiff_memmap(path: str, name: str) -> np.ndarray:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{name} not found: {path}")
+    try:
+        return tifffile.memmap(path)
+    except Exception:
+        return load_tiff(path, name)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Refine the step-16 grown tissue mask with MedSAM while preserving the protected core and seeded labels."
@@ -159,9 +184,17 @@ def main() -> None:
     ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=True)
     args = ap.parse_args()
 
-    image_rgb = load_tiff(args.image, "image")
-    seed_labels = load_mask_2d(args.seed_mask, "seed mask").astype(np.int32)
-    grown_labels = load_mask_2d(args.grown_mask, "grown mask").astype(np.int32)
+    image_rgb = load_tiff_memmap(args.image, "image")
+    seed_labels = ensure_2d(load_tiff_memmap(args.seed_mask, "seed mask"), "seed mask")
+    grown_labels = ensure_2d(load_tiff_memmap(args.grown_mask, "grown mask"), "grown mask")
+    label_dtype = seed_labels.dtype
+    if np.issubdtype(seed_labels.dtype, np.integer):
+        min_label = int(np.min(seed_labels, initial=0))
+        max_label = int(np.max(seed_labels, initial=0))
+        if min_label >= 0 and max_label <= np.iinfo(np.uint16).max:
+            label_dtype = np.uint16
+    seed_labels = seed_labels.astype(label_dtype, copy=False)
+    grown_labels = grown_labels.astype(label_dtype, copy=False)
 
     if grown_labels.shape != seed_labels.shape:
         raise ValueError(f"Step-15 and step-16 masks must share the same shape: {seed_labels.shape} vs {grown_labels.shape}")
@@ -197,8 +230,8 @@ def main() -> None:
     except MedSAMUnavailableError as exc:
         raise RuntimeError(f"MedSAM unavailable: {exc}") from exc
 
-    refined_labels = np.asarray(artifacts.get("label_map", grown_labels), dtype=grown_labels.dtype)
-    raw_labels = np.asarray(artifacts.get("raw_medsam_label_map", refined_labels), dtype=grown_labels.dtype)
+    refined_labels = np.asarray(artifacts.get("label_map", grown_labels), dtype=label_dtype)
+    raw_labels = np.asarray(artifacts.get("raw_medsam_label_map", refined_labels), dtype=label_dtype)
     protected_core = np.asarray(artifacts.get("protected_core", np.zeros_like(grown_labels)), dtype=bool)
     editable_band = np.asarray(artifacts.get("editable_band", np.zeros_like(grown_labels)), dtype=bool)
 
@@ -231,31 +264,42 @@ def main() -> None:
     }
     (outdir / f"{prefix}_medsam_summary.json").write_text(json.dumps(summary, indent=2))
 
-    raw_vs_final_change = to_uint8_rgb(image_rgb)
-    raw_only = (raw_labels > 0) & ~(refined_labels > 0)
-    final_only = (refined_labels > 0) & ~(raw_labels > 0)
-    relabeled = (raw_labels != refined_labels) & (raw_labels > 0) & (refined_labels > 0)
+    diag_step = preview_step_for_shape(seed_labels.shape, max_side=2048)
+    summary["diagnostic_preview_step"] = int(diag_step)
+    image_preview = preview_subsample(image_rgb, diag_step)
+    seed_preview = preview_subsample(seed_labels, diag_step)
+    raw_preview = preview_subsample(raw_labels, diag_step)
+    refined_preview = preview_subsample(refined_labels, diag_step)
+    protected_preview = preview_subsample(protected_core, diag_step)
+    editable_preview = preview_subsample(editable_band, diag_step)
+
+    raw_vs_final_change = to_uint8_rgb(image_preview)
+    raw_only = (raw_preview > 0) & ~(refined_preview > 0)
+    final_only = (refined_preview > 0) & ~(raw_preview > 0)
+    relabeled = (raw_preview != refined_preview) & (raw_preview > 0) & (refined_preview > 0)
     raw_vs_final_change[raw_only] = ((0.65 * raw_vs_final_change[raw_only]) + 0.35 * np.array([255, 0, 0])).astype(np.uint8)
     raw_vs_final_change[final_only] = ((0.65 * raw_vs_final_change[final_only]) + 0.35 * np.array([0, 255, 255])).astype(np.uint8)
     raw_vs_final_change[relabeled] = ((0.55 * raw_vs_final_change[relabeled]) + 0.45 * np.array([255, 255, 0])).astype(np.uint8)
 
-    save_png(outdir / f"{prefix}_medsam_seed_labels.png", overlay_labels(image_rgb, seed_labels))
-    save_png(outdir / f"{prefix}_medsam_protected_core.png", overlay_mask(image_rgb, protected_core, (255, 200, 0)))
-    save_png(outdir / f"{prefix}_medsam_editable_band.png", overlay_mask(image_rgb, editable_band, (180, 0, 255)))
-    save_png(outdir / f"{prefix}_medsam_raw_labels.png", overlay_labels(image_rgb, raw_labels))
-    save_png(outdir / f"{prefix}_medsam_refined_labels.png", overlay_labels(image_rgb, refined_labels))
-    save_png(outdir / f"{prefix}_medsam_probability_heatmap.png", heatmap(probability_map))
-    save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_rgb, raw_labels > 0, refined_labels > 0))
+    save_png(outdir / f"{prefix}_medsam_seed_labels.png", overlay_labels(image_preview, seed_preview))
+    save_png(outdir / f"{prefix}_medsam_protected_core.png", overlay_mask(image_preview, protected_preview, (255, 200, 0)))
+    save_png(outdir / f"{prefix}_medsam_editable_band.png", overlay_mask(image_preview, editable_preview, (180, 0, 255)))
+    save_png(outdir / f"{prefix}_medsam_raw_labels.png", overlay_labels(image_preview, raw_preview))
+    save_png(outdir / f"{prefix}_medsam_refined_labels.png", overlay_labels(image_preview, refined_preview))
+    if probability_map is not None:
+        prob_preview = preview_subsample(probability_map, diag_step)
+        save_png(outdir / f"{prefix}_medsam_probability_heatmap.png", heatmap(prob_preview))
+    save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_preview, raw_preview > 0, refined_preview > 0))
 
     panel_path = outdir / f"{prefix}_medsam_raw_vs_final_panel.png"
     make_panel(
         [
-            ("Original image", to_uint8_rgb(image_rgb)),
-            ("Step-15 labels", overlay_labels(image_rgb, seed_labels)),
-            ("Protected core", overlay_mask(image_rgb, protected_core, (255, 200, 0))),
-            ("Editable band", overlay_mask(image_rgb, editable_band, (180, 0, 255))),
-            ("Immediately after MedSAM", overlay_labels(image_rgb, raw_labels)),
-            ("After refinements", overlay_labels(image_rgb, refined_labels)),
+            ("Original image", to_uint8_rgb(image_preview)),
+            ("Step-15 labels", overlay_labels(image_preview, seed_preview)),
+            ("Protected core", overlay_mask(image_preview, protected_preview, (255, 200, 0))),
+            ("Editable band", overlay_mask(image_preview, editable_preview, (180, 0, 255))),
+            ("Immediately after MedSAM", overlay_labels(image_preview, raw_preview)),
+            ("After refinements", overlay_labels(image_preview, refined_preview)),
             ("What refinements changed", raw_vs_final_change),
         ],
         panel_path,

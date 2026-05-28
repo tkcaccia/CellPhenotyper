@@ -1,6 +1,7 @@
 process REFINE_GROWN_TISSUE_MEDSAM {
     tag "${sample_id}:${cluster_variant}"
     label 'gpu_capable'
+    maxForks 1
 
     publishDir "${params.outdir_base}/17_medsam_refined_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
