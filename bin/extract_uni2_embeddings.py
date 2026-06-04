@@ -18,6 +18,7 @@ import os
 import sys
 import math
 import random
+import re
 import shutil
 import time
 from pathlib import Path
@@ -500,6 +501,116 @@ def _shape_as_hwc(shp: Tuple[int, ...]) -> Tuple[int, int, int]:
     raise ValueError(f"Unsupported array shape: {shp}")
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, tuple) and len(value) == 2:
+        num, den = value
+        if float(den) == 0:
+            return None
+        return float(num) / float(den)
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def read_source_mpp(path: str) -> Optional[float]:
+    unit_to_um = {
+        2: 25_400.0,  # inch
+        3: 10_000.0,  # centimeter
+    }
+    try:
+        with tifffile.TiffFile(path) as tf:
+            page = tf.pages[0]
+            tags = page.tags
+            desc = None
+            try:
+                desc = tags["ImageDescription"].value
+            except Exception:
+                desc = None
+            if isinstance(desc, str):
+                for pattern in (
+                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
+                    r"MPP\s*=\s*([0-9]+(?:\.[0-9]+)?)",
+                ):
+                    m = re.search(pattern, desc)
+                    if m:
+                        return float(m.group(1))
+
+            unit = None
+            try:
+                unit = int(tags["ResolutionUnit"].value)
+            except Exception:
+                unit = None
+            if unit in unit_to_um:
+                vals = []
+                for tag_name in ("XResolution", "YResolution"):
+                    try:
+                        res = _safe_float(tags[tag_name].value)
+                    except Exception:
+                        res = None
+                    if res and res > 0:
+                        vals.append(unit_to_um[unit] / res)
+                if vals:
+                    return float(sum(vals) / len(vals))
+    except Exception:
+        return None
+    return None
+
+
+def infer_source_mpp(path: str) -> Optional[float]:
+    direct = read_source_mpp(path)
+    if direct:
+        return direct
+
+    image_path = Path(path).resolve()
+    shift_path = image_path.with_name("shift.json")
+    if not shift_path.exists():
+        return None
+    try:
+        shift = json.loads(shift_path.read_text())
+    except Exception:
+        return None
+    input_image = shift.get("input_image")
+    if not input_image:
+        return None
+    input_path = Path(str(input_image))
+    candidate_paths: List[Path] = []
+    if input_path.is_absolute():
+        candidate_paths.append(input_path)
+    for parent in [image_path.parent, *image_path.parents]:
+        candidate_paths.append(parent / input_path)
+        if not input_path.is_absolute():
+            try:
+                candidate_paths.extend(parent.glob(f"input*/{input_path.name}"))
+            except Exception:
+                pass
+    seen = set()
+    for candidate in candidate_paths:
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        mpp = read_source_mpp(str(resolved))
+        if mpp:
+            print(f"[INFO] UNI2 source MPP recovered from {resolved}", flush=True)
+            return mpp
+    return None
+
+
+def resolve_extraction_tile_size(model_tile_size: int, source_mpp: Optional[float], target_mpp: float) -> Tuple[int, Optional[float]]:
+    model_tile_size = max(1, int(model_tile_size))
+    if not source_mpp or source_mpp <= 0 or target_mpp <= 0:
+        return model_tile_size, source_mpp
+    extraction_tile_size = max(1, int(round(float(model_tile_size) * float(target_mpp) / float(source_mpp))))
+    effective_mpp = float(source_mpp) * (float(extraction_tile_size) / float(model_tile_size))
+    return extraction_tile_size, effective_mpp
+
+
 def _resolve_zarr_array(zobj: Any, level: int = 0):
     """
     tifffile+zarr can return either an Array (older behavior) or a Group with
@@ -937,7 +1048,7 @@ def derive_inner_square_style_embeddings(
     scale = float(img_size) / float(tile_size)
     keep_rows = []
     for meta in batch_meta:
-        area_px = int(meta.get("area_px", 0))
+        area_px = int(meta.get("area_model_px", meta.get("area_px", 0)))
         x0, y0, x1, y1 = compute_inner_square_bounds(
             tile_size=tile_size,
             center_x_local=center_local,
@@ -981,7 +1092,14 @@ def parse_args():
     p.add_argument("--mask", required=True)
     p.add_argument("--outdir", required=True)
     p.add_argument("--paired-inner-square-outdir", default="",
-                   help="Optional second output directory that stores inner_square-style embeddings derived from the same tile forward pass")
+                   help="Optional second output directory for paired inner_square embeddings")
+    p.add_argument("--paired-inner-square-mode", default="masked_forward",
+                   choices=["masked_forward", "token_subset"],
+                   help=(
+                       "How to produce --paired-inner-square-outdir. "
+                       "masked_forward runs the masked inner-square image through the encoder in the same batch as the tile image; "
+                       "token_subset averages patch tokens from the tile forward pass."
+                   ))
 
     p.add_argument("--image-level", type=int, default=0, help="Pyramid level for IMAGE (mask assumed same grid)")
     p.add_argument("--force-full-image", action="store_true",
@@ -990,6 +1108,10 @@ def parse_args():
     p.add_argument("--grid", type=str, default="10x10", help="Grid like 10x10")
 
     p.add_argument("--tile-size", type=int, default=224, help="Per-cell crop size for encoder")
+    p.add_argument("--target-mpp", type=float, default=0.0,
+                   help="Target microns-per-pixel represented by encoder input pixels. 0 keeps source pixels unchanged.")
+    p.add_argument("--default-source-mpp", type=float, default=0.25,
+                   help="Fallback source MPP if TIFF metadata does not provide calibration.")
     p.add_argument("--zero-outside-mask", action="store_true")
     p.add_argument("--outside-fill", type=int, default=0)
 
@@ -1023,6 +1145,8 @@ def parse_args():
 
     p.add_argument("--rows-per-csv", type=int, default=10000)
     p.add_argument("--mask-block", type=int, default=4096)
+    p.add_argument("--max-cells", type=int, default=0,
+                   help="Process only the first N labels after filtering; intended for quick validation only.")
 
     # NEW: global scaling sampling
     p.add_argument("--scale-samples", type=int, default=200)
@@ -1036,6 +1160,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    paired_mode = str(args.paired_inner_square_mode)
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     secondary_outdir = Path(args.paired_inner_square_outdir).resolve() if args.paired_inner_square_outdir else None
@@ -1092,6 +1217,25 @@ def main():
             print(f"[WARN] image(level={args.image_level}) shape={ih}x{iw} differs from mask={H}x{W}")
             print("[WARN] Ensure mask and selected image level are aligned!")
 
+    detected_source_mpp = infer_source_mpp(str(img_path))
+    source_mpp = detected_source_mpp if detected_source_mpp and detected_source_mpp > 0 else float(args.default_source_mpp)
+    extraction_tile_size, effective_mpp = resolve_extraction_tile_size(
+        model_tile_size=int(args.tile_size),
+        source_mpp=source_mpp,
+        target_mpp=float(args.target_mpp),
+    )
+    inner_scale = float(extraction_tile_size) / float(max(1, int(args.tile_size)))
+    inner_square_fixed_px = int(round(int(args.inner_square_fixed_px) * inner_scale)) if int(args.inner_square_fixed_px) > 0 else 0
+    inner_square_min_px = int(round(int(args.inner_square_min_px) * inner_scale)) if int(args.inner_square_min_px) > 0 else 0
+    inner_square_max_px = int(round(int(args.inner_square_max_px) * inner_scale)) if int(args.inner_square_max_px) > 0 else 0
+    print(
+        "[INFO] UNI2 MPP calibration: "
+        f"detected_source_mpp={detected_source_mpp} source_mpp={source_mpp:.6f} "
+        f"target_mpp={float(args.target_mpp):.6f} effective_mpp={effective_mpp} "
+        f"model_tile_size={int(args.tile_size)} extraction_tile_size={int(extraction_tile_size)}",
+        flush=True,
+    )
+
     # NEW: compute global scaling once
     lo, hi = compute_global_percentiles(
         img_reader,
@@ -1107,6 +1251,9 @@ def main():
     if args.min_area > 0:
         keep = area >= args.min_area
         labels, cx, cy, area = labels[keep], cx[keep], cy[keep], area[keep]
+    if int(args.max_cells) > 0:
+        n_keep = min(int(args.max_cells), labels.shape[0])
+        labels, cx, cy, area = labels[:n_keep], cx[:n_keep], cy[:n_keep], area[:n_keep]
     N = labels.shape[0]
     print(f"[INFO] cells after filter: {N}")
 
@@ -1123,7 +1270,7 @@ def main():
     tile_starts = np.searchsorted(tile_id, np.arange(GR * GC), side="left")
     tile_ends   = np.searchsorted(tile_id, np.arange(GR * GC), side="right")
 
-    half = args.tile_size // 2
+    half = extraction_tile_size // 2
 
     def init_writer_state(tile_out: Path) -> Dict[str, Any]:
         return {
@@ -1155,60 +1302,92 @@ def main():
         state["row_count"] = 0
         state["shard_idx"] += 1
 
-    batch_items = []
-    batch_meta = []
+    batch_primary_items = []
+    batch_secondary_items = []
+    batch_primary_meta = []
+    batch_secondary_meta = []
 
-    def add_example(tile_rgb_u8: np.ndarray, meta: Dict[str, Any]):
+    def prepare_model_item(tile_rgb_u8: np.ndarray):
         pil = Image.fromarray(tile_rgb_u8, mode="RGB")
         if backend_used == "hf_transformers":
-            batch_items.append(pil)
+            return pil
+        return transform(pil)
+
+    def add_example(tile_rgb_u8: np.ndarray,
+                    meta: Dict[str, Any],
+                    secondary_rgb_u8: Optional[np.ndarray] = None,
+                    secondary_meta: Optional[Dict[str, Any]] = None):
+        batch_primary_items.append(prepare_model_item(tile_rgb_u8))
+        batch_primary_meta.append(meta)
+        if secondary_outdir is not None and paired_mode == "masked_forward":
+            if secondary_rgb_u8 is None:
+                raise RuntimeError("paired masked_forward mode requires a secondary inner-square image")
+            batch_secondary_items.append(prepare_model_item(secondary_rgb_u8))
+            batch_secondary_meta.append(secondary_meta if secondary_meta is not None else dict(meta))
+
+    def forward_items(items: List[Any], need_tokens: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if backend_used == "hf_transformers":
+            inputs = processor(list(items), return_tensors="pt")
+            images = inputs["pixel_values"].to(device, non_blocking=True)
+            outputs = model(pixel_values=images)
+            raw_feats = getattr(outputs, "last_hidden_state", None)
+            if raw_feats is None:
+                raw_feats = outputs[0]
         else:
-            batch_items.append(transform(pil))
-        batch_meta.append(meta)
+            images = torch.stack(items, dim=0).to(device, non_blocking=True)
+            raw_feats = model.forward_features(images) if need_tokens and hasattr(model, "forward_features") else model(images)
+
+        cls_tokens, patch_tokens = extract_cls_and_patch_tokens(raw_feats)
+        pooled = pool_from_token_parts(cls_tokens, patch_tokens, pooling_used)
+        return pooled, cls_tokens, patch_tokens
 
     def run_batch(primary_state: Dict[str, Any], secondary_state: Optional[Dict[str, Any]]):
-        nonlocal batch_items, batch_meta
-        if not batch_items:
+        nonlocal batch_primary_items, batch_secondary_items, batch_primary_meta, batch_secondary_meta
+        if not batch_primary_items:
             return
 
         with torch.inference_mode():
-            if backend_used == "hf_transformers":
-                inputs = processor(list(batch_items), return_tensors="pt")
-                images = inputs["pixel_values"].to(device, non_blocking=True)
-                outputs = model(pixel_values=images)
-                raw_feats = getattr(outputs, "last_hidden_state", None) or outputs[0]
+            if secondary_state is not None and paired_mode == "masked_forward":
+                n_primary = len(batch_primary_items)
+                if len(batch_secondary_items) != n_primary:
+                    raise RuntimeError("paired masked_forward mode lost primary/secondary batch alignment")
+                pooled, _, _ = forward_items(batch_primary_items + batch_secondary_items, need_tokens=False)
+                pooled_np = pooled.detach().cpu().numpy()
+                tile_feats = pooled_np[:n_primary]
+                inner_square_style_feats = pooled_np[n_primary:]
             else:
-                images = torch.stack(batch_items, dim=0).to(device, non_blocking=True)
-                raw_feats = model.forward_features(images) if secondary_state is not None and hasattr(model, "forward_features") else model(images)
-
-            cls_tokens, patch_tokens = extract_cls_and_patch_tokens(raw_feats)
-            tile_feats = pool_from_token_parts(cls_tokens, patch_tokens, pooling_used).detach().cpu().numpy()
-            inner_square_style_feats = None
-            if secondary_state is not None:
-                inner_square_style_feats = derive_inner_square_style_embeddings(
-                    cls=cls_tokens,
-                    patch=patch_tokens,
-                    batch_meta=batch_meta,
-                    tile_size=int(args.tile_size),
-                    img_size=int(args.img_size),
-                    pooling_mode=pooling_used,
-                    fixed_px=int(args.inner_square_fixed_px),
-                    factor=float(args.inner_square_factor),
-                    min_px=int(args.inner_square_min_px),
-                    max_px=int(args.inner_square_max_px),
-                )
-                if inner_square_style_feats is None:
-                    raise RuntimeError(
-                        "Combined tile+inner_square_style UNI2 path requires patch-token access; "
-                        f"backend={backend_used} encoder={args.encoder} did not expose compatible tokens."
+                need_tokens = secondary_state is not None and paired_mode == "token_subset"
+                pooled, cls_tokens, patch_tokens = forward_items(batch_primary_items, need_tokens=need_tokens)
+                tile_feats = pooled.detach().cpu().numpy()
+                inner_square_style_feats = None
+                if secondary_state is not None:
+                    inner_square_style_feats = derive_inner_square_style_embeddings(
+                        cls=cls_tokens,
+                        patch=patch_tokens,
+                        batch_meta=batch_primary_meta,
+                        tile_size=int(args.tile_size),
+                        img_size=int(args.img_size),
+                        pooling_mode=pooling_used,
+                        fixed_px=int(args.inner_square_fixed_px),
+                        factor=float(args.inner_square_factor),
+                        min_px=int(args.inner_square_min_px),
+                        max_px=int(args.inner_square_max_px),
                     )
+                    if inner_square_style_feats is None:
+                        raise RuntimeError(
+                            "Combined tile+inner_square token_subset mode requires patch-token access; "
+                            f"backend={backend_used} encoder={args.encoder} did not expose compatible tokens."
+                        )
 
-        meta_df = pd.DataFrame.from_records(batch_meta)
-        append_writer_rows(primary_state, meta_df, tile_feats)
+        primary_meta_df = pd.DataFrame.from_records(batch_primary_meta)
+        append_writer_rows(primary_state, primary_meta_df, tile_feats)
         if secondary_state is not None:
-            append_writer_rows(secondary_state, meta_df, inner_square_style_feats)
+            secondary_records = batch_secondary_meta if paired_mode == "masked_forward" else batch_primary_meta
+            secondary_meta_df = pd.DataFrame.from_records(secondary_records)
+            append_writer_rows(secondary_state, secondary_meta_df, inner_square_style_feats)
 
-        batch_items, batch_meta = [], []
+        batch_primary_items, batch_secondary_items = [], []
+        batch_primary_meta, batch_secondary_meta = [], []
         if primary_state["row_count"] >= args.rows_per_csv:
             flush_writer(primary_state)
         if secondary_state is not None and secondary_state["row_count"] >= args.rows_per_csv:
@@ -1246,23 +1425,24 @@ def main():
                 x0 = x - half
                 y0 = y - half
 
-                img_tile_raw = img_reader.read(x0, y0, args.tile_size, args.tile_size)
+                img_tile_raw = img_reader.read(x0, y0, extraction_tile_size, extraction_tile_size)
 
                 # FIX: consistent mapping to uint8 using global scaling
                 img_tile = to_rgb_uint8_global(img_tile_raw, lo=lo, hi=hi)
+                secondary_img_tile = None
 
                 if args.zero_outside_mask:
-                    m_tile = mask_reader.read(x0, y0, args.tile_size, args.tile_size).astype(np.int64, copy=False)
+                    m_tile = mask_reader.read(x0, y0, extraction_tile_size, extraction_tile_size).astype(np.int64, copy=False)
                     keep_label = (m_tile == lab)
                     keep_square = build_inner_square_mask(
-                        tile_size=args.tile_size,
+                        tile_size=extraction_tile_size,
                         center_x_local=int(x - x0),
                         center_y_local=int(y - y0),
                         area_px=int(a),
-                        fixed_px=int(args.inner_square_fixed_px),
+                        fixed_px=int(inner_square_fixed_px),
                         factor=float(args.inner_square_factor),
-                        min_px=int(args.inner_square_min_px),
-                        max_px=int(args.inner_square_max_px),
+                        min_px=int(inner_square_min_px),
+                        max_px=int(inner_square_max_px),
                     )
 
                     if args.mask_context_mode == "none":
@@ -1288,6 +1468,44 @@ def main():
                     img_tile = img_tile.copy()
                     img_tile[~keep_m, :] = fill
 
+                secondary_center = None
+                if secondary_state is not None and paired_mode == "masked_forward":
+                    sec_x = x
+                    sec_y = y
+                    sec_a = a
+                    sec_mask_path = mask_path
+
+                    sec_x0 = sec_x - half
+                    sec_y0 = sec_y - half
+                    if sec_x0 == x0 and sec_y0 == y0 and not args.zero_outside_mask:
+                        secondary_img_tile = img_tile.copy()
+                    else:
+                        secondary_raw = img_reader.read(sec_x0, sec_y0, extraction_tile_size, extraction_tile_size)
+                        secondary_img_tile = to_rgb_uint8_global(secondary_raw, lo=lo, hi=hi)
+                    keep_square = build_inner_square_mask(
+                        tile_size=extraction_tile_size,
+                        center_x_local=int(sec_x - sec_x0),
+                        center_y_local=int(sec_y - sec_y0),
+                        area_px=int(sec_a),
+                        fixed_px=int(inner_square_fixed_px),
+                        factor=float(args.inner_square_factor),
+                        min_px=int(inner_square_min_px),
+                        max_px=int(inner_square_max_px),
+                    )
+                    fill = 255
+                    secondary_img_tile[~keep_square, :] = fill
+                    secondary_center = {
+                        "cx": int(sec_x),
+                        "cy": int(sec_y),
+                        "area_px": int(sec_a),
+                        "area_model_px": int(round(float(sec_a) / max(inner_scale * inner_scale, 1e-6))),
+                        "tile_x0": int(sec_x0),
+                        "tile_y0": int(sec_y0),
+                        "grid_r": int(np.clip(sec_y // tile_h, 0, GR - 1)),
+                        "grid_c": int(np.clip(sec_x // tile_w, 0, GC - 1)),
+                        "mask_path": str(sec_mask_path),
+                    }
+
                 tile_path = ""
                 if args.save_tiles and tile_tiles is not None:
                     sub = cell_subfolder(tile_tiles, lab, per_dir=int(args.bucket_size))
@@ -1304,8 +1522,14 @@ def main():
                     "cx": x,
                     "cy": y,
                     "area_px": a,
+                    "area_model_px": int(round(float(a) / max(inner_scale * inner_scale, 1e-6))),
                     "tile_x0": int(x0),
                     "tile_y0": int(y0),
+                    "model_tile_size": int(args.tile_size),
+                    "extraction_tile_size": int(extraction_tile_size),
+                    "source_mpp": float(source_mpp) if source_mpp else None,
+                    "target_mpp": float(args.target_mpp) if float(args.target_mpp) > 0 else None,
+                    "effective_mpp": float(effective_mpp) if effective_mpp else None,
                     "grid_r": int(tr),
                     "grid_c": int(tc),
                     "tile_path": tile_path,
@@ -1313,10 +1537,21 @@ def main():
                     "mask_path": str(mask_path),
                     "image_level": int(args.image_level),
                     "zero_outside_mask": bool(args.zero_outside_mask),
+                    "mask_context_mode": str(args.mask_context_mode),
                 }
 
-                add_example(img_tile, meta)
-                if len(batch_items) >= int(args.batch):
+                secondary_meta = None
+                if secondary_state is not None and paired_mode == "masked_forward":
+                    secondary_meta = dict(meta)
+                    if secondary_center is not None:
+                        secondary_meta.update(secondary_center)
+                    secondary_meta["tile_path"] = ""
+                    secondary_meta["zero_outside_mask"] = True
+                    secondary_meta["mask_context_mode"] = "inner_square"
+                    secondary_meta["outside_fill"] = 255
+
+                add_example(img_tile, meta, secondary_img_tile, secondary_meta)
+                if len(batch_primary_items) >= int(args.batch):
                     run_batch(primary_state, secondary_state)
 
             run_batch(primary_state, secondary_state)

@@ -6,29 +6,28 @@ import argparse
 import csv
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 
 
 STAGE_DEFS = [
     {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif"]},
-    {"id": "grandqc", "folder": "01a_grandqc", "title": "GrandQC Artifact QC", "expected": ["_grandqc_summary.json", "_grandqc_artifact_mask.tif", "_grandqc_clean_tissue_mask.tif"]},
-    {"id": "stardist", "folder": "02_stardist", "title": "StarDist Segmentation", "expected": ["labels.tif", "objects.csv"]},
-    {"id": "gigatime", "folder": "03_gigatime", "title": "GigaTIME Virtual mIF", "expected": ["gigatime_probs.ome.tif", "gigatime_probs.zarr"]},
+    {"id": "grandqc", "folder": "02_grandqc", "title": "GrandQC Artifact QC", "expected": ["_grandqc_summary.json", "_grandqc_artifact_mask.tif", "_grandqc_clean_tissue_mask.tif"]},
+    {"id": "stardist", "folder": "03_stardist", "title": "StarDist Segmentation", "expected": ["labels.tif", "objects.csv"]},
+    {"id": "tma", "folder": "04_TMA", "title": "TMA Detection and Cell-to-Spot Assignment", "expected": ["_tma_summary.json", "_tma_spots.geojson", "_objects_tma_assigned.csv"]},
     {"id": "tissue_mask", "folder": "04_tissue_mask", "title": "Tissue Mask", "expected": ["_tissue_mask.tif"]},
-    {"id": "roi", "folder": "05_roi", "title": "ROI GeoJSON", "expected": [".roi.geojson"]},
-    {"id": "roi_mask", "folder": "06_roi_mask", "title": "Input ROI Mask", "expected": ["_input_roi_mask.tif", "_input_roi_mask_preview.png", "_input_roi_mask_labels.json"]},
-    {"id": "marker_quantification", "folder": "06_marker_quantification", "title": "Marker Quantification", "expected": ["_gigatime_quantification.csv", "_gigatime_mean_intensity.csv", "_gigatime_intensity_stats.csv", "_gigatime_intensity_summary.json"]},
+    {"id": "gigatime", "folder": "05_gigatime", "title": "GigaTIME Virtual mIF + Marker Quantification", "expected": ["gigatime_probs.ome.tif", "gigatime_probs.zarr", "_gigatime_quantification.csv", "_gigatime_mean_intensity.csv", "_gigatime_intensity_stats.csv", "_gigatime_intensity_summary.json"]},
+    {"id": "roi", "folder": "06_roi", "title": "ROI GeoJSON and Input ROI Mask", "expected": [".roi.geojson", "_input_roi_mask.tif", "_input_roi_mask_preview.png", "_input_roi_mask_labels.json"]},
     {"id": "cell_assignment", "folder": "07_cell_assignments", "title": "Cell Assignment", "expected": ["_objects_assigned.csv"]},
     {"id": "cytoplasm", "folder": "08_cytoplasm", "title": "Cytoplasm Expansion", "expected": ["_labels_cyto.tif"]},
-    {"id": "embeddings", "folder": "10_embeddings", "title": "UNI-2 Embeddings", "expected": ["embeddings_"]},
-    {"id": "kodama", "folder": "11_kodama", "title": "KODAMA", "expected": ["kodama_output"]},
-    {"id": "kodama_logs", "folder": "12_kodama_logs", "title": "KODAMA Logs", "expected": [".Rout"]},
-    {"id": "clustering", "folder": "13_clustering", "title": "Clustering", "expected": ["_cluster.csv"]},
-    {"id": "clustering_logs", "folder": "14_clustering_logs", "title": "Clustering Logs", "expected": [".Rout"]},
-    {"id": "cluster_mask", "folder": "15_cluster_mask", "title": "Cluster Mask", "expected": ["_cluster_mask.tif"]},
-    {"id": "grown_tissue", "folder": "16_grown_tissue", "title": "Grown Tissue", "expected": ["_grown_mask.ome.tif"]},
-    {"id": "medsam_refined_tissue", "folder": "17_medsam_refined_tissue", "title": "MedSAM Refinement", "expected": ["_grown_mask_refined.ome.tif", "_medsam_editable_band.png", "_medsam_raw_vs_final_panel.png", "_medsam_kodama_membership.png"]},
-    {"id": "cluster_geojson", "folder": "18_cluster_geojson", "title": "Cluster GeoJSON", "expected": [".geojson"]},
+    {"id": "embeddings", "folder": "09_embeddings", "title": "UNI-2 Embeddings", "expected": ["embeddings_"]},
+    {"id": "kodama", "folder": "10_kodama", "title": "KODAMA", "expected": ["kodama_output", ".Rout"]},
+    {"id": "clustering", "folder": "11_clustering", "title": "Clustering", "expected": ["_cluster.csv", ".Rout"]},
+    {"id": "cluster_mask", "folder": "12_cluster_mask", "title": "Cluster Mask", "expected": ["_cluster_mask.tif"]},
+    {"id": "grown_tissue", "folder": "13_grown_tissue", "title": "Grown Tissue", "expected": ["_grown_mask.ome.tif"]},
+    {"id": "medsam_refine_tissue", "folder": "14_medsam_refine_tissue", "title": "MedSAM Refinement", "expected": ["_grown_mask_refined.ome.tif", "_medsam_editable_band.png", "_medsam_raw_vs_final_panel.png", "_medsam_kodama_membership.png"]},
+    {"id": "cluster_geojson", "folder": "15_cluster_geojson", "title": "Cluster GeoJSON", "expected": [".geojson"]},
     {"id": "execution", "folder": "00_execution", "title": "Execution Metadata", "expected": ["trace.tsv", "timeline.html", "dag.html"]},
 ]
 
@@ -60,6 +59,22 @@ def parse_duration_seconds(raw: str) -> float:
     text = (raw or "").strip()
     if not text:
         return 0.0
+    unit_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*(d|h|m|s|ms)\b", text)
+    if unit_matches:
+        total = 0.0
+        for value, unit in unit_matches:
+            amount = float(value)
+            if unit == "d":
+                total += amount * 86400.0
+            elif unit == "h":
+                total += amount * 3600.0
+            elif unit == "m":
+                total += amount * 60.0
+            elif unit == "s":
+                total += amount
+            elif unit == "ms":
+                total += amount / 1000.0
+        return total
     if text.endswith("ms"):
         try:
             return float(text[:-2]) / 1000.0
@@ -150,14 +165,34 @@ def list_files(stage_dir: Path) -> list[dict]:
     if not stage_dir.exists():
         return []
     files = []
-    for f in sorted(p for p in stage_dir.rglob("*") if p.is_file()):
-        files.append(
-            {
-                "relative_path": f.relative_to(stage_dir).as_posix(),
-                "absolute_path": str(f.resolve()),
-                "size_bytes": f.stat().st_size,
-            }
-        )
+    seen_dirs: set[str] = set()
+    for root, dirs, names in os.walk(stage_dir, followlinks=True):
+        try:
+            real_root = os.path.realpath(root)
+        except OSError:
+            real_root = root
+        if real_root in seen_dirs:
+            dirs[:] = []
+            continue
+        seen_dirs.add(real_root)
+        for name in sorted(names):
+            f = Path(root) / name
+            if not f.is_file():
+                continue
+            try:
+                size = f.stat().st_size
+                resolved = str(f.resolve())
+                rel = f.relative_to(stage_dir).as_posix()
+            except OSError:
+                continue
+            files.append(
+                {
+                    "relative_path": rel,
+                    "absolute_path": resolved,
+                    "size_bytes": size,
+                }
+            )
+    files.sort(key=lambda item: item["relative_path"])
     return files
 
 

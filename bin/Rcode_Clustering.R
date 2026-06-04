@@ -15,6 +15,8 @@ score_margin <- 0.015
 cluster_profile <- "standard"
 fine_resolution_multiplier <- 1.35
 fine_score_margin <- 0.03
+fine_resolution_max <- 1.20
+fine_min_cluster_increase <- 1L
 silhouette_max_cells <- 4000L
 merge_min_size_fraction <- 0.01
 merge_min_size_floor <- 15L
@@ -59,6 +61,16 @@ if (length(args) > 2L) {
       i <- i + 2L
       next
     }
+    if (flag == "--fine-resolution-max" && i + 1L <= length(args)) {
+      fine_resolution_max <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--fine-min-cluster-increase" && i + 1L <= length(args)) {
+      fine_min_cluster_increase <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
     i <- i + 1L
   }
 }
@@ -80,6 +92,12 @@ if (!is.finite(fine_resolution_multiplier) || fine_resolution_multiplier <= 1) {
 }
 if (!is.finite(fine_score_margin) || fine_score_margin < 0) {
   stop("--fine-score-margin must be >= 0.")
+}
+if (!is.finite(fine_resolution_max) || fine_resolution_max <= 0) {
+  stop("--fine-resolution-max must be > 0.")
+}
+if (!is.finite(fine_min_cluster_increase) || fine_min_cluster_increase < 1L) {
+  stop("--fine-min-cluster-increase must be an integer >= 1.")
 }
 
 require_namespace <- function(pkg) {
@@ -124,6 +142,20 @@ select_kodama_file <- function(target_dim, dims, files) {
 format_cluster_sizes <- function(membership) {
   sizes <- sort(table(as.integer(membership)), decreasing = TRUE)
   paste(sprintf("%s:%d", names(sizes), as.integer(sizes)), collapse = ";")
+}
+
+build_resolution_grid <- function(base_grid, cluster_profile, fine_multiplier, fine_max) {
+  grid <- sort(unique(as.numeric(base_grid)))
+  if (cluster_profile != "fine") {
+    return(grid)
+  }
+  extra <- c(grid * fine_multiplier, grid * fine_multiplier * fine_multiplier)
+  if (fine_max > max(grid)) {
+    step <- max(0.02, min(0.10, diff(range(grid)) / max(1, length(grid) - 1)))
+    extra <- c(extra, seq(max(grid) * fine_multiplier, fine_max, by = step))
+  }
+  extra <- extra[is.finite(extra) & extra > max(grid) & extra <= fine_max]
+  sort(unique(c(grid, extra)))
 }
 
 renumber_membership <- function(membership) {
@@ -204,7 +236,7 @@ merge_small_clusters <- function(vis, membership, min_size) {
   list(membership = renumber_membership(merged), merged_any = merged_any)
 }
 
-run_louvain <- function(graph_obj, resolution_value) {
+run_louvain <- function(graph_obj, vis, resolution_value, merge_min_size) {
   set.seed(1L)
   cl <- igraph::cluster_louvain(graph_obj, resolution = resolution_value)
   membership <- renumber_membership(as.integer(cl$membership))
@@ -212,10 +244,14 @@ run_louvain <- function(graph_obj, resolution_value) {
   tiny_threshold <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * sum(sizes)))
   tiny_count <- sum(as.integer(sizes) < tiny_threshold)
   tiny_fraction <- if (length(sizes) == 0L) 0 else sum(as.integer(sizes)[as.integer(sizes) < tiny_threshold]) / sum(sizes)
+  merged <- merge_small_clusters(vis, membership, merge_min_size)
+  final_membership <- renumber_membership(merged$membership)
   list(
     resolution = resolution_value,
     membership = membership,
+    final_membership = final_membership,
     raw_cluster_count = length(sizes),
+    final_cluster_count = length(unique(final_membership)),
     modularity = igraph::modularity(graph_obj, membership = membership),
     silhouette = NA_real_,
     tiny_count = tiny_count,
@@ -235,7 +271,7 @@ select_auto_best <- function(evals, cluster_cap, score_margin) {
   near_best_idx <- which(scores >= (best_score - score_margin))
   near_best <- evals[near_best_idx]
 
-  near_counts <- vapply(near_best, function(x) x$raw_cluster_count, integer(1))
+  near_counts <- vapply(near_best, function(x) x$final_cluster_count, integer(1))
   near_best <- near_best[near_counts == min(near_counts)]
 
   near_tiny_fraction <- vapply(near_best, function(x) x$tiny_fraction, numeric(1))
@@ -250,12 +286,20 @@ select_auto_best <- function(evals, cluster_cap, score_margin) {
   near_best[[which.max(vapply(near_best, function(x) x$modularity, numeric(1)))]]
 }
 
-select_auto_fine <- function(evals, base_best, fine_score_margin) {
+select_auto_fine <- function(evals, base_best, fine_score_margin, fine_min_cluster_increase) {
+  min_target <- base_best$final_cluster_count + fine_min_cluster_increase
   more <- evals[vapply(
     evals,
-    function(x) x$raw_cluster_count > base_best$raw_cluster_count && x$score >= (base_best$score - fine_score_margin),
+    function(x) x$final_cluster_count >= min_target && x$score >= (base_best$score - fine_score_margin),
     logical(1)
   )]
+  if (length(more) == 0L) {
+    more <- evals[vapply(
+      evals,
+      function(x) x$final_cluster_count > base_best$final_cluster_count,
+      logical(1)
+    )]
+  }
   if (length(more) == 0L) {
     more <- evals[vapply(evals, function(x) x$resolution > base_best$resolution, logical(1))]
   }
@@ -263,8 +307,14 @@ select_auto_fine <- function(evals, base_best, fine_score_margin) {
     return(base_best)
   }
 
-  counts <- vapply(more, function(x) x$raw_cluster_count, integer(1))
-  more <- more[counts == min(counts)]
+  counts <- vapply(more, function(x) x$final_cluster_count, integer(1))
+  eligible_counts <- counts[counts >= min_target]
+  if (length(eligible_counts) > 0L) {
+    target_count <- min(eligible_counts)
+    more <- more[counts == target_count]
+  } else {
+    more <- more[counts == max(counts)]
+  }
 
   tiny_fraction <- vapply(more, function(x) x$tiny_fraction, numeric(1))
   more <- more[tiny_fraction == min(tiny_fraction)]
@@ -303,17 +353,19 @@ vis <- vis[, seq_len(min(2L, ncol(vis))), drop = FALSE]
 actual_vis_dims <- ncol(vis)
 actual_k <- max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
 graph_obj <- bluster::makeSNNGraph(vis, k = actual_k)
+merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
+resolution_grid_eval <- build_resolution_grid(resolution_grid, cluster_profile, fine_resolution_multiplier, fine_resolution_max)
 
 if (resolution_mode == "auto") {
   cluster_cap <- preferred_cluster_cap(nrow(vis))
-  evals <- lapply(resolution_grid, function(res) {
-    out <- run_louvain(graph_obj, res)
+  evals <- lapply(resolution_grid_eval, function(res) {
+    out <- run_louvain(graph_obj, vis, res, merge_min_size)
     out$silhouette <- mean_silhouette(vis, out$membership)
     sil_term <- if (is.finite(out$silhouette)) out$silhouette else -1
-    over_cap <- max(0L, out$raw_cluster_count - cluster_cap)
+    over_cap <- max(0L, out$final_cluster_count - cluster_cap)
     out$score <- sil_term +
       0.20 * out$modularity -
-      0.08 * out$raw_cluster_count -
+      0.06 * out$final_cluster_count -
       0.60 * out$tiny_fraction -
       0.05 * out$tiny_count -
       0.12 * over_cap
@@ -322,33 +374,35 @@ if (resolution_mode == "auto") {
   })
   base_best <- select_auto_best(evals, cluster_cap, score_margin)
   best <- if (cluster_profile == "fine") {
-    select_auto_fine(evals, base_best, fine_score_margin)
+    select_auto_fine(evals, base_best, fine_score_margin, fine_min_cluster_increase)
   } else {
     base_best
   }
 
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
   cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
-  cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid), collapse = ", ")))
+  cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid_eval), collapse = ", ")))
   cat(sprintf("[INFO] Preferred raw cluster cap for auto mode: %d\n", cluster_cap))
   cat("[INFO] Auto-resolution candidates:\n")
   for (item in evals) {
     cat(sprintf(
-      "  - res=%.3f raw_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f over_cap=%d score=%.4f\n",
+      "  - res=%.3f raw_clusters=%d final_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f over_cap=%d score=%.4f\n",
       item$resolution,
       item$raw_cluster_count,
+      item$final_cluster_count,
       ifelse(is.finite(item$silhouette), sprintf("%.4f", item$silhouette), "NA"),
       item$modularity,
       item$tiny_count,
       item$tiny_fraction,
-      max(0L, item$raw_cluster_count - cluster_cap),
+      max(0L, item$final_cluster_count - cluster_cap),
       item$score
     ))
   }
   cat(sprintf(
-    "[INFO] Selected auto resolution %.3f with raw_clusters=%d (score=%.4f)\n",
+    "[INFO] Selected auto resolution %.3f with raw_clusters=%d final_clusters=%d (score=%.4f)\n",
     best$resolution,
     best$raw_cluster_count,
+    best$final_cluster_count,
     best$score
   ))
 } else {
@@ -356,16 +410,14 @@ if (resolution_mode == "auto") {
   if (cluster_profile == "fine") {
     effective_resolution <- fixed_resolution * fine_resolution_multiplier
   }
-  best <- run_louvain(graph_obj, effective_resolution)
+  best <- run_louvain(graph_obj, vis, effective_resolution, merge_min_size)
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
   cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
-  cat(sprintf("[INFO] Fixed resolution %.3f with raw_clusters=%d modularity=%.4f\n", best$resolution, best$raw_cluster_count, best$modularity))
+  cat(sprintf("[INFO] Fixed resolution %.3f with raw_clusters=%d final_clusters=%d modularity=%.4f\n", best$resolution, best$raw_cluster_count, best$final_cluster_count, best$modularity))
 }
 
 raw_membership <- renumber_membership(best$membership)
-merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
-merged <- merge_small_clusters(vis, raw_membership, merge_min_size)
-final_membership <- merged$membership
+final_membership <- renumber_membership(best$final_membership)
 
 raw_cluster_count <- length(unique(raw_membership))
 final_cluster_count <- length(unique(final_membership))
@@ -401,13 +453,22 @@ summary_df <- data.frame(
 write.csv(summary_df, summary_path, row.names = FALSE, quote = TRUE)
 
 pdf_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.pdf"))
+palette_hex <- c(
+  "#E6194B", "#3CB44B", "#FFE119", "#0082C8",
+  "#F58230", "#911EB4", "#46F0F0", "#F032E6",
+  "#D2F53C", "#FABEBE", "#008080", "#E6BEFF",
+  "#AA6E28", "#FFFAC8", "#800000", "#AAFFC3"
+)
+cluster_ids <- sort(unique(as.integer(final_membership)))
+cluster_colors <- setNames(rep(palette_hex, length.out = length(cluster_ids)), cluster_ids)
+membership_colors <- unname(cluster_colors[as.character(as.integer(final_membership))])
 pdf(pdf_path)
-plot(vis, pch = 20, col = as.integer(final_membership), cex = 1)
+plot(vis, pch = 20, col = membership_colors, cex = 1)
 dev.off()
 
 png_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.png"))
 png(filename = png_path, width = 1800, height = 1400, res = 180)
-plot(vis, pch = 20, col = as.integer(final_membership), cex = 1)
+plot(vis, pch = 20, col = membership_colors, cex = 1)
 dev.off()
 
 cat(sprintf("[INFO] Requested --dim=%d loaded kodama_full_%d.RData\n", selected_file_dim, picked$dim))

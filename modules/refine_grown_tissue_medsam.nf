@@ -3,7 +3,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     label 'gpu_capable'
     maxForks 1
 
-    publishDir "${params.outdir_base}/17_medsam_refined_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/14_medsam_refine_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.medsam_refine_cpus as int)) }
     memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.medsam_refine_memory_gb as int))} GB" }
@@ -35,6 +35,8 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def medsamOuterDilationRadius = "--medsam-outer-dilation-radius ${params.medsam_outer_dilation_radius}"
     def medsamMinObjectSize = "--medsam-min-object-size ${params.medsam_min_object_size}"
     def medsamSmoothRadius = "--medsam-smooth-radius ${params.medsam_smooth_radius}"
+    def medsamClusterTileSize = "--medsam-cluster-tile-size ${params.medsam_cluster_tile_size}"
+    def medsamClusterTileOverlap = "--medsam-cluster-tile-overlap ${params.medsam_cluster_tile_overlap}"
     def medsamCorePreservation = (params.medsam_force_core_preservation as boolean) ? '--medsam-force-core-preservation' : '--no-medsam-force-core-preservation'
     def medsamSaveDebug = (params.medsam_save_debug as boolean) ? '--medsam-save-debug' : '--no-medsam-save-debug'
     def tail_flags = [overwrite_flag, keep_tmp_flag, legacy_flag].findAll { it?.trim() }.join(' ')
@@ -52,7 +54,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       --preview-threshold-mb ${params.grow_preview_threshold_mb} \
       --preview-alpha ${params.grow_preview_alpha} \
       --pyr-compression ${params.grow_pyr_compression} \
-      --max-workers ${Math.max(1, Math.min(task.cpus as int, params.grow_max_workers as int))} \
+      --max-workers ${Math.max(1, Math.min(task.cpus as int, params.medsam_refine_max_workers as int))} \
       --downsample ${params.grow_downsample} \
       ${medsamCheckpoint} \
       ${medsamDevice} \
@@ -64,6 +66,8 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       ${medsamOuterDilationRadius} \
       ${medsamMinObjectSize} \
       ${medsamSmoothRadius} \
+      ${medsamClusterTileSize} \
+      ${medsamClusterTileOverlap} \
       ${medsamCorePreservation} \
       ${medsamSaveDebug} \
       ${tail_flags}

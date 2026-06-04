@@ -2,8 +2,8 @@ process RUN_RCODE_CLUSTERING {
     tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/13_clustering/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    publishDir "${params.outdir_base}/14_clustering_logs/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: '*.Rout'
+    publishDir "${params.outdir_base}/11_clustering/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/11_clustering/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: '*.Rout'
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.cluster_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.cluster_memory_gb as int))} GB" }
@@ -33,6 +33,8 @@ process RUN_RCODE_CLUSTERING {
       --profile ${cluster_profile} \
       --fine-multiplier ${params.cluster_fine_resolution_multiplier} \
       --fine-score-margin ${params.cluster_fine_score_margin} \
+      --fine-resolution-max ${params.cluster_fine_resolution_max} \
+      --fine-min-cluster-increase ${params.cluster_fine_min_cluster_increase} \
       > "Rcode_Clustering_${sample_id}_${cluster_variant}.Rout" 2>&1
     """
 

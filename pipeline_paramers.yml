@@ -23,7 +23,7 @@ runtime_image_mode: auto   # auto | manual
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, grandqc, stardist, tissue_mask, cell_assignment, cytoplasm, gigatime,
+# convert, grandqc, stardist, tma, tissue_mask, cell_assignment, cytoplasm, gigatime,
 # marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
 
 # Runtime image selection
@@ -60,6 +60,8 @@ gpu_debug_diagnostics: false
 # Global resource caps
 max_cpus: 4
 max_memory_gb: 8
+medsam_refine_memory_gb: 30
+medsam_refine_max_workers: 2
 stardist_pythonpath: ""
 stardist_prob: 0.52
 stardist_nms: 0.28
@@ -94,6 +96,20 @@ grandqc_patch_size: 512
 grandqc_artifact_overlap_fraction: 0.5
 grandqc_overlay_factor: 10
 grandqc_preview_max_side: 4096
+tma_enable: true
+tma_thumbnail_max_side: 2048
+tma_min_spots: 4
+tma_min_spot_area_fraction: 0.001
+tma_max_spot_area_fraction: 0.25
+tma_max_area_cv: 0.75
+tma_min_circularity: 0.25
+tma_min_solidity: 0.50
+tma_max_eccentricity: 0.98
+tma_grid_tolerance_fraction: 0.75
+tma_close_radius: 48
+tma_cpus: 4
+tma_memory_gb: 12
+tma_time: 4h
 input_roi_mask_label_mode: auto
 input_roi_mask_value_prop: value
 input_roi_mask_annotation_props: classification.name,classification.label,class,label,type,name
@@ -136,7 +152,9 @@ uni2_include_cyto: false
 uni2_include_inner_square: true
 uni2_fuse_tile_inner_square: true
 uni2_force_full_image: false
-uni2_save_tiles: true
+uni2_save_tiles: false
+uni2_target_mpp: 0.25
+uni2_default_source_mpp: 0.25
 uni2_mask_context_mode: label
 uni2_inner_square_factor: 1.0
 uni2_inner_square_min_px: 32
@@ -156,6 +174,7 @@ cluster_snn_k: 30
 cluster_resolution: auto
 
 # Cluster mask preview (overlay on crop_roi.tif)
+cluster_mask_compression: zlib
 cluster_mask_preview_factor: 10
 cluster_mask_preview_threshold_mb: 100.0
 cluster_mask_preview_alpha: 0.45
@@ -164,3 +183,5 @@ cluster_mask_preview_alpha: 0.45
 grow_preview_factor: 10
 grow_preview_threshold_mb: 100.0
 grow_preview_alpha: 0.45
+medsam_cluster_tile_size: 4096
+medsam_cluster_tile_overlap: 512

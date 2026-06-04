@@ -27,6 +27,7 @@ Notes:
 """
 
 import argparse
+import gc
 import json
 import math
 import io
@@ -1004,45 +1005,44 @@ def write_tiled_tiff_rgb(out_path: Path, reader: "CropSourceReader", tile_hw: in
 
 def compute_centroids_streaming_array(mask_arr: Any, shape: Tuple[int, int], block: int = 4096) -> pd.DataFrame:
     h, w = shape
-    counts = np.zeros((1,), dtype=np.int64)
-    sumx = np.zeros((1,), dtype=np.float64)
-    sumy = np.zeros((1,), dtype=np.float64)
-
-    def _ensure_len(arr: np.ndarray, n: int) -> np.ndarray:
-        if arr.shape[0] >= n:
-            return arr
-        out = np.zeros((n,), dtype=arr.dtype)
-        out[:arr.shape[0]] = arr
-        return out
+    block = max(256, min(1024, int(block)))
+    counts: Dict[int, int] = {}
+    sumx: Dict[int, float] = {}
+    sumy: Dict[int, float] = {}
 
     for y0 in range(0, h, block):
         y1 = min(h, y0 + block)
-        yy = (np.arange(y1 - y0, dtype=np.float64) + y0)[:, None]
         for x0 in range(0, w, block):
             x1 = min(w, x0 + block)
             m = np.asarray(mask_arr[y0:y1, x0:x1])
             if m.size == 0:
                 continue
-            m = m.astype(np.int64, copy=False)
-            mx = int(m.max())
-            if mx <= 0:
+            yy_idx, xx_idx = np.nonzero(m)
+            if yy_idx.size == 0:
                 continue
-            newn = mx + 1
-            counts = _ensure_len(counts, newn)
-            sumx = _ensure_len(sumx, newn)
-            sumy = _ensure_len(sumy, newn)
+            labs = m[yy_idx, xx_idx]
+            uniq, inv = np.unique(labs, return_inverse=True)
+            cnt = np.bincount(inv)
+            sx = np.bincount(inv, weights=xx_idx.astype(np.float64, copy=False) + float(x0))
+            sy = np.bincount(inv, weights=yy_idx.astype(np.float64, copy=False) + float(y0))
+            for lab, c, x_sum, y_sum in zip(uniq, cnt, sx, sy):
+                ilab = int(lab)
+                if ilab == 0 or int(c) == 0:
+                    continue
+                counts[ilab] = counts.get(ilab, 0) + int(c)
+                sumx[ilab] = sumx.get(ilab, 0.0) + float(x_sum)
+                sumy[ilab] = sumy.get(ilab, 0.0) + float(y_sum)
 
-            flat = m.ravel()
-            counts[:newn] += np.bincount(flat, minlength=newn)
+            del m, yy_idx, xx_idx, labs, uniq, inv, cnt, sx, sy
 
-            xx = (np.arange(x1 - x0, dtype=np.float64) + x0)[None, :]
-            sumx[:newn] += np.bincount(flat, weights=np.broadcast_to(xx, m.shape).ravel(), minlength=newn)
-            sumy[:newn] += np.bincount(flat, weights=np.broadcast_to(yy, m.shape).ravel(), minlength=newn)
-
-    labels = np.nonzero(counts[1:] > 0)[0] + 1
-    area = counts[labels].astype(np.int64)
-    x = (sumx[labels] / counts[labels]).astype(np.float64)
-    y = (sumy[labels] / counts[labels]).astype(np.float64)
+    labels = np.fromiter(sorted(counts.keys()), dtype=np.int64)
+    if labels.size == 0:
+        return pd.DataFrame(columns=[
+            "label", "area", "y", "x", "xmin", "ymin", "xmax", "ymax", "eccentricity", "solidity"
+        ])
+    area = np.asarray([counts[int(lab)] for lab in labels], dtype=np.int64)
+    x = np.asarray([sumx[int(lab)] / float(counts[int(lab)]) for lab in labels], dtype=np.float64)
+    y = np.asarray([sumy[int(lab)] / float(counts[int(lab)]) for lab in labels], dtype=np.float64)
 
     df = pd.DataFrame({
         "label": labels.astype(np.int64),
@@ -1059,16 +1059,59 @@ def compute_centroids_streaming_array(mask_arr: Any, shape: Tuple[int, int], blo
     return df
 
 
+def read_downsampled_rgb_tiled(reader: "CropSourceReader", shape: Tuple[int, int],
+                               step: int, tile_out: int = 64) -> np.ndarray:
+    h, w = shape
+    step = max(1, int(step))
+    out_h = int(math.ceil(h / float(step)))
+    out_w = int(math.ceil(w / float(step)))
+    out = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    tile_out = max(16, int(tile_out))
+    for oy0 in range(0, out_h, tile_out):
+        oy1 = min(out_h, oy0 + tile_out)
+        sy0 = oy0 * step
+        sy1 = min(h, (oy1 - 1) * step + 1)
+        for ox0 in range(0, out_w, tile_out):
+            ox1 = min(out_w, ox0 + tile_out)
+            sx0 = ox0 * step
+            sx1 = min(w, (ox1 - 1) * step + 1)
+            tile = reader.read_raw(sy0, sy1, sx0, sx1, y_step=step, x_step=step)
+            out[oy0:oy0 + tile.shape[0], ox0:ox0 + tile.shape[1], :] = tile
+    return out
+
+
+def read_downsampled_labels_tiled(labels_arr: Any, shape: Tuple[int, int],
+                                  step: int, tile_out: int = 64) -> np.ndarray:
+    h, w = shape
+    step = max(1, int(step))
+    out_h = int(math.ceil(h / float(step)))
+    out_w = int(math.ceil(w / float(step)))
+    out = np.zeros((out_h, out_w), dtype=np.uint32)
+    tile_out = max(16, int(tile_out))
+    for oy0 in range(0, out_h, tile_out):
+        oy1 = min(out_h, oy0 + tile_out)
+        sy0 = oy0 * step
+        sy1 = min(h, (oy1 - 1) * step + 1)
+        for ox0 in range(0, out_w, tile_out):
+            ox1 = min(out_w, ox0 + tile_out)
+            sx0 = ox0 * step
+            sx1 = min(w, (ox1 - 1) * step + 1)
+            tile = np.asarray(labels_arr[sy0:sy1:step, sx0:sx1:step])
+            out[oy0:oy0 + tile.shape[0], ox0:ox0 + tile.shape[1]] = tile
+    return out
+
+
 def write_preview_big(reader: "CropSourceReader", labels_arr: Any, shape: Tuple[int, int],
                       outdir: Path, max_side: int = 1600) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     h, w = shape
     step = max(1, int(math.ceil(max(h, w) / float(max_side))))
-    img_show = reader.read_raw(0, h, 0, w, y_step=step, x_step=step)
-    labels = np.asarray(labels_arr[::step, ::step])
-    img_show_f = img_show.astype(np.float32, copy=False) / 255.0
+    img_show = read_downsampled_rgb_tiled(reader, shape, step=step)
+    labels = read_downsampled_labels_tiled(labels_arr, shape, step=step)
+    b = find_boundaries(labels, mode="outer")
+    overlay = img_show.copy()
+    overlay[b] = np.array([255, 64, 0], dtype=np.uint8)
 
-    overlay = render_label(labels, img=img_show_f)
     plt.figure()
     plt.imshow(overlay)
     plt.axis("off")
@@ -1077,7 +1120,6 @@ def write_preview_big(reader: "CropSourceReader", labels_arr: Any, shape: Tuple[
     plt.savefig(outdir / "overlay.png", dpi=200)
     plt.close()
 
-    b = find_boundaries(labels, mode="outer")
     plt.figure()
     plt.imshow(img_show)
     plt.imshow(b, alpha=0.6)
@@ -1125,8 +1167,33 @@ class CropSourceReader:
 
     def sample(self, max_side: int = 2048) -> np.ndarray:
         h, w, _ = self.shape
-        step = max(1, int(math.ceil(max(h, w) / float(max_side))))
-        return self.read_raw(0, h, 0, w, y_step=step, x_step=step)
+        max_side = max(256, int(max_side))
+        if h <= max_side and w <= max_side:
+            return self.read_raw(0, h, 0, w)
+
+        # Avoid one giant strided TIFF/zarr slice for WSI-scale crops. Some
+        # backends materialize much more than the sampled pixels. Small
+        # contiguous tiles give stable percentile estimates with bounded RAM.
+        tile = min(256, max(64, max_side // 8))
+        max_tiles = max(4, min(64, (max_side // max(1, tile)) ** 2))
+        aspect = h / float(max(1, w))
+        grid_y = max(1, min(8, int(round(math.sqrt(max_tiles * aspect)))))
+        grid_x = max(1, min(8, int(math.ceil(max_tiles / float(grid_y)))))
+        ys = np.linspace(0, max(0, h - tile), num=grid_y, dtype=np.int64)
+        xs = np.linspace(0, max(0, w - tile), num=grid_x, dtype=np.int64)
+        samples = []
+        for yy in ys:
+            y0 = int(yy)
+            y1 = min(h, y0 + tile)
+            for xx in xs:
+                x0 = int(xx)
+                x1 = min(w, x0 + tile)
+                patch = self.read_raw(y0, y1, x0, x1)
+                if patch.size:
+                    samples.append(patch.reshape(-1, patch.shape[-1]))
+        if not samples:
+            return self.read_raw(0, min(h, tile), 0, min(w, tile))
+        return np.concatenate(samples, axis=0)
 
 
 class NormalizedCropArray:
@@ -1617,8 +1684,11 @@ def main() -> None:
         # ---- 5) materialize outputs in pipeline-compatible formats ----
         if use_big:
             assert labels_arr is not None
+            log(f"Writing streamed crop TIFF in {int(args.big_tiff_tile)}px tiles.")
             write_tiled_tiff_rgb(crop_tif, crop_reader, tile_hw=int(args.big_tiff_tile))
             log(f"Wrote streamed crop TIFF: {crop_tif}")
+            gc.collect()
+            log(f"Writing streamed labels TIFF in {int(args.big_tiff_tile)}px tiles.")
             write_tiled_tiff_2d(
                 outdir / "labels.tif",
                 labels_arr,
@@ -1628,8 +1698,17 @@ def main() -> None:
                 compression="zlib",
             )
             log(f"Wrote streamed labels TIFF: {outdir / 'labels.tif'}")
+            gc.collect()
+            log("Computing large-image centroids with sparse tiled aggregation.")
             df = compute_centroids_streaming_array(labels_arr, shape=(crop_h, crop_w), block=max(1024, int(args.big_tiff_tile)))
+            if int(max(0, args.min_area)) > 0 and not df.empty:
+                before = int(len(df))
+                df = df[df["area"] >= int(max(0, args.min_area))].copy()
+                log(f"Applied min-area filter to large-image objects.csv: min_area={int(max(0, args.min_area))}px, removed_objects={before - int(len(df))}")
+            gc.collect()
+            log("Writing large-image QC preview with bounded tiled reads.")
             write_preview_big(crop_reader, labels_arr, (crop_h, crop_w), outdir, max_side=int(args.big_preview_max_side))
+            gc.collect()
             if args.write_full_labels:
                 fmt = str(args.full_format).strip().lower()
                 out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")

@@ -2,7 +2,7 @@ process PREPARE_STARDIST_AUTO_ROI {
     tag "${sample_id}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/02_stardist/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/03_stardist/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_auto_roi_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_auto_roi_memory_gb as int))} GB" }

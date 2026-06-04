@@ -2,7 +2,7 @@ process PREPARE_ROI_GEOJSON {
     tag "${sample_id}"
     label 'io_heavy'
 
-    publishDir "${params.outdir_base}/04_roi/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/06_roi/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus 1
     memory '2 GB'

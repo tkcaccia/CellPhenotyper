@@ -32,11 +32,14 @@ python expand_cells_to_cytoplasm_v3.py \
 
 import argparse
 import math
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
 import tifffile
+import zarr
 
 try:
     from scipy.ndimage import distance_transform_edt
@@ -97,6 +100,125 @@ def read_label_image(path: Path) -> np.ndarray:
         arr = arr.astype(np.int32)
 
     return arr
+
+
+class LazyLabelReader:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._tf = tifffile.TiffFile(str(path))
+        base = self._tf.series[0]
+        self._store = base.aszarr()
+        self._arr = zarr.open(self._store, mode="r")
+
+        view = self._arr
+        if view.ndim == 3:
+            if view.shape[0] == 1:
+                view = view[0]
+            elif view.shape[-1] == 1:
+                view = view[..., 0]
+            else:
+                self.close()
+                die(f"Expected 2D label image; got shape {tuple(view.shape)} from {path}")
+        if view.ndim != 2:
+            self.close()
+            die(f"Expected 2D label image; got shape {tuple(view.shape)} from {path}")
+        self._view = view
+        self.shape = tuple(int(v) for v in view.shape)
+        self.dtype = np.dtype(view.dtype)
+
+    def read(self, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
+        arr = np.asarray(self._view[y0:y1, x0:x1])
+        if not np.issubdtype(arr.dtype, np.integer):
+            arr = np.rint(arr).astype(np.int32, copy=False)
+        return arr
+
+    def downsample(self, factor: int) -> np.ndarray:
+        f = int(max(1, factor))
+        arr = np.asarray(self._view[::f, ::f])
+        if not np.issubdtype(arr.dtype, np.integer):
+            arr = np.rint(arr).astype(np.int32, copy=False)
+        return arr
+
+    def close(self) -> None:
+        try:
+            store_close = getattr(self._store, "close", None)
+            if callable(store_close):
+                store_close()
+        except Exception:
+            pass
+        try:
+            self._tf.close()
+        except Exception:
+            pass
+
+
+def expand_labels_nonoverlap_tiled_lazy(reader: LazyLabelReader, expand_px: int, tile_size: int, out_mm: np.ndarray) -> None:
+    if distance_transform_edt is None:
+        die("SciPy is required (scipy.ndimage.distance_transform_edt). It is missing in your environment.")
+    if expand_px <= 0:
+        h, w = reader.shape
+        for y0 in range(0, h, tile_size):
+            y1 = min(h, y0 + tile_size)
+            for x0 in range(0, w, tile_size):
+                x1 = min(w, x0 + tile_size)
+                out_mm[y0:y1, x0:x1] = reader.read(y0, y1, x0, x1)
+        return
+    if tile_size <= 0:
+        die("--tile-size must be > 0")
+
+    h, w = reader.shape
+    radius = int(expand_px)
+    radius_f = float(expand_px)
+
+    n_tiles_y = math.ceil(h / tile_size)
+    n_tiles_x = math.ceil(w / tile_size)
+    n_tiles = n_tiles_y * n_tiles_x
+    idx = 0
+
+    for y0 in range(0, h, tile_size):
+        y1 = min(h, y0 + tile_size)
+        for x0 in range(0, w, tile_size):
+            x1 = min(w, x0 + tile_size)
+            idx += 1
+            log(f"Tiled expansion: tile {idx}/{n_tiles} at y={y0}:{y1}, x={x0}:{x1}")
+
+            core = reader.read(y0, y1, x0, x1)
+            core_bg = (core == 0)
+            if not core_bg.any():
+                out_mm[y0:y1, x0:x1] = core
+                continue
+
+            hy0 = max(0, y0 - radius)
+            hy1 = min(h, y1 + radius)
+            hx0 = max(0, x0 - radius)
+            hx1 = min(w, x1 + radius)
+
+            win = reader.read(hy0, hy1, hx0, hx1)
+            if win.max() == 0:
+                out_mm[y0:y1, x0:x1] = core
+                continue
+
+            win_bg = (win == 0)
+            dist, (iy, ix) = distance_transform_edt(win_bg, return_indices=True)
+
+            cy0 = y0 - hy0
+            cy1 = cy0 + (y1 - y0)
+            cx0 = x0 - hx0
+            cx1 = cx0 + (x1 - x0)
+
+            core_within = dist[cy0:cy1, cx0:cx1] <= radius_f
+            fill = core_bg & core_within
+            if not fill.any():
+                out_mm[y0:y1, x0:x1] = core
+                continue
+
+            iyy = iy[cy0:cy1, cx0:cx1]
+            ixx = ix[cy0:cy1, cx0:cx1]
+            nearest_core = win[iyy, ixx]
+
+            out_tile = core.copy()
+            out_tile[fill] = nearest_core[fill]
+            out_mm[y0:y1, x0:x1] = out_tile
 
 
 def expand_labels_nonoverlap(labels: np.ndarray, expand_px: int) -> np.ndarray:
@@ -210,6 +332,13 @@ def downsample_nearest(arr: np.ndarray, factor: int) -> np.ndarray:
     return arr[::f, ::f, ...]
 
 
+def downsample_source_nearest(arr_like, factor: int) -> np.ndarray:
+    f = int(max(1, factor))
+    if f <= 1:
+        return np.asarray(arr_like)
+    return np.asarray(arr_like[::f, ::f])
+
+
 def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
@@ -239,15 +368,16 @@ def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
 
 def colorize_label_mask(label_mask: np.ndarray, default_value: int = 0) -> np.ndarray:
     out = np.zeros(label_mask.shape + (3,), dtype=np.uint8)
-    label_ids = np.unique(label_mask)
-    label_ids = label_ids[label_ids != default_value]
-    for idx, lid in enumerate(label_ids):
-        out[label_mask == lid] = DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
+    fg = label_mask != default_value
+    if not np.any(fg):
+        return out
+    palette_idx = np.mod(label_mask[fg].astype(np.int64, copy=False), len(DEFAULT_PALETTE))
+    out[fg] = DEFAULT_PALETTE[palette_idx]
     return out
 
 
 def write_preview_overlay_png(
-    label_mask: np.ndarray,
+    label_mask,
     out_png: Path,
     factor_if_large: int,
     size_threshold_mb: float,
@@ -263,26 +393,34 @@ def write_preview_overlay_png(
     use_factor = 1
 
     if preview_background_path is not None:
-        bg = tifffile.imread(str(preview_background_path))
-        if bg.ndim > 3:
-            bg = bg[0]
-        bg_rgb = to_uint8_rgb(bg)
-        if bg_rgb.shape[:2] != label_mask.shape:
-            die(
-                f"Preview background shape {bg_rgb.shape[:2]} does not match label mask shape {label_mask.shape}. "
-                "Expected aligned background image."
-            )
-
-        est_bytes = int(bg_rgb.nbytes + label_mask.nbytes)
+        est_bytes = int(np.prod(label_mask.shape, dtype=np.int64) * np.dtype(getattr(label_mask, "dtype", np.uint32)).itemsize * 4)
         use_factor = int(max(1, factor_if_large)) if est_bytes > threshold_bytes else 1
-        bg_small = downsample_nearest(bg_rgb, use_factor)
-        mask_small = downsample_nearest(label_mask, use_factor)
+        if use_factor > 1:
+            log(
+                "Preview background is large; using a plain white background to avoid reloading the full crop "
+                f"(factor={use_factor}, estimated_mb={est_bytes / (1024.0 * 1024.0):.1f})."
+            )
+            mask_small = downsample_source_nearest(label_mask, use_factor)
+            bg_small = np.full(mask_small.shape + (3,), 255, dtype=np.uint8)
+        else:
+            bg = tifffile.imread(str(preview_background_path))
+            if bg.ndim > 3:
+                bg = bg[0]
+            bg_rgb = to_uint8_rgb(bg)
+            label_mask_arr = np.asarray(label_mask)
+            if bg_rgb.shape[:2] != label_mask_arr.shape:
+                die(
+                    f"Preview background shape {bg_rgb.shape[:2]} does not match label mask shape {label_mask_arr.shape}. "
+                    "Expected aligned background image."
+                )
+            bg_small = bg_rgb
+            mask_small = label_mask_arr
     else:
         # Memory-safe fallback for huge masks: estimate full preview memory and
         # decide downsample factor before allocating any RGB background.
-        est_bytes = int(label_mask.nbytes * 4)
+        est_bytes = int(np.prod(label_mask.shape, dtype=np.int64) * np.dtype(getattr(label_mask, "dtype", np.uint32)).itemsize * 4)
         use_factor = int(max(1, factor_if_large)) if est_bytes > threshold_bytes else 1
-        mask_small = downsample_nearest(label_mask, use_factor)
+        mask_small = downsample_source_nearest(label_mask, use_factor)
         bg_small = np.full(mask_small.shape + (3,), 255, dtype=np.uint8)
 
     overlay = colorize_label_mask(mask_small, default_value=default_value)
@@ -332,10 +470,22 @@ def main() -> None:
     if not labels_path.exists():
         die(f"Labels file not found: {labels_path}")
 
-    labels = read_label_image(labels_path)
-    log(f"Loaded labels: {labels.shape}, dtype={labels.dtype}, n_labels={int(labels.max())}")
+    lazy_reader = None
+    labels = None
+    try:
+        lazy_reader = LazyLabelReader(labels_path)
+        h, w = lazy_reader.shape
+        dtype = lazy_reader.dtype
+        n_labels = None
+        log(f"Opened labels lazily: {(h, w)}, dtype={dtype}")
+    except Exception as exc:
+        log(f"Lazy label reader unavailable; falling back to eager load ({exc})")
+        labels = read_label_image(labels_path)
+        h, w = labels.shape
+        dtype = labels.dtype
+        n_labels = int(labels.max())
+        log(f"Loaded labels: {labels.shape}, dtype={labels.dtype}, n_labels={n_labels}")
 
-    h, w = labels.shape
     mpix = (h * w) / 1_000_000.0
 
     mode = args.mode
@@ -343,26 +493,66 @@ def main() -> None:
         mode = "tiled" if mpix > float(args.auto_threshold_mpix) else "full"
     log(f"Expansion mode: {mode} (image={mpix:.2f} MP)")
 
-    if mode == "tiled":
-        out = expand_labels_nonoverlap_tiled(labels, args.expand_px, args.tile_size)
-    else:
-        if h * w >= 100_000_000:
-            log("Note: full EDT mode can use a lot of RAM on very large images.")
-        out = expand_labels_nonoverlap(labels, args.expand_px)
-
-    if out.dtype != labels.dtype:
-        out = out.astype(labels.dtype, copy=False)
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     comp = args.compression
     if isinstance(comp, str) and comp.lower() == "none":
         comp = None
 
-    bigtiff = out.nbytes >= 4_000_000_000
-    tifffile.imwrite(str(out_path), out, compression=comp, bigtiff=bigtiff)
+    output_for_preview = None
+    if mode == "tiled" and lazy_reader is not None:
+        tmp_fd, tmp_name = tempfile.mkstemp(prefix=f"{out_path.stem}_tmp_", suffix=".tif", dir=str(out_path.parent))
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_name)
+        tmp_path.unlink(missing_ok=True)
+        mm = tifffile.memmap(str(tmp_path), shape=(h, w), dtype=dtype, bigtiff=True)
+        expand_labels_nonoverlap_tiled_lazy(lazy_reader, args.expand_px, args.tile_size, mm)
+        mm.flush()
+        output_for_preview = mm
+        if comp is None:
+            os.replace(tmp_path, out_path)
+        else:
+            tile_hw = int(max(256, min(args.tile_size, 2048)))
+            tifffile.imwrite(
+                str(out_path),
+                data=(np.asarray(mm[y0:min(h, y0 + tile_hw), x0:min(w, x0 + tile_hw)])
+                      for y0 in range(0, h, tile_hw)
+                      for x0 in range(0, w, tile_hw)),
+                shape=(h, w),
+                dtype=dtype,
+                tile=(tile_hw, tile_hw),
+                compression=comp,
+                bigtiff=True,
+                photometric="minisblack",
+                metadata=None,
+            )
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        out_max = int(np.max(mm))
+        filled_pixels = int(np.count_nonzero(mm))
+    else:
+        if labels is None:
+            labels = read_label_image(labels_path)
+            n_labels = int(labels.max())
+        if mode == "tiled":
+            out = expand_labels_nonoverlap_tiled(labels, args.expand_px, args.tile_size)
+        else:
+            if h * w >= 100_000_000:
+                log("Note: full EDT mode can use a lot of RAM on very large images.")
+            out = expand_labels_nonoverlap(labels, args.expand_px)
+
+        if out.dtype != dtype:
+            out = out.astype(dtype, copy=False)
+        output_for_preview = out
+        bigtiff = out.nbytes >= 4_000_000_000
+        tifffile.imwrite(str(out_path), out, compression=comp, bigtiff=bigtiff)
+        out_max = int(out.max())
+        filled_pixels = int(np.count_nonzero(out))
+
     log(f"Wrote expanded labels: {out_path}")
-    log(f"Output n_labels={int(out.max())}; filled_pixels={(out>0).sum()}")
+    log(f"Output n_labels={out_max}; filled_pixels={filled_pixels}")
 
     if args.preview:
         bg_path = None
@@ -372,7 +562,7 @@ def main() -> None:
                 die(f"Preview background file not found: {bg_path}")
 
         write_preview_overlay_png(
-            out,
+            output_for_preview,
             Path(args.preview),
             factor_if_large=int(args.preview_factor),
             size_threshold_mb=float(args.preview_threshold_mb),
@@ -380,6 +570,9 @@ def main() -> None:
             preview_background_path=bg_path,
             alpha=float(args.preview_alpha),
         )
+
+    if lazy_reader is not None:
+        lazy_reader.close()
 
 if __name__ == "__main__":
     main()

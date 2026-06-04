@@ -10,7 +10,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from scipy import ndimage as ndi
-from skimage import color, measure, morphology, transform
+from skimage import measure, morphology
 
 from grow_to_tissue_core import keep_seeded_components, to_float_rgb
 
@@ -23,6 +23,11 @@ DEFAULT_MEDSAM_CHECKPOINT = Path(
         str(DEFAULT_MEDSAM_REPO / "work_dir" / "MedSAM" / "medsam_vit_b.pth"),
     )
 )
+LARGE_MASK_MAX_PIXELS = int(os.environ.get("MEDSAM_LARGE_MASK_MAX_PIXELS", "8000000"))
+
+
+def _log(message: str) -> None:
+    print(f"[MedSAM] {message}", flush=True)
 
 
 class MedSAMUnavailableError(RuntimeError):
@@ -44,6 +49,8 @@ class MedSAMConfig:
     force_core_preservation: bool = True
     save_debug: bool = False
     repo_dir: str = str(DEFAULT_MEDSAM_REPO)
+    cluster_tile_size: int = 4096
+    cluster_tile_overlap: int = 512
 
 
 def _disk(radius: int):
@@ -51,36 +58,139 @@ def _disk(radius: int):
     return morphology.disk(radius) if radius > 0 else None
 
 
+def _large_mask_step(shape: Tuple[int, int], max_pixels: int = LARGE_MASK_MAX_PIXELS) -> int:
+    pixels = int(shape[0]) * int(shape[1])
+    if pixels <= max_pixels:
+        return 1
+    return max(2, int(np.ceil(np.sqrt(float(pixels) / float(max_pixels)))))
+
+
+def _downsample_bool_any(mask: np.ndarray, step: int) -> np.ndarray:
+    mask = np.asarray(mask).astype(bool, copy=False)
+    step = max(1, int(step))
+    if step <= 1:
+        return mask
+    h, w = mask.shape
+    out_h = int(np.ceil(h / float(step)))
+    out_w = int(np.ceil(w / float(step)))
+    pad_h = out_h * step - h
+    pad_w = out_w * step - w
+    if pad_h or pad_w:
+        mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=False)
+    return mask.reshape(out_h, step, out_w, step).max(axis=(1, 3))
+
+
 def _binary_dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    mask = np.asarray(mask).astype(bool, copy=False)
     selem = _disk(radius)
-    return ndi.binary_dilation(mask.astype(bool), structure=selem) if selem is not None else mask.astype(bool)
+    if selem is None:
+        return mask
+    step = _large_mask_step(mask.shape)
+    if step > 1:
+        small = _downsample_bool_any(mask, step)
+        small_radius = max(1, int(np.ceil(float(radius) / float(step))))
+        small_selem = _disk(small_radius)
+        small_out = ndi.binary_dilation(small, structure=small_selem)
+        return _upsample_bool_mask(small_out, mask.shape)
+    return ndi.binary_dilation(mask, structure=selem)
 
 
 def _binary_erode(mask: np.ndarray, radius: int) -> np.ndarray:
+    mask = np.asarray(mask).astype(bool, copy=False)
     selem = _disk(radius)
-    return ndi.binary_erosion(mask.astype(bool), structure=selem) if selem is not None else mask.astype(bool)
+    if selem is None:
+        return mask
+    step = _large_mask_step(mask.shape)
+    if step > 1:
+        small = _downsample_bool_any(mask, step)
+        small_radius = max(1, int(np.ceil(float(radius) / float(step))))
+        small_selem = _disk(small_radius)
+        small_out = ndi.binary_erosion(small, structure=small_selem)
+        return _upsample_bool_mask(small_out, mask.shape) & mask
+    return ndi.binary_erosion(mask, structure=selem)
+
+
+def _to_uint8_rgb_for_resize(crop: np.ndarray) -> np.ndarray:
+    image = np.asarray(crop)
+    if image.ndim == 2:
+        image = np.stack([image, image, image], axis=-1)
+    elif image.ndim == 3 and image.shape[-1] == 1:
+        image = np.repeat(image, 3, axis=-1)
+    elif image.ndim == 3 and image.shape[-1] > 3:
+        image = image[..., :3]
+    if image.ndim != 3:
+        raise ValueError(f"Unsupported image shape for MedSAM crop: {image.shape}")
+    if image.dtype == np.uint8:
+        return np.ascontiguousarray(image)
+    if np.issubdtype(image.dtype, np.integer):
+        maxv = float(np.iinfo(image.dtype).max or 255)
+        scaled = np.clip(image.astype(np.float32, copy=False) / maxv, 0.0, 1.0)
+        return np.ascontiguousarray(np.round(scaled * 255.0).astype(np.uint8))
+    arr = image.astype(np.float32, copy=False)
+    if arr.max(initial=0.0) <= 1.5:
+        arr = arr * 255.0
+    return np.ascontiguousarray(np.clip(arr, 0.0, 255.0).astype(np.uint8))
 
 
 def _bbox_from_mask(mask: np.ndarray, margin: int = 0) -> Tuple[int, int, int, int]:
-    ys, xs = np.where(mask)
-    if ys.size == 0 or xs.size == 0:
+    mask = np.asarray(mask).astype(bool, copy=False)
+    rows = np.flatnonzero(mask.any(axis=1))
+    cols = np.flatnonzero(mask.any(axis=0))
+    if rows.size == 0 or cols.size == 0:
         return 0, 0, mask.shape[0], mask.shape[1]
-    y0 = max(0, int(ys.min()) - int(margin))
-    y1 = min(mask.shape[0], int(ys.max()) + 1 + int(margin))
-    x0 = max(0, int(xs.min()) - int(margin))
-    x1 = min(mask.shape[1], int(xs.max()) + 1 + int(margin))
+    y0 = max(0, int(rows[0]) - int(margin))
+    y1 = min(mask.shape[0], int(rows[-1]) + 1 + int(margin))
+    x0 = max(0, int(cols[0]) - int(margin))
+    x1 = min(mask.shape[1], int(cols[-1]) + 1 + int(margin))
     return y0, y1, x0, x1
 
 
+def _tile_starts(start: int, end: int, size: int, overlap: int) -> List[int]:
+    start = int(start)
+    end = int(end)
+    size = max(1, int(size))
+    overlap = max(0, min(int(overlap), size - 1))
+    if end <= start:
+        return []
+    if end - start <= size:
+        return [max(0, end - size)]
+    stride = max(1, size - overlap)
+    starts = list(range(start, end, stride))
+    last = max(start, end - size)
+    starts = [s for s in starts if s <= last]
+    if not starts or starts[-1] != last:
+        starts.append(last)
+    return sorted(set(max(0, s) for s in starts))
+
+
+def _iter_mask_tiles(mask: np.ndarray, tile_size: int, overlap: int) -> List[Tuple[int, int, int, int]]:
+    mask = np.asarray(mask).astype(bool, copy=False)
+    if not mask.any():
+        return []
+    y0, y1, x0, x1 = _bbox_from_mask(mask, margin=0)
+    ys = _tile_starts(y0, y1, tile_size, overlap)
+    xs = _tile_starts(x0, x1, tile_size, overlap)
+    h, w = mask.shape
+    windows: List[Tuple[int, int, int, int]] = []
+    for yy0 in ys:
+        yy1 = min(h, yy0 + max(1, int(tile_size)))
+        for xx0 in xs:
+            xx1 = min(w, xx0 + max(1, int(tile_size)))
+            if mask[yy0:yy1, xx0:xx1].any():
+                windows.append((yy0, yy1, xx0, xx1))
+    return windows
+
+
 def _normalize_crop(crop: np.ndarray) -> np.ndarray:
-    rgb = to_float_rgb(crop)
-    img_1024 = transform.resize(
-        rgb,
-        (1024, 1024),
-        order=3,
-        preserve_range=True,
-        anti_aliasing=True,
-    ).astype(np.float32)
+    # Resize before converting to float32. On WSI crops, converting the full
+    # crop to float first can allocate multiple GB and stall before CUDA is used.
+    from PIL import Image
+
+    rgb_u8 = _to_uint8_rgb_for_resize(crop)
+    pil = Image.fromarray(rgb_u8, mode="RGB")
+    if pil.size != (1024, 1024):
+        pil = pil.resize((1024, 1024), Image.Resampling.BILINEAR)
+    img_1024 = np.asarray(pil, dtype=np.float32) / 255.0
     img_1024 -= float(img_1024.min(initial=0.0))
     denom = float(img_1024.max(initial=0.0))
     if denom > 0:
@@ -114,6 +224,7 @@ def _load_medsam_model(checkpoint: str, device: str, repo_dir: str):
     except Exception as exc:  # pragma: no cover - env-specific
         raise MedSAMUnavailableError(f"segment_anything import failed from MedSAM repo: {exc}") from exc
 
+    _log(f"loading model on device={device} checkpoint={checkpoint_path}")
     model = sam_model_registry["vit_b"](checkpoint=str(checkpoint_path))
     model = model.to(device)
     model.eval()
@@ -155,15 +266,60 @@ def _infer_box_prompt(crop_rgb: np.ndarray, box_xyxy: np.ndarray, config: MedSAM
     return pred_mask, prob_np
 
 
-def _obvious_background_mask(crop_rgb: np.ndarray) -> np.ndarray:
-    rgb = to_float_rgb(crop_rgb)
-    hsv = color.rgb2hsv(rgb)
-    gray = color.rgb2gray(rgb)
-    od = -np.log(np.clip(rgb, 1.0 / 255.0, 1.0)).mean(axis=-1)
-    return (gray > 0.93) & (hsv[..., 1] < 0.10) & (od < 0.08)
+def _upsample_bool_mask(mask: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
+    mask = np.asarray(mask).astype(bool, copy=False)
+    if mask.shape == shape:
+        return mask
+    sy = max(1, int(np.ceil(shape[0] / float(mask.shape[0]))))
+    sx = max(1, int(np.ceil(shape[1] / float(mask.shape[1]))))
+    up = np.repeat(np.repeat(mask, sy, axis=0), sx, axis=1)
+    return up[: shape[0], : shape[1]]
+
+
+def _obvious_background_mask(crop_rgb: np.ndarray, max_side: int = 4096) -> np.ndarray:
+    """
+    Detect clearly white background without materializing several full-resolution
+    float images. The mask only needs to be conservative, so we estimate it on a
+    downsampled view and expand back to level-0.
+    """
+    image = np.asarray(crop_rgb)
+    if image.ndim == 2:
+        image = np.stack([image, image, image], axis=-1)
+    elif image.ndim == 3 and image.shape[-1] == 1:
+        image = np.repeat(image, 3, axis=-1)
+    elif image.ndim == 3 and image.shape[-1] > 3:
+        image = image[..., :3]
+    if image.ndim != 3:
+        raise ValueError(f"Unsupported image shape for background detection: {image.shape}")
+
+    h, w = int(image.shape[0]), int(image.shape[1])
+    step = max(1, int(np.ceil(max(h, w) / float(max_side))))
+    work = image[::step, ::step]
+    rgb = to_float_rgb(work)
+
+    vmax = rgb.max(axis=-1)
+    vmin = rgb.min(axis=-1)
+    gray = rgb.mean(axis=-1)
+    saturation = (vmax - vmin) / np.maximum(vmax, 1e-3)
+    mask_small = (gray > 0.93) & (saturation < 0.10) & (vmax > 0.92)
+    return _upsample_bool_mask(mask_small, (h, w))
 
 
 def _build_component_groups(seed_binary: np.ndarray, baseline_mask: np.ndarray, config: MedSAMConfig) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    if int(baseline_mask.size) > int(LARGE_MASK_MAX_PIXELS) * 4:
+        baseline_bool = baseline_mask.astype(bool, copy=False)
+        seed_bool = seed_binary.astype(bool, copy=False)
+        seed_area = int((seed_bool & baseline_bool).sum())
+        labels = np.zeros(baseline_bool.shape, dtype=np.int32)
+        if seed_area >= int(config.component_min_area) and baseline_bool.any():
+            labels[baseline_bool] = 1
+            return labels, [{
+                "group_id": 1,
+                "seed_area": seed_area,
+                "baseline_component_pixels": int(baseline_bool.sum()),
+            }]
+        return labels, []
+
     baseline_groups = measure.label(_binary_dilate(baseline_mask.astype(bool), config.component_merge_distance), connectivity=2)
     labels = np.zeros_like(baseline_groups, dtype=np.int32)
     groups: List[Dict[str, int]] = []
@@ -211,9 +367,17 @@ def _build_protected_core(baseline: np.ndarray, seed_binary: np.ndarray, radius:
     if radius == 0:
         core = support.copy()
     else:
-        # Use an exact interior-distance core so larger radii really produce a wider editable band.
-        dist = ndi.distance_transform_edt(support)
-        core = dist > float(radius)
+        step = _large_mask_step(support.shape)
+        if step > 1:
+            small_support = _downsample_bool_any(support, step)
+            small_radius = max(1, int(np.ceil(float(radius) / float(step))))
+            dist = ndi.distance_transform_edt(small_support)
+            core = _upsample_bool_mask(dist > float(small_radius), support.shape) & support
+        else:
+            # Use an exact interior-distance core on small masks. Large WSI masks
+            # use the downsampled path above to avoid multi-GB float64 EDT arrays.
+            dist = ndi.distance_transform_edt(support)
+            core = dist > float(radius)
         if not core.any():
             core = seed_binary.copy()
     core |= seed_binary
@@ -231,7 +395,10 @@ def _nearest_existing_labels(label_map: np.ndarray, target_mask: np.ndarray | No
     fg = labels > 0
     if not fg.any():
         return out
-    target_mask = np.asarray(target_mask).astype(bool)
+    if target_mask is None:
+        target_mask = np.ones(labels.shape, dtype=bool)
+    else:
+        target_mask = np.asarray(target_mask).astype(bool)
     if not target_mask.any():
         return out
     cc = measure.label(target_mask, connectivity=2)
@@ -374,6 +541,7 @@ def run_medsam_border_refine(
 ) -> Tuple[np.ndarray, np.ndarray | None, float, Dict[str, object], Dict[str, np.ndarray]]:
     start = time.perf_counter()
     seed_labels = np.asarray(seed_labels)
+    _log(f"start image_shape={getattr(image, 'shape', None)} seed_shape={seed_labels.shape} baseline_shape={np.asarray(baseline_tissue_mask).shape} device={config.device}")
     label_dtype = seed_labels.dtype
     if np.issubdtype(label_dtype, np.integer):
         min_label = int(seed_labels.min(initial=0))
@@ -401,7 +569,7 @@ def run_medsam_border_refine(
             baseline_labels[unlabeled_baseline] = fallback_labels[unlabeled_baseline]
     else:
         baseline_labels = _nearest_seed_labels(seed_labels, baseline)
-    final_labels = baseline_labels.copy() if config.save_debug else baseline_labels
+    final_labels = baseline_labels.copy()
     score_dtype = np.float16
     best_score = np.full(baseline.shape, -np.inf, dtype=score_dtype)
     best_score[baseline] = 0.25
@@ -415,13 +583,19 @@ def run_medsam_border_refine(
     protected_core_labels = np.zeros(seed_labels.shape, dtype=label_dtype)
 
     unique_labels = [int(x) for x in np.unique(seed_labels) if x > 0]
+    _log(f"labels={unique_labels} large_mask_step={_large_mask_step(seed_labels.shape)}")
 
     for lid in unique_labels:
+        label_start = time.perf_counter()
+        _log(f"cluster {lid}: preparing border tiles")
         label_seed = seed_labels == lid
         label_baseline = baseline_labels == lid
         if not label_baseline.any():
             label_baseline = label_seed.copy()
         label_support = label_baseline | label_seed
+        if int(label_seed.sum()) < int(config.component_min_area):
+            _log(f"cluster {lid}: skipped tiny seed area={int(label_seed.sum())}")
+            continue
 
         label_core = _build_protected_core(label_support, label_seed, int(config.core_erosion_radius))
         label_outer = _binary_dilate(label_support, int(config.outer_dilation_radius))
@@ -435,41 +609,48 @@ def run_medsam_border_refine(
         final_labels[label_core] = lid
         best_score[label_core] = 2.0
 
-        merged_support = _binary_dilate(label_support, int(config.component_merge_distance))
-        group_cc = measure.label(merged_support, connectivity=2)
-        for prop in measure.regionprops(group_cc):
-            group_region = group_cc == prop.label
-            group_seed = label_seed & _binary_dilate(group_region, int(config.component_merge_distance))
-            if int(group_seed.sum()) == 0:
-                continue
+        tile_mask = label_band | label_seed
+        windows = _iter_mask_tiles(
+            tile_mask,
+            tile_size=int(config.cluster_tile_size),
+            overlap=int(config.cluster_tile_overlap),
+        )
+        _log(
+            f"cluster {lid}: seed_px={int(label_seed.sum())} baseline_px={int(label_baseline.sum())} "
+            f"tile_count={len(windows)} prep_sec={time.perf_counter() - label_start:.1f}"
+        )
 
-            region_scope = _binary_dilate(group_region, int(config.outer_dilation_radius))
-            work_mask = region_scope | (label_outer & _binary_dilate(group_seed, int(config.outer_dilation_radius)))
-            y0, y1, x0, x1 = _bbox_from_mask(work_mask, margin=int(config.bbox_margin))
+        for tile_idx, (y0, y1, x0, x1) in enumerate(windows, start=1):
+            tile_start = time.perf_counter()
             crop_rgb = image[y0:y1, x0:x1]
-            crop_scope = region_scope[y0:y1, x0:x1]
-            crop_seed = group_seed[y0:y1, x0:x1]
+            crop_seed = label_seed[y0:y1, x0:x1]
             crop_support = label_support[y0:y1, x0:x1]
             crop_core = label_core[y0:y1, x0:x1]
             crop_outer = label_outer[y0:y1, x0:x1]
-            crop_band = label_band[y0:y1, x0:x1] & (crop_scope | crop_outer)
+            crop_band = label_band[y0:y1, x0:x1]
             if crop_rgb.size == 0 or not crop_band.any():
                 continue
 
+            prompt_source = crop_seed if crop_seed.any() else crop_support
             prompt_region = _binary_dilate(
-                crop_seed,
+                prompt_source,
                 max(1, int(config.seed_dilation_radius) + int(config.component_merge_distance)),
             )
-            prompt_region &= crop_scope | crop_outer
+            prompt_region &= crop_outer | crop_support
             if not prompt_region.any():
-                prompt_region = crop_scope | crop_seed
+                prompt_region = crop_support | crop_seed
             if not prompt_region.any():
                 continue
 
             py0, py1, px0, px1 = _bbox_from_mask(prompt_region, margin=max(2, int(config.seed_dilation_radius)))
             box_xyxy = np.array([px0, py0, px1, py1], dtype=np.float32)
 
+            _log(
+                f"cluster {lid} tile {tile_idx}/{len(windows)}: "
+                f"crop={crop_rgb.shape[:2]} box={[int(px0), int(py0), int(px1), int(py1)]}"
+            )
             pred_mask, pred_prob = _infer_box_prompt(crop_rgb, box_xyxy, config)
+            _log(f"cluster {lid} tile {tile_idx}/{len(windows)}: inference done")
             pred_mask = np.asarray(pred_mask, dtype=bool)
             pred_prob = np.asarray(pred_prob, dtype=np.float32)
             crop_bg = background_mask[y0:y1, x0:x1]
@@ -496,16 +677,19 @@ def run_medsam_border_refine(
             region_meta.append(
                 {
                     "label_id": int(lid),
+                    "tile_index": int(tile_idx),
+                    "tile_count": int(len(windows)),
                     "seed_area": int(crop_seed.sum()),
                     "crop_box": [int(x0), int(y0), int(x1), int(y1)],
                     "prompt_box": [int(px0), int(py0), int(px1), int(py1)],
                     "editable_pixels": int(crop_band.sum()),
                     "predicted_pixels": int(pred_mask.sum()),
+                    "runtime_sec": round(float(time.perf_counter() - tile_start), 3),
                 }
             )
+        _log(f"cluster {lid}: done total_sec={time.perf_counter() - label_start:.1f}")
 
-    raw_medsam_labels = final_labels.copy() if config.save_debug else None
-    raw_medsam_mask = (raw_medsam_labels > 0) if raw_medsam_labels is not None else None
+    raw_medsam_labels = final_labels.copy()
 
     final_mask = _conservative_cleanup(final_labels > 0, baseline, seed_binary, protected_core, editable_band, outer_envelope, background_mask, config)
     final_labels[~final_mask] = 0
@@ -560,18 +744,16 @@ def run_medsam_border_refine(
     }
     artifacts = {
         "protected_core": protected_core.astype(np.uint8),
-        "protected_core_labels": protected_core_labels.astype(label_dtype, copy=False),
         "editable_band": editable_band.astype(np.uint8),
-        "final_mask": final_mask.astype(np.uint8),
+        "raw_medsam_label_map": raw_medsam_labels.astype(label_dtype, copy=False),
         "label_map": final_labels.astype(label_dtype, copy=False),
     }
     if config.save_debug:
         artifacts["baseline_mask"] = baseline.astype(np.uint8)
         artifacts["baseline_labels"] = baseline_labels.astype(label_dtype, copy=False)
+        artifacts["protected_core_labels"] = protected_core_labels.astype(label_dtype, copy=False)
         artifacts["outer_envelope"] = outer_envelope.astype(np.uint8)
-        artifacts["raw_medsam_mask"] = raw_medsam_mask.astype(np.uint8)
-        artifacts["raw_medsam_label_map"] = raw_medsam_labels.astype(label_dtype, copy=False)
-    if probability_map is not None:
-        artifacts["probability_map"] = probability_map.astype(np.float16, copy=False)
+        artifacts["final_mask"] = final_mask.astype(np.uint8)
+        artifacts["probability_map"] = probability_map.astype(np.float16, copy=False) if probability_map is not None else np.zeros((1,), dtype=np.float16)
     prob_out = probability_map.astype(np.float16, copy=False) if probability_map is not None else None
     return final_mask.astype(bool), prob_out, float(runtime), meta, artifacts

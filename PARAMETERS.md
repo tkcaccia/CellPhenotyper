@@ -82,7 +82,7 @@ GPU run notes:
 - On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v2.2` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
-`convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
+`convert`, `grandqc`, `stardist`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
 
 ## Conversion (`.btf` -> `.ome.tif`)
 
@@ -121,12 +121,26 @@ GPU run notes:
 | `input_roi_mask_cpus` | `4` | CPU allocation for the ROI GeoJSON-to-mask step. |
 | `input_roi_mask_memory_gb` | `8` | RAM allocation for the ROI GeoJSON-to-mask step. |
 | `input_roi_mask_time` | `4h` | Time allocation for the ROI GeoJSON-to-mask step. |
-| `write_full_labels` | `true` | Write full labels TIFF. |
-| `full_format` | `tif` | Full label file format. |
-| `allow_huge_tif` | `true` | Allow huge TIFF writes. |
+| `write_full_labels` | `false` | Write a full-canvas StarDist label artifact only when a downstream stage requires it. |
+| `full_format` | `zarr` | Full label file format. `zarr` is the safe default for large WSI runs. |
+| `allow_huge_tif` | `false` | Refuse very large dense TIFF label writes unless explicitly overridden. |
 | `stardist_cpus` | `16` | CPU allocation. |
 | `stardist_memory_gb` | `48` | RAM allocation. |
 | `stardist_time` | `24h` | Time allocation. |
+
+## TMA Detection
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `tma_enable` | `true` | Run the post-StarDist TMA detection and cell-to-spot assignment step. |
+| `tma_thumbnail_max_side` | `2048` | Maximum thumbnail side used for spot detection. |
+| `tma_min_spots` | `4` | Minimum compact tissue spots required before an image is called a TMA. |
+| `tma_min_spot_area_fraction` | `0.001` | Minimum candidate spot area as a fraction of the crop. |
+| `tma_max_spot_area_fraction` | `0.25` | Maximum candidate spot area as a fraction of the crop. |
+| `tma_max_area_cv` | `0.75` | Maximum coefficient of variation in candidate spot area. |
+| `tma_cpus` | `4` | CPU allocation. |
+| `tma_memory_gb` | `12` | RAM allocation. |
+| `tma_time` | `4h` | Time allocation. |
 
 ## GigaTIME
 
@@ -213,7 +227,20 @@ GPU run notes:
 | KODAMA clustering | `cluster_*`, `cluster_primary_variant`, `cluster_secondary_variant`, `cluster_secondary_profile`, `cluster_fine_resolution_multiplier`, `cluster_fine_score_margin` |
 | Cluster mask build | `cluster_mask_*` |
 | Grow clusters to tissue | `grow_*` |
+| MedSAM border refinement | `medsam_refine_*`, `medsam_*` |
 | Final cluster GeoJSON | `cluster_geojson_*` |
+
+UNI-2 behavior:
+
+- `uni2_fuse_tile_inner_square=true` is the optimized default: one Python/model session loads UNI2-h once, prepares StarDist-centered tile crops and fixed centered inner-square crops in memory, and runs both image streams through UNI2-h in the same batched call. The `inner_square` family does not use the cytoplasm mask; it uses `uni2_inner_square_fixed_px=90` in the 224 x 224 UNI2 input space. Set this to `false` for comparison runs that use the slower two-pass behavior: one centered tile pass plus one separate `inner_square` masked-image forward pass.
+- `uni2_target_mpp=0.25` makes the source crop physically calibrated before the 224 x 224 UNI2 input transform. If a StarDist crop lost OME pixel-size metadata, UNI2 recovers the MPP from the crop `shift.json` and the original input image when possible; otherwise it uses `uni2_default_source_mpp`.
+- For a source image at `0.08706 µm/px`, the default 224-pixel UNI2 input is extracted from a 643-pixel source crop, giving an effective resolution of about `0.25 µm/px`.
+- `uni2_save_tiles=false` is the production default. KODAMA reads the embedding CSVs, not the per-cell PNG crops, so saving tiles is mainly for debugging/QC and can dominate disk I/O on large runs.
+
+MedSAM behavior:
+
+- MedSAM refinement runs per cluster label. For large WSI crops, each cluster border is split into overlapping tiles controlled by `medsam_cluster_tile_size` and `medsam_cluster_tile_overlap`, so a tile may legitimately contain only one cluster.
+- Large masks use downsampled morphology for protected-core and editable-band construction, and full-resolution work is limited to the cluster-border tile passed to MedSAM. CUDA is still required when `medsam_device=cuda`.
 
 Dual clustering behavior:
 
@@ -225,9 +252,11 @@ Dual clustering behavior:
 
 Additional automatic outputs:
 
-- `03_gigatime/<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
-- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
-- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
-- If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `04_roi_mask/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `04_roi_mask/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `04_roi_mask/<sample>/<sample>_input_roi_mask_labels.json`.
-- `13_clustering/<sample>/` now contains both `standard` and `fine` clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG.
-- `17_medsam_refined_tissue/<sample>/` now contains the variant-specific KODAMA membership PNG copied next to the MedSAM-refined mask outputs for both clustering branches as `<sample>_<variant>_medsam_kodama_membership.png`.
+- `04_TMA/<sample>/tma_<sample>/<sample>_tma_spots.geojson` contains TMA spot polygons when the image is detected as a tissue microarray.
+- `04_TMA/<sample>/tma_<sample>/<sample>_objects_tma_assigned.csv` contains StarDist objects with appended `tma_spot_*` assignment columns.
+- `05_gigatime/<sample>/gigatime_<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
+- If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `06_roi/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `06_roi/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `06_roi/<sample>/<sample>_input_roi_mask_labels.json`.
+- `11_clustering/<sample>/` now contains both `standard` and `fine` clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG.
+- `14_medsam_refine_tissue/<sample>/` now contains the variant-specific KODAMA membership PNG copied next to the MedSAM-refined mask outputs for both clustering branches as `<sample>_<variant>_medsam_kodama_membership.png`.

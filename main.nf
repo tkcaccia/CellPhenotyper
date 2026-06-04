@@ -8,6 +8,7 @@ include { RUN_GRANDQC_ARTIFACT_ANALYSIS } from './modules/run_grandqc_artifact_a
 include { PREPARE_ROI_GEOJSON } from './modules/prepare_roi_geojson'
 include { PREPARE_STARDIST_AUTO_ROI } from './modules/prepare_stardist_auto_roi'
 include { RUN_STARDIST_ROI_SEGMENTATION } from './modules/run_stardist_roi_segmentation'
+include { DETECT_TMA_SPOTS } from './modules/detect_tma_spots'
 include { RUN_GIGATIME_ON_CROP } from './modules/run_gigatime_on_crop'
 include { ROI_GEOJSON_TO_MASK } from './modules/roi_geojson_to_mask'
 include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
@@ -96,7 +97,7 @@ workflow {
       command_output('awk \'/MemTotal/ {printf "%d", int($2/1024/1024)}\' /proc/meminfo'),
       command_output('free -g | awk \'/^Mem:/ {print $2}\''),
       command_output('sysctl -n hw.memsize 2>/dev/null | awk \'{printf "%d", int($1/1024/1024/1024)}\'')
-    ].findAll { it && it ==~ /\\d+/ }
+    ].findAll { it && it ==~ /\d+/ }
     if (!candidates) return 8
     try {
       return Math.max(1, candidates[0].toInteger())
@@ -346,6 +347,9 @@ workflow {
     artifacts       : 'grandqc',
     stardist        : 'stardist',
     startdist       : 'stardist',
+    tma             : 'tma',
+    tma_spots       : 'tma',
+    tissue_microarray: 'tma',
     gigatime        : 'gigatime',
     virtual_mif     : 'gigatime',
     mif             : 'gigatime',
@@ -375,7 +379,7 @@ workflow {
     mask_to_geojson : 'cluster_geojson',
     final_geojson   : 'cluster_geojson'
   ]
-  def stage_order = ['convert', 'grandqc', 'stardist', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'gigatime', 'marker_quantification', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
+  def stage_order = ['convert', 'grandqc', 'stardist', 'tma', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'gigatime', 'marker_quantification', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']
   def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
   def normalize_stage = { raw_value, fallback_value ->
@@ -402,7 +406,7 @@ workflow {
   params._resolved_end_point = end_point
 
   def resolveLabelsFullArtifact = { sample_id ->
-    def base = "${params.outdir_base}/02_stardist/${sample_id}/stardist_out"
+    def base = "${params.outdir_base}/03_stardist/${sample_id}/stardist_out"
     def candidates = [
       file("${base}/labels_full.zarr", checkIfExists: false),
       file("${base}/labels_full.tif", checkIfExists: false),
@@ -419,9 +423,11 @@ workflow {
   def gigatime_enabled = (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def marker_quantification_enabled = (((params.marker_quantification_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def grandqc_enabled = (((params.grandqc_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+  def tma_enabled = (((params.tma_enable ?: true).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def run_convert = should_run_stage('convert')
   def run_grandqc = should_run_stage('grandqc') && grandqc_enabled
   def run_stardist = should_run_stage('stardist')
+  def run_tma = should_run_stage('tma') && tma_enabled
   def run_gigatime = should_run_stage('gigatime') && gigatime_enabled
   def run_tissue_mask = should_run_stage('tissue_mask')
   def run_cell_assignment = should_run_stage('cell_assignment')
@@ -747,7 +753,7 @@ workflow {
     roi_geojson_ch = PREPARE_ROI_GEOJSON.out.roi_geojson
   } else if (run_cell_assignment) {
     roi_geojson_ch = image_input_ch.map { sample_id, _ ->
-      tuple(sample_id, file("${params.outdir_base}/05_roi/${sample_id}/${sample_id}.roi.geojson", checkIfExists: true))
+      tuple(sample_id, file("${params.outdir_base}/06_roi/${sample_id}/${sample_id}.roi.geojson", checkIfExists: true))
     }
   }
 
@@ -769,7 +775,7 @@ workflow {
     stardist_roi_geojson_ch = provided_roi_for_stardist_ch.mix(PREPARE_STARDIST_AUTO_ROI.out.roi_geojson)
   }
 
-  def need_stardist_outputs = run_stardist || (!tissue_mask_from_input && run_tissue_mask) || run_cell_assignment || run_cytoplasm || run_uni2
+  def need_stardist_outputs = run_stardist || run_tma || (!tissue_mask_from_input && run_tissue_mask) || run_cell_assignment || run_cytoplasm || run_uni2
 
   def crop_roi_ch = Channel.empty()
   def labels_tif_ch = Channel.empty()
@@ -799,19 +805,19 @@ workflow {
     } else {
       def require_labels_full = (!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2)
       crop_roi_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
       }
       labels_tif_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
       }
       objects_csv_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
       }
       roi_crop_geojson_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
       }
       shift_json_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
       }
       labels_full_ch = require_labels_full
         ? image_input_ch.map { sample_id, _ ->
@@ -821,32 +827,56 @@ workflow {
     }
   }
 
+  def objects_for_assignment_ch = objects_csv_ch
+  def tma_outputs_available = stage_index[end_point] >= stage_index['tma'] && tma_enabled
+  if (run_tma) {
+    def tma_input_ch = crop_roi_ch
+      .join(objects_csv_ch)
+      .join(shift_json_ch)
+      .map { sample_id, crop_tif, objects_csv, shift_json ->
+        tuple(sample_id, crop_tif, objects_csv, shift_json)
+      }
+    DETECT_TMA_SPOTS(tma_input_ch)
+    objects_for_assignment_ch = DETECT_TMA_SPOTS.out.objects_tma_assigned
+  } else if (tma_outputs_available && (run_cell_assignment || run_cytoplasm || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson)) {
+    objects_for_assignment_ch = image_input_ch.map { sample_id, _ ->
+      tuple(sample_id, file("${params.outdir_base}/04_TMA/${sample_id}/tma_${sample_id}/${sample_id}_objects_tma_assigned.csv", checkIfExists: true))
+    }
+  }
+
   def stardist_outputs_available = stage_index[end_point] >= stage_index['stardist']
   def gigatime_outputs_available = stage_index[end_point] >= stage_index['gigatime'] && gigatime_enabled
   def crop_roi_for_masks_ch = stardist_outputs_available
     ? (run_stardist
       ? crop_roi_ch
       : image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
       })
     : Channel.empty()
   def roi_crop_geojson_for_masks_ch = stardist_outputs_available
     ? (run_stardist
       ? roi_crop_geojson_ch
       : image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+      })
+    : Channel.empty()
+  def shift_json_for_masks_ch = stardist_outputs_available
+    ? (run_stardist
+      ? shift_json_ch
+      : image_input_ch.map { sample_id, _ ->
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
       })
     : Channel.empty()
   def gigatime_image_ch = Channel.empty()
   def gigatime_quant_dir_ch = Channel.empty()
 
   if (stardist_outputs_available) {
-    if (!run_gigatime && gigatime_outputs_available) {
+    if (!run_gigatime && run_marker_quantification) {
       gigatime_image_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/03_gigatime/${sample_id}/gigatime_${sample_id}", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/05_gigatime/${sample_id}/gigatime_${sample_id}", checkIfExists: true))
       }
       gigatime_quant_dir_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/06_marker_quantification/${sample_id}/quantification_${sample_id}", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/05_gigatime/${sample_id}/quantification_${sample_id}", checkIfExists: true))
       }
     }
     def roi_mask_input_ch = roi_crop_geojson_for_masks_ch
@@ -873,7 +903,7 @@ workflow {
   if (run_cell_assignment || run_cytoplasm || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
     def objects_assigned_ch = Channel.empty()
     if (run_cell_assignment) {
-      def assign_input_ch = objects_csv_ch
+      def assign_input_ch = objects_for_assignment_ch
         .join(shift_json_ch)
         .join(roi_geojson_ch)
         .map { sample_id, objects_csv, shift_json, roi_geojson ->
@@ -892,7 +922,7 @@ workflow {
     def nuclei_mask_for_quant_ch = run_stardist
       ? labels_tif_ch
       : image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
       }
     if (run_cytoplasm) {
       def expand_primary_ch = labels_tif_ch
@@ -936,10 +966,11 @@ workflow {
 
     if (run_gigatime) {
       def gigatime_input_ch = crop_roi_for_masks_ch
+        .join(shift_json_for_masks_ch)
         .join(nuclei_mask_for_quant_ch)
         .join(cyto_mask_for_quant_ch)
-        .map { sample_id, crop_roi_tif, nuclei_mask_tif, cyto_mask_tif ->
-          tuple(sample_id, crop_roi_tif, nuclei_mask_tif, cyto_mask_tif)
+        .map { sample_id, crop_roi_tif, shift_json, nuclei_mask_tif, cyto_mask_tif ->
+          tuple(sample_id, crop_roi_tif, shift_json, nuclei_mask_tif, cyto_mask_tif)
         }
       RUN_GIGATIME_ON_CROP(gigatime_input_ch)
       gigatime_image_ch = RUN_GIGATIME_ON_CROP.out.gigatime_dir
@@ -1046,16 +1077,28 @@ workflow {
       }
     } else if (run_kodama) {
       tile_embeddings_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/10_embeddings/${sample_id}/embeddings_${sample_id}_tile", checkIfExists: true))
+        def embedding_dir = kodama_requested_modes.contains('tile')
+          ? file("${params.outdir_base}/09_embeddings/${sample_id}/embeddings_${sample_id}_tile", checkIfExists: true)
+          : placeholder_embeddings_dir
+        tuple(sample_id, embedding_dir)
       }
       nuclei_embeddings_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/10_embeddings/${sample_id}/embeddings_${sample_id}_nuclei", checkIfExists: true))
+        def embedding_dir = kodama_requested_modes.contains('nuclei')
+          ? file("${params.outdir_base}/09_embeddings/${sample_id}/embeddings_${sample_id}_nuclei", checkIfExists: true)
+          : placeholder_embeddings_dir
+        tuple(sample_id, embedding_dir)
       }
       cyto_embeddings_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/10_embeddings/${sample_id}/embeddings_${sample_id}_cyto", checkIfExists: true))
+        def embedding_dir = kodama_requested_modes.contains('cyto')
+          ? file("${params.outdir_base}/09_embeddings/${sample_id}/embeddings_${sample_id}_cyto", checkIfExists: true)
+          : placeholder_embeddings_dir
+        tuple(sample_id, embedding_dir)
       }
       inner_square_embeddings_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/10_embeddings/${sample_id}/embeddings_${sample_id}_inner_square", checkIfExists: true))
+        def embedding_dir = kodama_requested_modes.contains('inner_square')
+          ? file("${params.outdir_base}/09_embeddings/${sample_id}/embeddings_${sample_id}_inner_square", checkIfExists: true)
+          : placeholder_embeddings_dir
+        tuple(sample_id, embedding_dir)
       }
     }
 
@@ -1093,7 +1136,7 @@ workflow {
       kodama_dir_ch = RUN_KODAMA_ANALYSIS.out.kodama_dir
     } else if (run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
       kodama_dir_ch = image_input_ch.map { sample_id, _ ->
-        tuple(sample_id, file("${params.outdir_base}/11_kodama/${sample_id}/kodama_output", checkIfExists: true))
+        tuple(sample_id, file("${params.outdir_base}/10_kodama/${sample_id}/kodama_output", checkIfExists: true))
       }
     }
 
@@ -1140,13 +1183,13 @@ workflow {
       cluster_csv_ch = image_input_ch.flatMap { sample_id, _ ->
         cluster_variant_defs.collect { spec ->
           def sample_key = "${sample_id}::${spec.variant}"
-          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster.csv", checkIfExists: true))
+          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/11_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster.csv", checkIfExists: true))
         }
       }
       cluster_kodama_png_ch = image_input_ch.flatMap { sample_id, _ ->
         cluster_variant_defs.collect { spec ->
           def sample_key = "${sample_id}::${spec.variant}"
-          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster_kodama_membership.png", checkIfExists: true))
+          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/11_clustering/${sample_id}/${sample_id}_${spec.variant}_cluster_kodama_membership.png", checkIfExists: true))
         }
       }
     }
@@ -1165,7 +1208,7 @@ workflow {
       def preview_image_for_cluster_mask_ch = run_stardist
         ? crop_roi_ch
         : image_input_ch.map { sample_id, _ ->
-          tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+          tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
         }
 
       def labels_for_cluster_variant_ch = labels_for_cluster_ch
@@ -1196,7 +1239,7 @@ workflow {
       cluster_mask_ch = image_input_ch.flatMap { sample_id, _ ->
         cluster_variant_defs.collect { spec ->
           def sample_key = "${sample_id}::${spec.variant}"
-          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/15_cluster_mask/${sample_id}/${sample_id}_${spec.variant}_cluster_mask.tif", checkIfExists: true))
+          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/12_cluster_mask/${sample_id}/${sample_id}_${spec.variant}_cluster_mask.tif", checkIfExists: true))
         }
       }
     }
@@ -1207,7 +1250,7 @@ workflow {
       def image_for_growth_ch = run_stardist
         ? crop_roi_ch
         : image_input_ch.map { sample_id, _ ->
-          tuple(sample_id, file("${params.outdir_base}/02_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+          tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
         }
 
       image_for_growth_variant_ch = image_for_growth_ch
@@ -1241,7 +1284,7 @@ workflow {
       grown_mask_ch = image_input_ch.flatMap { sample_id, _ ->
         cluster_variant_defs.collect { spec ->
           def sample_key = "${sample_id}::${spec.variant}"
-          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/16_grown_tissue/${sample_id}/${sample_id}_${spec.variant}_grown_mask.ome.tif", checkIfExists: true))
+          tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_grown_tissue/${sample_id}/${sample_id}_${spec.variant}_grown_mask.ome.tif", checkIfExists: true))
         }
       }
     }
@@ -1309,7 +1352,7 @@ workflow.onComplete {
     println "PIPELINE COMPLETED SUCCESSFULLY"
     println "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
     if ((params._resolved_end_point ?: '') in ['clustering', 'cluster_mask', 'grow_tissue', 'cluster_geojson']) {
-      println "Cluster GeoJSON output dir: ${params.outdir_base}/18_cluster_geojson"
+      println "Cluster GeoJSON output dir: ${params.outdir_base}/15_cluster_geojson"
     }
   }
 }

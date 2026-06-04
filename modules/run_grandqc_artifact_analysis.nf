@@ -1,8 +1,10 @@
 process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     tag "${sample_id}"
-    label 'compute_medium'
+    label 'compute_heavy'
+    label 'gpu_capable'
+    maxForks 1
 
-    publishDir "${params.outdir_base}/01a_grandqc/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/02_grandqc/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.grandqc_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.grandqc_memory_gb as int))} GB" }

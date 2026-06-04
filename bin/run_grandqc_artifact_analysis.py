@@ -375,9 +375,67 @@ class OmeZarrReader:
         h, w, _ = self._shape_yxc(level)
         return self.read_region(0, h, 0, w, level=level)
 
+    def read_vips_thumbnail(self, target_h: int, target_w: int, np_mod):
+        try:
+            import pyvips  # type: ignore
+        except Exception:
+            return None
+        try:
+            image = pyvips.Image.thumbnail(self.path, int(target_w), height=int(target_h), size="force")
+            if image.bands > 3:
+                image = image.extract_band(0, n=3)
+            dtype_map = {
+                "uchar": np_mod.uint8,
+                "char": np_mod.int8,
+                "ushort": np_mod.uint16,
+                "short": np_mod.int16,
+                "uint": np_mod.uint32,
+                "int": np_mod.int32,
+                "float": np_mod.float32,
+                "double": np_mod.float64,
+            }
+            dtype = dtype_map.get(str(image.format))
+            if dtype is None:
+                return None
+            arr = np_mod.frombuffer(image.write_to_memory(), dtype=dtype)
+            arr = arr.reshape(int(image.height), int(image.width), int(image.bands))
+            return arr.copy()
+        except Exception as exc:
+            print(f"[WARN] pyvips thumbnail read failed; falling back to tifffile/zarr reader: {exc}", flush=True)
+            return None
+
+    def read_region_decimated(self, y0: int, y1: int, x0: int, x1: int, target_h: int, target_w: int, level: int, np_mod):
+        arr = self._level_arr(level)
+        axes = self._axes_by_level[level]
+        y0 = max(0, int(y0))
+        y1 = max(y0 + 1, int(y1))
+        x0 = max(0, int(x0))
+        x1 = max(x0 + 1, int(x1))
+        target_h = max(1, int(target_h))
+        target_w = max(1, int(target_w))
+        step_y = max(1, int(math.floor((y1 - y0) / float(target_h))))
+        step_x = max(1, int(math.floor((x1 - x0) / float(target_w))))
+        if axes == "YXS":
+            data = arr[y0:y1:step_y, x0:x1:step_x, :]
+            return data[:]
+        if axes == "CYX":
+            data = arr[:, y0:y1:step_y, x0:x1:step_x][:]
+            return data.transpose(1, 2, 0)
+        if axes == "SYX":
+            data = arr[:, y0:y1:step_y, x0:x1:step_x][:]
+            return data.transpose(1, 2, 0)
+        if axes == "YX":
+            data = arr[y0:y1:step_y, x0:x1:step_x][:]
+            return data[..., None]
+        raise ValueError(f"Unsupported axes for OME-TIFF level {level}: {axes}")
+
     def read_resampled_full(self, target_h: int, target_w: int, image_mod, np_mod):
         target_h = max(1, int(target_h))
         target_w = max(1, int(target_w))
+        if max(self.level0_h / float(target_h), self.level0_w / float(target_w)) > 2.0:
+            thumb = self.read_vips_thumbnail(target_h, target_w, np_mod)
+            if thumb is not None:
+                return normalize_to_rgb_uint8(thumb, np_mod)
         best_level = 0
         best_score = None
         target_scale_h = self.level0_h / float(target_h)
@@ -389,30 +447,10 @@ class OmeZarrReader:
                 best_score = score
                 best_level = level
         lvl_h, lvl_w, _ = self._shape_yxc(best_level)
-        # If the chosen level is still much larger than the requested thumbnail,
-        # stream it in blocks instead of materializing the whole level in memory.
-        if best_level == 0 and max(lvl_h / target_h, lvl_w / target_w) > 2.0:
-            out = np_mod.zeros((target_h, target_w, 3), dtype=np_mod.uint8)
-            block_out = 512
-            scale_y = lvl_h / float(target_h)
-            scale_x = lvl_w / float(target_w)
-            for oy0 in range(0, target_h, block_out):
-                oy1 = min(target_h, oy0 + block_out)
-                sy0 = int(math.floor(oy0 * scale_y))
-                sy1 = int(math.ceil(oy1 * scale_y))
-                sy1 = max(sy0 + 1, min(lvl_h, sy1))
-                for ox0 in range(0, target_w, block_out):
-                    ox1 = min(target_w, ox0 + block_out)
-                    sx0 = int(math.floor(ox0 * scale_x))
-                    sx1 = int(math.ceil(ox1 * scale_x))
-                    sx1 = max(sx0 + 1, min(lvl_w, sx1))
-                    patch = self.read_region(sy0, sy1, sx0, sx1, level=best_level)
-                    patch = normalize_to_rgb_uint8(patch, np_mod)
-                    pil = image_mod.fromarray(patch[:, :, :3])
-                    pil = pil.resize((ox1 - ox0, oy1 - oy0), image_mod.Resampling.BILINEAR)
-                    out[oy0:oy1, ox0:ox1, :] = np_mod.array(pil)
-            return out
-        lvl = self.read_full_level(best_level)
+        if max(lvl_h / target_h, lvl_w / target_w) > 2.0:
+            lvl = self.read_region_decimated(0, lvl_h, 0, lvl_w, target_h, target_w, best_level, np_mod)
+        else:
+            lvl = self.read_full_level(best_level)
         lvl = normalize_to_rgb_uint8(lvl, np_mod)
         if lvl.shape[0] == target_h and lvl.shape[1] == target_w:
             return lvl
@@ -421,12 +459,53 @@ class OmeZarrReader:
         return np_mod.array(pil)
 
     def read_resampled_region(self, y0: int, y1: int, x0: int, x1: int, target_h: int, target_w: int, image_mod, np_mod, level: int = 0):
-        patch = self.read_region(y0, y1, x0, x1, level=level)
+        target_h = max(1, int(target_h))
+        target_w = max(1, int(target_w))
+        if level != 0:
+            region_h = max(1, int(y1) - int(y0))
+            region_w = max(1, int(x1) - int(x0))
+            if max(region_h / target_h, region_w / target_w) > 2.0:
+                patch = self.read_region_decimated(y0, y1, x0, x1, target_h, target_w, level, np_mod)
+            else:
+                patch = self.read_region(y0, y1, x0, x1, level=level)
+            patch = normalize_to_rgb_uint8(patch, np_mod)
+            if patch.shape[0] == target_h and patch.shape[1] == target_w:
+                return patch
+            pil = image_mod.fromarray(patch[:, :, :3])
+            pil = pil.resize((target_w, target_h), image_mod.Resampling.BILINEAR)
+            return np_mod.array(pil)
+
+        region_h0 = max(1, int(y1) - int(y0))
+        region_w0 = max(1, int(x1) - int(x0))
+        target_scale_h = region_h0 / float(target_h)
+        best_level = 0
+        best_score = None
+        for idx in range(len(self._level_keys)):
+            lvl_h, lvl_w, _ = self._shape_yxc(idx)
+            level_scale_h = self.level0_h / float(lvl_h)
+            score = abs(math.log(max(level_scale_h, 1e-6) / max(target_scale_h, 1e-6)))
+            if best_score is None or score < best_score:
+                best_score = score
+                best_level = idx
+
+        lvl_h, lvl_w, _ = self._shape_yxc(best_level)
+        scale_y = self.level0_h / float(lvl_h)
+        scale_x = self.level0_w / float(lvl_w)
+        ly0 = max(0, min(lvl_h - 1, int(math.floor(int(y0) / scale_y))))
+        ly1 = max(ly0 + 1, min(lvl_h, int(math.ceil(int(y1) / scale_y))))
+        lx0 = max(0, min(lvl_w - 1, int(math.floor(int(x0) / scale_x))))
+        lx1 = max(lx0 + 1, min(lvl_w, int(math.ceil(int(x1) / scale_x))))
+        region_h = max(1, ly1 - ly0)
+        region_w = max(1, lx1 - lx0)
+        if max(region_h / target_h, region_w / target_w) > 2.0:
+            patch = self.read_region_decimated(ly0, ly1, lx0, lx1, target_h, target_w, best_level, np_mod)
+        else:
+            patch = self.read_region(ly0, ly1, lx0, lx1, level=best_level)
         patch = normalize_to_rgb_uint8(patch, np_mod)
-        if patch.shape[0] == int(target_h) and patch.shape[1] == int(target_w):
+        if patch.shape[0] == target_h and patch.shape[1] == target_w:
             return patch
         pil = image_mod.fromarray(patch[:, :, :3])
-        pil = pil.resize((int(target_w), int(target_h)), image_mod.Resampling.BILINEAR)
+        pil = pil.resize((target_w, target_h), image_mod.Resampling.BILINEAR)
         return np_mod.array(pil)
 
 
@@ -633,7 +712,7 @@ def preview_shape(height: int, width: int, overlay_factor: int, preview_max_side
     preview_max_side = max(256, int(preview_max_side))
     long_side = max(int(height), int(width))
     min_required_factor = max(1, int(math.ceil(long_side / float(preview_max_side))))
-    effective_factor = min(overlay_factor, min_required_factor) if long_side > preview_max_side else 1
+    effective_factor = max(overlay_factor, min_required_factor) if long_side > preview_max_side else 1
     coarse_h = max(1, int(math.ceil(height / effective_factor)))
     coarse_w = max(1, int(math.ceil(width / effective_factor)))
     scale = min(1.0, preview_max_side / float(max(coarse_h, coarse_w)))
@@ -905,11 +984,13 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
     )
     thumb = reader.read_resampled_full(target_h, target_w, Image, np_mod)
     thumb = normalize_to_rgb_uint8(thumb, np_mod)
+    print(f"[INFO] GrandQC tissue thumbnail read complete: {thumb.shape[0]}x{thumb.shape[1]}", flush=True)
 
     enc_param = [int(mods["cv2"].IMWRITE_JPEG_QUALITY), 80]
     _, enc = mods["cv2"].imencode('.jpg', thumb, enc_param)
     thumb_jpeg = mods["cv2"].imdecode(enc, 1)
     thumb_rgb = mods["cv2"].cvtColor(thumb_jpeg, mods["cv2"].COLOR_BGR2RGB)
+    del thumb, enc, thumb_jpeg
 
     preprocessing_fn = make_preprocessing_fn(smp_mod)
     model = smp_mod.UnetPlusPlus(
@@ -920,6 +1001,7 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
     )
     state = torch_load_any(str(tissue_ckpt), torch_mod, map_location="cpu")
     model.load_state_dict(state)
+    del state
     model.to(device)
     model.eval()
 
@@ -928,31 +1010,31 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
     he_n = height // patch_size
     overhang_w = width - wi_n * patch_size
     overhang_h = height - he_n * patch_size
-    rows = []
+    tissue_mask = np_mod.empty((height, width), dtype=np_mod.uint8)
     for h in range(he_n + 1):
-        row = []
+        if h == he_n and overhang_h <= 0:
+            continue
+        src_y0 = h * patch_size if h != he_n else max(0, height - patch_size)
+        dst_y0 = h * patch_size if h != he_n else max(0, height - overhang_h)
+        dst_y1 = min(height, dst_y0 + (patch_size if h != he_n else max(1, overhang_h)))
+        mask_y0 = 0 if h != he_n else max(0, patch_size - (dst_y1 - dst_y0))
+        mask_y1 = mask_y0 + (dst_y1 - dst_y0)
         for w in range(wi_n + 1):
-            if w != wi_n and h != he_n:
-                patch = extract_patch_with_pad(thumb_rgb, h * patch_size, w * patch_size, patch_size, np_mod)
-            elif w == wi_n and h != he_n:
-                patch = extract_patch_with_pad(thumb_rgb, h * patch_size, max(0, width - patch_size), patch_size, np_mod)
-            elif w != wi_n and h == he_n:
-                patch = extract_patch_with_pad(thumb_rgb, max(0, height - patch_size), w * patch_size, patch_size, np_mod)
-            else:
-                patch = extract_patch_with_pad(thumb_rgb, max(0, height - patch_size), max(0, width - patch_size), patch_size, np_mod)
+            if w == wi_n and overhang_w <= 0:
+                continue
+            src_x0 = w * patch_size if w != wi_n else max(0, width - patch_size)
+            dst_x0 = w * patch_size if w != wi_n else max(0, width - overhang_w)
+            dst_x1 = min(width, dst_x0 + (patch_size if w != wi_n else max(1, overhang_w)))
+            mask_x0 = 0 if w != wi_n else max(0, patch_size - (dst_x1 - dst_x0))
+            mask_x1 = mask_x0 + (dst_x1 - dst_x0)
+            if dst_y1 <= dst_y0 or dst_x1 <= dst_x0:
+                continue
+            patch = extract_patch_with_pad(thumb_rgb, src_y0, src_x0, patch_size, np_mod)
             x = preprocess_patch(patch, preprocessing_fn, np_mod)
             x_tensor = torch_mod.from_numpy(x).unsqueeze(0).to(device)
             mask = predict_mask(model, x_tensor, torch_mod, device).astype(np_mod.uint8)
-            del x_tensor
-            if w == wi_n and overhang_w > 0:
-                mask = mask[:, patch_size - overhang_w:patch_size]
-            row.append(mask)
-        row_img = np_mod.concatenate(row, axis=1)
-        if h == he_n and overhang_h > 0:
-            row_img = row_img[patch_size - overhang_h:patch_size, :]
-        rows.append(row_img)
-    tissue_mask = np_mod.concatenate(rows, axis=0)
-    tissue_mask = tissue_mask[:height, :width]
+            tissue_mask[dst_y0:dst_y1, dst_x0:dst_x1] = mask[mask_y0:mask_y1, mask_x0:mask_x1]
+            del patch, x, x_tensor, mask
     pred_tissue_fraction = float((tissue_mask == 0).astype(np_mod.float32).mean())
     fallback_mask = heuristic_tissue_mask(thumb_rgb, mods["cv2"], np_mod)
     fallback_tissue_fraction = float((fallback_mask == 0).astype(np_mod.float32).mean())
@@ -1198,6 +1280,9 @@ def main() -> int:
         Image.fromarray(qc_color_preview).save(outdir / f"{args.sample_id}_grandqc_qc_mask_color.png")
         Image.fromarray(overlay).save(outdir / f"{args.sample_id}_grandqc_overlay.jpg", quality=85)
         Image.fromarray(artifact_overlay).save(outdir / f"{args.sample_id}_grandqc_artifact_overlay.jpg", quality=90)
+        del background_for_overlay, qc_mask_preview, qc_color_preview, overlay, artifact_preview, artifact_color_preview, artifact_overlay
+        import gc
+        gc.collect()
         print("[INFO] GrandQC writing TIFF masks", flush=True)
         save_mask_tiff(outdir / f"{args.sample_id}_grandqc_tissue_detection_mask.tif", tissue_binary, tifffile_mod)
         save_mask_tiff(outdir / f"{args.sample_id}_grandqc_artifact_mask.tif", artifact_binary, tifffile_mod)

@@ -1,6 +1,6 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs StarDist segmentation, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and generates final tissue-cluster GeoJSON outputs.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs GrandQC artifact QC, StarDist segmentation, optional tissue microarray (TMA) spot detection with cell-to-spot assignment, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and final tissue-cluster GeoJSON export.
 
 Main command:
 
@@ -131,10 +131,14 @@ Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted c
 
 ## Input ROI mask
 
-When an input ROI GeoJSON is present, the pipeline writes a crop-aligned mask to `04_roi_mask/<sample>/` using the same cropped ROI coordinates generated for StarDist. The mask preserves distinct annotation classes from the input GeoJSON whenever those labels are present in properties such as `classification.name`, and it also writes:
+When an input ROI GeoJSON is present, the pipeline writes a crop-aligned mask to `06_roi/<sample>/` using the same cropped ROI coordinates generated for StarDist. The mask preserves distinct annotation classes from the input GeoJSON whenever those labels are present in properties such as `classification.name`, and it also writes:
 
 - a colored preview overlay PNG
 - a JSON value-to-label map recording the class IDs used in the rasterized mask
+
+## TMA Detection
+
+After StarDist, the optional `04_TMA` step detects whether the crop behaves like a tissue microarray by segmenting compact separated tissue cores on a thumbnail and checking spot count, spot-size consistency, and grid-like layout. When a TMA is detected it writes `04_TMA/<sample>/tma_<sample>/<sample>_tma_spots.geojson`; in all cases it writes `04_TMA/<sample>/tma_<sample>/<sample>_objects_tma_assigned.csv`, preserving the StarDist object rows and appending `tma_spot_*` columns.
 
 ## GigaTIME marker quantification
 
@@ -145,12 +149,12 @@ GigaTIME is enabled by default, so the pipeline also quantifies the crop-aligned
 
 Outputs are written per sample to:
 
-- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_quantification.csv`
-- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_mean_intensity.csv`
-- `06_marker_quantification/<sample>/<sample>_nuclei_gigatime_intensity_stats.csv`
-- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_quantification.csv`
-- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_mean_intensity.csv`
-- `06_marker_quantification/<sample>/<sample>_cyto_gigatime_intensity_stats.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_quantification.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_mean_intensity.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_intensity_stats.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_cyto_gigatime_quantification.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_cyto_gigatime_mean_intensity.csv`
+- `05_gigatime/<sample>/quantification_<sample>/<sample>_cyto_gigatime_intensity_stats.csv`
 
 The new `*_gigatime_quantification.csv` file is a wide per-object table in the same spirit as mcMicro-style single-cell quantification outputs: one row per label with area, centroid, bounding box, and per-marker mean/sum/max columns. The mean-intensity CSV remains convenient for lightweight downstream modeling, while the stats CSV preserves the explicit summary fields.
 
@@ -163,11 +167,11 @@ After KODAMA, CellPhenotyper now produces two clustering variants for every samp
 
 Downstream stages run independently for both variants:
 
-- `13_clustering`
-- `15_cluster_mask`
-- `16_grown_tissue`
-- `17_medsam_refined_tissue`
-- `18_cluster_geojson`
+- `11_clustering`
+- `12_cluster_mask`
+- `13_grown_tissue`
+- `14_medsam_refine_tissue`
+- `15_cluster_geojson`
 
 Variant-specific filenames are written inside the per-sample folders, for example:
 
@@ -178,12 +182,14 @@ Variant-specific filenames are written inside the per-sample folders, for exampl
 - `<sample>_standard_grown_mask_smooth_class.geojson`
 - `<sample>_fine_grown_mask_smooth_class.geojson`
 
-Step `17_medsam_refined_tissue` also copies the corresponding KODAMA membership PNG for each variant into the MedSAM output folder as:
+Step `14_medsam_refine_tissue` also copies the corresponding KODAMA membership PNG for each variant into the MedSAM output folder as:
 
 - `<sample>_standard_medsam_kodama_membership.png`
 - `<sample>_fine_medsam_kodama_membership.png`
 
 That keeps the refined tissue result side by side with the clustering visualization that produced it.
+
+UNI-2 embeddings are generated after StarDist. The default configuration uses the optimized paired `tile` + `inner_square` pass: one Python process loads UNI2-h once, prepares StarDist-centered tile crops and fixed centered 90-pixel inner-square crops in memory, and encodes both image streams in the same batched model session. The `inner_square` output is not derived from the cytoplasm mask; it is the centered square defined by `uni2_inner_square_fixed_px` in the 224 x 224 UNI2 input space. Set `--uni2_fuse_tile_inner_square false` to force the slower two-pass comparison mode. The source crop is calibrated to `uni2_target_mpp` before the 224 x 224 UNI2 input transform. Per-cell PNG tile export is disabled by default because KODAMA consumes the embedding CSVs; enable `--uni2_save_tiles true` only when tile-level QC/debug crops are needed. MedSAM refinement is applied per cluster label using overlapping cluster-border tiles, so a tile can contain only one cluster while still preserving cluster-specific border refinement.
 
 ## Linux quick run
 
@@ -369,7 +375,7 @@ nextflow run main.nf \
 
 Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v2.3` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
 
-Rerun only `10_cluster_mask` and `11_grown_tissue`:
+Rerun only `cluster_mask` and `grow_tissue`:
 
 ```bash
 nextflow run main.nf \
@@ -427,18 +433,18 @@ tail -n 50 -f .nextflow.log
 
 Final output:
 
-- `results_example/12_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
-- `results_example/12_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
-- `results_example/02_gigatime/ROI_A/gigatime_probs.ome.tif`
-- `results_example/02_gigatime/ROI_B/gigatime_probs.ome.tif`
-- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
-- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask.tif` if `ROI_B.geojson` was supplied
-- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_preview.png` if `ROI_A.geojson` was supplied
-- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_preview.png` if `ROI_B.geojson` was supplied
-- `results_example/04_roi_mask/ROI_A/ROI_A_input_roi_mask_labels.json` if `ROI_A.geojson` was supplied
-- `results_example/04_roi_mask/ROI_B/ROI_B_input_roi_mask_labels.json` if `ROI_B.geojson` was supplied
-- `results_example/06_marker_quantification/ROI_A/ROI_A_nuclei_gigatime_quantification.csv`
-- `results_example/06_marker_quantification/ROI_A/ROI_A_cyto_gigatime_quantification.csv`
+- `results_example/15_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
+- `results_example/05_gigatime/ROI_A/gigatime_ROI_A/gigatime_probs.ome.tif`
+- `results_example/05_gigatime/ROI_B/gigatime_ROI_B/gigatime_probs.ome.tif`
+- `results_example/06_roi/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
+- `results_example/06_roi/ROI_B/ROI_B_input_roi_mask.tif` if `ROI_B.geojson` was supplied
+- `results_example/06_roi/ROI_A/ROI_A_input_roi_mask_preview.png` if `ROI_A.geojson` was supplied
+- `results_example/06_roi/ROI_B/ROI_B_input_roi_mask_preview.png` if `ROI_B.geojson` was supplied
+- `results_example/06_roi/ROI_A/ROI_A_input_roi_mask_labels.json` if `ROI_A.geojson` was supplied
+- `results_example/06_roi/ROI_B/ROI_B_input_roi_mask_labels.json` if `ROI_B.geojson` was supplied
+- `results_example/05_gigatime/ROI_A/quantification_ROI_A/ROI_A_nuclei_gigatime_quantification.csv`
+- `results_example/05_gigatime/ROI_A/quantification_ROI_A/ROI_A_cyto_gigatime_quantification.csv`
 
 Execution report:
 

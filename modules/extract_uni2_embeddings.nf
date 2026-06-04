@@ -4,7 +4,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     label 'gpu_capable'
     maxForks 1
 
-    publishDir "${params.outdir_base}/10_embeddings/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/09_embeddings/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus {
       def requested = Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int))
@@ -13,6 +13,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
       if (compute != 'gpu' && maxMemGb <= 3) return 1
       return requested
     }
+    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
     time { params.uni2_time as String }
 
     input:
@@ -124,6 +125,8 @@ PY
         ${force_full_flag} \\
         --grid "${params.uni2_grid}" \\
         --tile-size ${params.uni2_tile_size} \\
+        --target-mpp ${params.uni2_target_mpp} \\
+        --default-source-mpp ${params.uni2_default_source_mpp} \\
         ${zero_outside_flag} \\
         ${save_tiles_flag} \\
         --tiles-root "${tiles_root_path}" \\

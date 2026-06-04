@@ -3,7 +3,8 @@ import argparse
 import os
 import numpy as np
 
-from tifffile import imread
+import tifffile
+import zarr
 from PIL import Image
 
 from skimage.color import rgb2lab
@@ -15,6 +16,110 @@ from skimage.morphology import (
     disk,
 )
 from skimage.measure import label, regionprops
+
+
+def _normalize_axes(axes: str | None, ndim: int) -> str:
+    axes = (axes or "").replace("S", "C")
+    if axes and len(axes) == ndim:
+        return axes
+    if ndim == 2:
+        return "YX"
+    if ndim == 3:
+        return "YXC"
+    return axes or "".join(str(i) for i in range(ndim))
+
+
+def _to_yxc(arr: np.ndarray, axes: str) -> np.ndarray:
+    axes = _normalize_axes(axes, arr.ndim)
+    if arr.ndim == 2:
+        return arr
+    if "Y" in axes and "X" in axes:
+        ydim = axes.index("Y")
+        xdim = axes.index("X")
+        cdim = axes.index("C") if "C" in axes else None
+        if cdim is None:
+            arr = np.moveaxis(arr, [ydim, xdim], [0, 1])
+            return arr
+        return np.moveaxis(arr, [ydim, xdim, cdim], [0, 1, 2])
+    if arr.shape[-1] in (3, 4):
+        return arr
+    if arr.shape[0] in (3, 4):
+        return np.moveaxis(arr, 0, -1)
+    return arr
+
+
+def read_image_lazy_downsample(path: str, factor: int, tile_out: int = 512) -> np.ndarray:
+    """
+    Read a downsampled RGB/grayscale working image without loading the full WSI.
+
+    ``tifffile.imread()[::factor]`` still materializes the full input first. For
+    huge StarDist crops this can be tens of GiB, so we read bounded contiguous
+    windows and downsample each window locally.
+    """
+    factor = int(max(1, factor))
+    if factor <= 1:
+        image = tifffile.imread(path)
+        if isinstance(image, list):
+            image = image[0]
+        return image
+
+    with tifffile.TiffFile(path) as tf:
+        series = tf.series[0]
+        axes = _normalize_axes(getattr(series, "axes", None), len(series.shape))
+        arr = zarr.open(series.aszarr(), mode="r")
+
+        if "Y" in axes and "X" in axes:
+            h = int(series.shape[axes.index("Y")])
+            w = int(series.shape[axes.index("X")])
+            cdim = axes.index("C") if "C" in axes else None
+            channels = int(series.shape[cdim]) if cdim is not None else 0
+        else:
+            yxc_shape = _to_yxc(np.asarray(arr[tuple(slice(0, min(1, s)) for s in arr.shape)]), axes).shape
+            h, w = int(series.shape[0]), int(series.shape[1])
+            channels = yxc_shape[2] if len(yxc_shape) == 3 else 0
+
+        out_h = int(np.ceil(h / float(factor)))
+        out_w = int(np.ceil(w / float(factor)))
+        if channels:
+            out = np.zeros((out_h, out_w, min(channels, 4)), dtype=np.dtype(arr.dtype))
+        else:
+            out = np.zeros((out_h, out_w), dtype=np.dtype(arr.dtype))
+
+        tile_out = int(max(64, tile_out))
+        for oy0 in range(0, out_h, tile_out):
+            oy1 = min(out_h, oy0 + tile_out)
+            sy0 = oy0 * factor
+            sy1 = min(h, (oy1 - 1) * factor + 1)
+            for ox0 in range(0, out_w, tile_out):
+                ox1 = min(out_w, ox0 + tile_out)
+                sx0 = ox0 * factor
+                sx1 = min(w, (ox1 - 1) * factor + 1)
+
+                slicer = [slice(None)] * len(series.shape)
+                if "Y" in axes and "X" in axes:
+                    slicer[axes.index("Y")] = slice(sy0, sy1)
+                    slicer[axes.index("X")] = slice(sx0, sx1)
+                else:
+                    slicer[0] = slice(sy0, sy1)
+                    slicer[1] = slice(sx0, sx1)
+
+                patch = _to_yxc(np.asarray(arr[tuple(slicer)]), axes)
+                if patch.ndim == 2:
+                    patch_ds = patch[::factor, ::factor]
+                    out[oy0:oy0 + patch_ds.shape[0], ox0:ox0 + patch_ds.shape[1]] = patch_ds
+                else:
+                    patch_ds = patch[::factor, ::factor, ...]
+                    out[oy0:oy0 + patch_ds.shape[0], ox0:ox0 + patch_ds.shape[1], :patch_ds.shape[2]] = patch_ds
+        return out
+
+
+def read_image_shape(path: str) -> tuple[int, int]:
+    with tifffile.TiffFile(path) as tf:
+        series = tf.series[0]
+        axes = _normalize_axes(getattr(series, "axes", None), len(series.shape))
+        if "Y" in axes and "X" in axes:
+            return int(series.shape[axes.index("Y")]), int(series.shape[axes.index("X")])
+        return int(series.shape[0]), int(series.shape[1])
 
 
 def scaled_cleanup_params(close_radius: int, min_obj_area: int, hole_area: int, scale: int):
@@ -169,15 +274,13 @@ def main():
 
     args = ap.parse_args()
 
-    image = imread(args.image)  # supports multi-page too; for normal TIFF returns array
-    if isinstance(image, list):
-        image = image[0]
-
     work_downsample = max(1, int(args.work_downsample))
+    h0, w0 = read_image_shape(args.image)
     if args.auto_no_downsample_max_side > 0:
-        h, w = image.shape[:2]
-        if max(h, w) <= int(args.auto_no_downsample_max_side):
+        if max(h0, w0) <= int(args.auto_no_downsample_max_side):
             work_downsample = 1
+
+    image = read_image_lazy_downsample(args.image, work_downsample)
 
     close_radius, min_obj_area, hole_area = scaled_cleanup_params(
         args.close_radius,
@@ -185,12 +288,6 @@ def main():
         args.hole_area,
         work_downsample,
     )
-
-    if work_downsample > 1:
-        if image.ndim == 2:
-            image = image[::work_downsample, ::work_downsample].copy()
-        else:
-            image = image[::work_downsample, ::work_downsample, ...].copy()
 
     mask = build_tissue_mask(
         image,

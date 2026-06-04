@@ -2,7 +2,7 @@ process GROW_TO_TISSUE {
     tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
 
-    publishDir "${params.outdir_base}/16_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
+    publishDir "${params.outdir_base}/13_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.grow_cpus as int)) }
     memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.grow_memory_gb as int))} GB" }

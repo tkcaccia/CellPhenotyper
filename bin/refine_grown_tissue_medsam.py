@@ -180,6 +180,8 @@ def main() -> None:
     ap.add_argument("--medsam-outer-dilation-radius", type=int, default=44)
     ap.add_argument("--medsam-min-object-size", type=int, default=5000)
     ap.add_argument("--medsam-smooth-radius", type=int, default=5)
+    ap.add_argument("--medsam-cluster-tile-size", type=int, default=4096)
+    ap.add_argument("--medsam-cluster-tile-overlap", type=int, default=512)
     ap.add_argument("--medsam-force-core-preservation", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=True)
     args = ap.parse_args()
@@ -217,6 +219,8 @@ def main() -> None:
         smooth_radius=int(args.medsam_smooth_radius),
         force_core_preservation=bool(args.medsam_force_core_preservation),
         save_debug=bool(args.medsam_save_debug),
+        cluster_tile_size=int(args.medsam_cluster_tile_size),
+        cluster_tile_overlap=int(args.medsam_cluster_tile_overlap),
     )
 
     try:
@@ -249,7 +253,8 @@ def main() -> None:
         (debug_dir / "meta.json").write_text(json.dumps(meta, indent=2))
         for name, arr in artifacts.items():
             np.save(debug_dir / f"{name}.npy", np.asarray(arr))
-        np.save(debug_dir / "probability_map.npy", np.asarray(probability_map, dtype=np.float32))
+        if probability_map is not None:
+            np.save(debug_dir / "probability_map.npy", np.asarray(probability_map, dtype=np.float32))
 
     summary = {
         "sample_id": args.sample_id,
@@ -262,16 +267,17 @@ def main() -> None:
         "protected_core_pixels": int(protected_core.sum()),
         "editable_band_pixels": int(editable_band.sum()),
     }
-    (outdir / f"{prefix}_medsam_summary.json").write_text(json.dumps(summary, indent=2))
-
     diag_step = preview_step_for_shape(seed_labels.shape, max_side=2048)
     summary["diagnostic_preview_step"] = int(diag_step)
+    (outdir / f"{prefix}_medsam_summary.json").write_text(json.dumps(summary, indent=2))
+
     image_preview = preview_subsample(image_rgb, diag_step)
     seed_preview = preview_subsample(seed_labels, diag_step)
     raw_preview = preview_subsample(raw_labels, diag_step)
     refined_preview = preview_subsample(refined_labels, diag_step)
     protected_preview = preview_subsample(protected_core, diag_step)
     editable_preview = preview_subsample(editable_band, diag_step)
+    prob_preview = preview_subsample(probability_map, diag_step) if probability_map is not None else None
 
     raw_vs_final_change = to_uint8_rgb(image_preview)
     raw_only = (raw_preview > 0) & ~(refined_preview > 0)
@@ -286,8 +292,7 @@ def main() -> None:
     save_png(outdir / f"{prefix}_medsam_editable_band.png", overlay_mask(image_preview, editable_preview, (180, 0, 255)))
     save_png(outdir / f"{prefix}_medsam_raw_labels.png", overlay_labels(image_preview, raw_preview))
     save_png(outdir / f"{prefix}_medsam_refined_labels.png", overlay_labels(image_preview, refined_preview))
-    if probability_map is not None:
-        prob_preview = preview_subsample(probability_map, diag_step)
+    if prob_preview is not None:
         save_png(outdir / f"{prefix}_medsam_probability_heatmap.png", heatmap(prob_preview))
     save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_preview, raw_preview > 0, refined_preview > 0))
 

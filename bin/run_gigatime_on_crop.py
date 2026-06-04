@@ -199,9 +199,17 @@ def _read_mpp_from_tiff(path: str) -> float | None:
             except Exception:
                 desc = None
             if isinstance(desc, str):
-                m = re.search(r"MPP\s*=\s*([0-9]+(?:\.[0-9]+)?)", desc)
-                if m:
-                    return float(m.group(1))
+                vals = []
+                for pattern in (
+                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
+                    r'PhysicalSizeY="([0-9]+(?:\.[0-9]+)?)"',
+                    r"MPP\s*=\s*([0-9]+(?:\.[0-9]+)?)",
+                ):
+                    m = re.search(pattern, desc)
+                    if m:
+                        vals.append(float(m.group(1)))
+                if vals:
+                    return float(sum(vals) / len(vals))
 
             unit = None
             try:
@@ -233,51 +241,88 @@ def _read_mpp_from_tiff(path: str) -> float | None:
     return None
 
 
-def infer_source_mpp(crop_path: str) -> float | None:
-    direct = _read_mpp_from_tiff(crop_path)
-    if direct:
-        return direct
-
-    shift_path = Path(crop_path).with_name("shift.json")
-    if not shift_path.exists():
-        return None
-    shift_path = shift_path.resolve()
-
+def _read_mpp_from_shift(shift_path: Path) -> float | None:
     try:
         shift = json.loads(shift_path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    for key in ("source_mpp", "mpp", "microns_per_pixel", "microns_per_pixel_x"):
+        value = _safe_float(shift.get(key))
+        if value and value > 0:
+            return float(value)
+    return None
 
-    input_image = shift.get("input_image")
-    if not input_image:
-        return None
 
-    crop_file = Path(crop_path).resolve()
-    shift_dir = shift_path.parent
-    input_path = Path(str(input_image))
+def infer_source_mpp(crop_path: str, shift_json: str | None = None) -> float | None:
+    crop_file = Path(crop_path)
+    crop_candidates = [crop_file]
+    try:
+        resolved_crop = crop_file.resolve()
+        if resolved_crop != crop_file:
+            crop_candidates.append(resolved_crop)
+    except Exception:
+        resolved_crop = crop_file
 
-    candidates: list[Path] = []
-    if input_path.is_absolute():
-        candidates.append(input_path)
-    else:
-        candidates.extend([
-            shift_dir / input_path,
-            shift_dir.parent / input_path,
-            crop_file.parent / input_path,
-            crop_file.parent.parent / input_path,
-        ])
+    for cand in crop_candidates:
+        direct = _read_mpp_from_tiff(str(cand))
+        if direct:
+            print(f"[INFO] GigaTIME source MPP recovered from crop TIFF {cand}", flush=True)
+            return direct
 
-    seen: set[str] = set()
-    for cand in candidates:
-        key = str(cand)
-        if key in seen:
+    shift_candidates: list[Path] = []
+    if shift_json and str(shift_json).strip():
+        shift_candidates.append(Path(shift_json))
+    for cand in crop_candidates:
+        shift_candidates.append(cand.with_name("shift.json"))
+
+    seen_shift: set[Path] = set()
+    for raw_shift in shift_candidates:
+        try:
+            shift_path = raw_shift.resolve()
+        except Exception:
+            shift_path = raw_shift
+        if shift_path in seen_shift or not shift_path.exists():
             continue
-        seen.add(key)
-        if not cand.exists():
+        seen_shift.add(shift_path)
+
+        shifted_mpp = _read_mpp_from_shift(shift_path)
+        if shifted_mpp:
+            print(f"[INFO] GigaTIME source MPP recovered from shift metadata {shift_path}", flush=True)
+            return shifted_mpp
+
+        try:
+            shift = json.loads(shift_path.read_text(encoding="utf-8"))
+        except Exception:
             continue
-        resolved = _read_mpp_from_tiff(str(cand))
-        if resolved:
-            return resolved
+        input_image = shift.get("input_image")
+        if not input_image:
+            continue
+
+        input_path = Path(str(input_image))
+        candidates: list[Path] = []
+        if input_path.is_absolute():
+            candidates.append(input_path)
+        else:
+            for parent in [shift_path.parent, shift_path.parent.parent, *resolved_crop.parents]:
+                candidates.append(parent / input_path)
+                try:
+                    candidates.extend(parent.glob(f"input*/{input_path.name}"))
+                except Exception:
+                    pass
+
+        seen_images: set[Path] = set()
+        for cand in candidates:
+            try:
+                resolved = cand.resolve()
+            except Exception:
+                resolved = cand
+            if resolved in seen_images or not resolved.exists():
+                continue
+            seen_images.add(resolved)
+            mpp = _read_mpp_from_tiff(str(resolved))
+            if mpp:
+                print(f"[INFO] GigaTIME source MPP recovered from original image {resolved}", flush=True)
+                return mpp
 
     return None
 
@@ -339,9 +384,16 @@ def choose_downsample_factor(
     reason = "native"
 
     if source_mpp and source_mpp > 0 and target_mpp > 0:
-        factor = max(1, int(math.ceil(float(target_mpp) / float(source_mpp))))
+        requested_factor = float(target_mpp) / float(source_mpp)
+        factor = max(1, int(math.floor(requested_factor + 0.5)))
         reason = "target_mpp"
     else:
+        if strict_target_mpp and target_mpp > 0:
+            raise ValueError(
+                "GigaTIME --strict-target-mpp was requested, but source MPP could not be resolved. "
+                "Provide TIFF physical pixel-size metadata or stage/pass the StarDist shift.json so the "
+                "original calibrated image can be found."
+            )
         mpix = (orig_h * orig_w) / 1_000_000.0
         if enable_max_side_fallback and (mpix > float(auto_threshold_mpix) or max(orig_h, orig_w) > int(max_side)):
             factor = max(1, int(math.ceil(max(orig_h, orig_w) / float(max_side))))
@@ -380,6 +432,9 @@ def choose_downsample_factor(
     if source_mpp and source_mpp > 0:
         meta["source_mpp"] = float(source_mpp)
         meta["effective_mpp"] = float(source_mpp * factor)
+        if target_mpp > 0:
+            meta["requested_downsample_factor"] = float(target_mpp) / float(source_mpp)
+            meta["mpp_error_fraction"] = float((source_mpp * factor - target_mpp) / target_mpp)
     return factor, meta
 
 
@@ -437,6 +492,7 @@ def inspect_crop_image(
     num_output_channels: int,
     bytes_per_sample: int,
     strict_target_mpp: bool,
+    shift_json: str | None = None,
     enable_max_side_fallback: bool = True,
 ) -> dict:
     with tifffile.TiffFile(path) as tf:
@@ -456,7 +512,7 @@ def inspect_crop_image(
     else:
         raise ValueError(f"Unsupported crop image shape: {page_shape}")
 
-    source_mpp = infer_source_mpp(path)
+    source_mpp = infer_source_mpp(path, shift_json=shift_json)
     factor, selection = choose_downsample_factor(
         orig_h=orig_h,
         orig_w=orig_w,
@@ -1950,6 +2006,8 @@ def write_outputs(
 def parse_args():
     ap = argparse.ArgumentParser(description="Run GigaTIME virtual mIF inference on a crop image.")
     ap.add_argument("--image", required=True, help="Crop image TIFF path")
+    ap.add_argument("--shift-json", default="",
+                    help="Optional StarDist shift.json used to recover the calibrated source image MPP.")
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--repo-id", default="prov-gigatime/GigaTIME", help="Hugging Face repo ID")
     ap.add_argument("--page", type=int, default=0, help="TIFF page to read")
@@ -2051,6 +2109,7 @@ def main():
         num_output_channels=(len(output_channel_names) if args.output_format != "none" else len(jpg_channel_names)),
         bytes_per_sample=output_bytes_per_sample,
         strict_target_mpp=bool(args.strict_target_mpp),
+        shift_json=str(args.shift_json or ""),
         enable_max_side_fallback=not disable_max_side_fallback,
     )
     image_meta["channels"] = list(CHANNEL_NAMES)
