@@ -819,66 +819,95 @@ class TileQuantifier:
 
     def write_outputs(self, outdir: Path, sample_id: str) -> dict:
         outdir.mkdir(parents=True, exist_ok=True)
-        quant_rows: list[dict] = []
-        mean_rows: list[dict] = []
-        stats_rows: list[dict] = []
 
-        labels_sorted = []
+        labels_sorted = np.asarray([], dtype=np.int64)
         if self.enabled:
             labels_sorted = np.flatnonzero(self.counts > 0)
             labels_sorted = labels_sorted[labels_sorted > 0]
-
-        for label_id in labels_sorted.tolist():
-            base = {
-                "label_id": int(label_id),
-                "mask_name": self.mask_name,
-                "area_px": int(self.counts[label_id]),
-                "centroid_y_px": float(self.sum_y[label_id] / self.counts[label_id]),
-                "centroid_x_px": float(self.sum_x[label_id] / self.counts[label_id]),
-                "bbox_ymin_px": int(self.min_y[label_id]),
-                "bbox_xmin_px": int(self.min_x[label_id]),
-                "bbox_ymax_px": int(self.max_y[label_id] + 1),
-                "bbox_xmax_px": int(self.max_x[label_id] + 1),
-            }
-            quant_row = dict(base)
-            mean_row = dict(base)
-            stats_row = dict(base)
-            for ch_idx, ch_name in enumerate(self.channel_names):
-                safe_name = ch_name.strip() or "unnamed"
-                mean_val = float(self.sums_by_channel[ch_idx, label_id] / self.counts[label_id])
-                sum_val = float(self.sums_by_channel[ch_idx, label_id])
-                max_val = float(self.max_by_channel[ch_idx, label_id])
-                mean_row[safe_name] = mean_val
-                stats_row[f"{safe_name}__mean"] = mean_val
-                stats_row[f"{safe_name}__sum"] = sum_val
-                stats_row[f"{safe_name}__max"] = max_val
-                quant_row[f"{safe_name}__mean"] = mean_val
-                quant_row[f"{safe_name}__sum"] = sum_val
-                quant_row[f"{safe_name}__max"] = max_val
-            quant_rows.append(quant_row)
-            mean_rows.append(mean_row)
-            stats_rows.append(stats_row)
 
         quant_csv = outdir / f"{sample_id}_{self.mask_name}_gigatime_quantification.csv"
         mean_csv = outdir / f"{sample_id}_{self.mask_name}_gigatime_mean_intensity.csv"
         stats_csv = outdir / f"{sample_id}_{self.mask_name}_gigatime_intensity_stats.csv"
         summary_json = outdir / f"{sample_id}_{self.mask_name}_gigatime_intensity_summary.json"
-        write_csv(quant_csv, quant_rows)
-        write_csv(mean_csv, mean_rows)
-        write_csv(stats_csv, stats_rows)
+
+        base_fields = [
+            "label_id",
+            "mask_name",
+            "area_px",
+            "centroid_y_px",
+            "centroid_x_px",
+            "bbox_ymin_px",
+            "bbox_xmin_px",
+            "bbox_ymax_px",
+            "bbox_xmax_px",
+        ]
+        mean_fields = base_fields + [ch.strip() or "unnamed" for ch in self.channel_names]
+        stats_fields = list(base_fields)
+        quant_fields = list(base_fields)
+        for ch_name in self.channel_names:
+            safe_name = ch_name.strip() or "unnamed"
+            stats_fields.extend([f"{safe_name}__mean", f"{safe_name}__sum", f"{safe_name}__max"])
+            quant_fields.extend([f"{safe_name}__mean", f"{safe_name}__sum", f"{safe_name}__max"])
+
+        object_count = int(labels_sorted.size)
+        with quant_csv.open("w", newline="", encoding="utf-8") as quant_fh, \
+                mean_csv.open("w", newline="", encoding="utf-8") as mean_fh, \
+                stats_csv.open("w", newline="", encoding="utf-8") as stats_fh:
+            quant_writer = csv.DictWriter(quant_fh, fieldnames=quant_fields)
+            mean_writer = csv.DictWriter(mean_fh, fieldnames=mean_fields)
+            stats_writer = csv.DictWriter(stats_fh, fieldnames=stats_fields)
+            quant_writer.writeheader()
+            mean_writer.writeheader()
+            stats_writer.writeheader()
+
+            for label_id_np in labels_sorted:
+                label_id = int(label_id_np)
+                count = int(self.counts[label_id])
+                if count <= 0:
+                    continue
+                base = {
+                    "label_id": label_id,
+                    "mask_name": self.mask_name,
+                    "area_px": count,
+                    "centroid_y_px": float(self.sum_y[label_id] / count),
+                    "centroid_x_px": float(self.sum_x[label_id] / count),
+                    "bbox_ymin_px": int(self.min_y[label_id]),
+                    "bbox_xmin_px": int(self.min_x[label_id]),
+                    "bbox_ymax_px": int(self.max_y[label_id] + 1),
+                    "bbox_xmax_px": int(self.max_x[label_id] + 1),
+                }
+                quant_row = dict(base)
+                mean_row = dict(base)
+                stats_row = dict(base)
+                for ch_idx, ch_name in enumerate(self.channel_names):
+                    safe_name = ch_name.strip() or "unnamed"
+                    mean_val = float(self.sums_by_channel[ch_idx, label_id] / count)
+                    sum_val = float(self.sums_by_channel[ch_idx, label_id])
+                    max_val = float(self.max_by_channel[ch_idx, label_id])
+                    mean_row[safe_name] = mean_val
+                    stats_row[f"{safe_name}__mean"] = mean_val
+                    stats_row[f"{safe_name}__sum"] = sum_val
+                    stats_row[f"{safe_name}__max"] = max_val
+                    quant_row[f"{safe_name}__mean"] = mean_val
+                    quant_row[f"{safe_name}__sum"] = sum_val
+                    quant_row[f"{safe_name}__max"] = max_val
+                quant_writer.writerow(quant_row)
+                mean_writer.writerow(mean_row)
+                stats_writer.writerow(stats_row)
+
         summary = {
             "mask_name": self.mask_name,
             "mask": str(Path(self.mask_path).resolve()),
             "mask_shape_yx": [int(self.mask_reader.height), int(self.mask_reader.width)],
             "image_shape_cyx": [len(self.channel_names), int(self.target_shape[0]), int(self.target_shape[1])],
             "channel_names": list(self.channel_names),
-            "objects_quantified": len(quant_rows),
+            "objects_quantified": object_count,
             "quantification_csv": str(quant_csv.resolve()),
         }
         summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return {
             "mask_name": self.mask_name,
-            "objects_quantified": len(quant_rows),
+            "objects_quantified": object_count,
             "quant_csv": str(quant_csv),
             "mean_csv": str(mean_csv),
             "stats_csv": str(stats_csv),
@@ -1276,6 +1305,39 @@ def build_ome_pyramid_metadata(channel_names: list[str], level_shapes: list[tupl
     return metadata
 
 
+def iter_cyx_tiff_tiles_from_level0(
+    level0: np.ndarray,
+    *,
+    out_shape_yx: tuple[int, int],
+    tile_shape: tuple[int, int] | None,
+    downsample: int = 1,
+) -> Iterable[np.ndarray]:
+    """Yield one CYX TIFF tile at a time from the staged level-0 memmap.
+
+    `tifffile` otherwise materializes non-contiguous pyramid views as large
+    contiguous arrays. For WSI-sized GigaTIME outputs that can exceed RAM.
+    """
+    out_h, out_w = (int(out_shape_yx[0]), int(out_shape_yx[1]))
+    mag = max(1, int(downsample))
+    channel_count = int(level0.shape[0])
+    if tile_shape is None:
+        for ch_idx in range(channel_count):
+            yield np.ascontiguousarray(level0[ch_idx, 0:out_h * mag:mag, 0:out_w * mag:mag])
+        return
+
+    tile_h, tile_w = (int(tile_shape[0]), int(tile_shape[1]))
+    for ch_idx in range(channel_count):
+        for y0 in range(0, out_h, tile_h):
+            y1 = min(out_h, y0 + tile_h)
+            src_y0 = y0 * mag
+            src_y1 = y1 * mag
+            for x0 in range(0, out_w, tile_w):
+                x1 = min(out_w, x0 + tile_w)
+                src_x0 = x0 * mag
+                src_x1 = x1 * mag
+                yield np.ascontiguousarray(level0[ch_idx, src_y0:src_y1:mag, src_x0:src_x1:mag])
+
+
 def resolve_device(requested: str) -> torch.device:
     if requested == "cuda":
         if not torch.cuda.is_available():
@@ -1405,6 +1467,13 @@ def blockwise_write_ometiff_outputs(
     jpg_channel_indices: list[int],
     sample_id: str,
     resume_level0_buffer: bool,
+    skip_background_blocks: bool,
+    skip_background_mask_path: str,
+    skip_background_downsample: int,
+    skip_background_min_fraction: float,
+    skip_background_close_radius: int,
+    skip_background_min_obj_area: int,
+    skip_background_hole_area: int,
 ) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     final_h, final_w = (int(v) for v in metadata["inference_shape_yx"])
@@ -1415,6 +1484,14 @@ def blockwise_write_ometiff_outputs(
     total_tiles = int(n_tiles_y * n_tiles_x)
     pyramid_shapes = compute_pyramid_level_shapes(final_h, final_w, tile_size) if pyramid else []
     tmp_level0_path = outdir / "_gigatime_level0.cyx.bin"
+    if skip_background_blocks:
+        print(
+            "[WARN] GigaTIME OME-TIFF background block skipping is disabled for this writer; "
+            "the previous coarse skip-mask path can exceed RAM on WSI inputs. "
+            "The OME-TIFF itself is still written tile-by-tile.",
+            flush=True,
+        )
+        skip_background_blocks = False
 
     level0_tile = choose_tiff_tile_shape(final_h, final_w, tile_size, compression)
     final_tiff_kwargs = {
@@ -1441,6 +1518,40 @@ def blockwise_write_ometiff_outputs(
     if reuse_level0:
         print(f"[INFO] Reusing preserved level-0 buffer: {tmp_level0_path}", flush=True)
     else:
+        skipped_tiles = 0
+        skip_mask_small = None
+        skip_meta = {"enabled": False}
+        if skip_background_blocks:
+            if skip_background_mask_path:
+                print(f"[INFO] GigaTIME loading external background-skip mask from {skip_background_mask_path}", flush=True)
+                skip_mask_small, skip_meta = load_background_skip_mask(
+                    path=skip_background_mask_path,
+                    final_h=final_h,
+                    final_w=final_w,
+                )
+            else:
+                print("[INFO] GigaTIME building coarse background-skip mask", flush=True)
+                skip_mask_small, skip_meta = build_background_skip_mask(
+                    source_path=source_path,
+                    page=page,
+                    factor=factor,
+                    final_h=final_h,
+                    final_w=final_w,
+                    downsample=skip_background_downsample,
+                    close_radius=skip_background_close_radius,
+                    min_obj_area=skip_background_min_obj_area,
+                    hole_area=skip_background_hole_area,
+                )
+            print(
+                "[INFO] GigaTIME background skip mask "
+                f"shape={tuple(skip_meta['mask_shape_yx'])} "
+                f"tissue_fraction={skip_meta['tissue_fraction']:.3f} "
+                f"min_fraction={skip_background_min_fraction:.3f}",
+                flush=True,
+            )
+        metadata["background_skip"] = dict(skip_meta)
+        metadata["background_skip"]["min_fraction"] = float(skip_background_min_fraction)
+
         with LazyCropReader(source_path, page, factor) as reader:
             if reader.final_h != final_h or reader.final_w != final_w:
                 raise ValueError(
@@ -1458,6 +1569,23 @@ def blockwise_write_ometiff_outputs(
             try:
                 done = 0
                 for y0, y1, x0, x1 in iter_output_tiles(final_h, final_w, tile_size):
+                    if done == 0:
+                        print(
+                            f"[INFO] GigaTIME first tile region y=({y0},{y1}) x=({x0},{x1})",
+                            flush=True,
+                        )
+                    if skip_mask_small is not None:
+                        frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
+                        if frac < float(skip_background_min_fraction):
+                            skipped_tiles += 1
+                            done += 1
+                            if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
+                                print(
+                                    f"[INFO] GigaTIME blockwise tile {done}/{total_tiles} "
+                                    f"(skipped blank region frac={frac:.3f})",
+                                    flush=True,
+                                )
+                            continue
                     ys = contributing_patch_starts(starts_y, y0, y1, patch_size)
                     xs = contributing_patch_starts(starts_x, x0, x1, patch_size)
                     ry0 = ys[0]
@@ -1497,6 +1625,20 @@ def blockwise_write_ometiff_outputs(
                 level0.flush()
             finally:
                 del level0
+        metadata["background_skip"]["skipped_tiles"] = int(skipped_tiles)
+        metadata["background_skip"]["processed_tiles"] = int(total_tiles - skipped_tiles)
+        metadata["background_skip"]["total_tiles"] = int(total_tiles)
+
+        # Persist integrated marker quantification before the potentially long
+        # TIFF pyramid write, so a writer failure does not discard all-marker
+        # single-cell summaries already computed during inference.
+        finalize_aux_outputs(
+            sample_id=sample_id,
+            quantifiers=quantifiers,
+            quant_dir=quant_dir,
+            jpg_exporter=jpg_exporter,
+            metadata=metadata,
+        )
 
     final_path = outdir / "gigatime_probs.ome.tif"
     write_succeeded = False
@@ -1508,18 +1650,30 @@ def blockwise_write_ometiff_outputs(
             shape=(channel_count, final_h, final_w),
         )
         try:
+            base_res = float(10_000.0 / float(metadata["effective_mpp"])) if metadata.get("effective_mpp") else None
             with tifffile.TiffWriter(final_path, bigtiff=True, ome=True) as tif:
-                tif.write(level0, subifds=len(pyramid_shapes), **final_tiff_kwargs)
-                if metadata.get("effective_mpp"):
-                    base_res = float(10_000.0 / float(metadata["effective_mpp"]))
-                else:
-                    base_res = None
-                for level_idx, _ in enumerate(pyramid_shapes, start=1):
+                print(
+                    f"[INFO] GigaTIME writing OME-TIFF level 0 shape={(channel_count, final_h, final_w)} "
+                    f"tile={level0_tile}",
+                    flush=True,
+                )
+                tif.write(
+                    iter_cyx_tiff_tiles_from_level0(
+                        level0,
+                        out_shape_yx=(final_h, final_w),
+                        tile_shape=level0_tile,
+                        downsample=1,
+                    ),
+                    shape=(channel_count, final_h, final_w),
+                    dtype=output_dtype_np,
+                    subifds=len(pyramid_shapes),
+                    **final_tiff_kwargs,
+                )
+                for level_idx, level_shape in enumerate(pyramid_shapes, start=1):
                     mag = 2 ** level_idx
-                    level = level0[:, ::mag, ::mag]
                     level_kwargs = dict(final_tiff_kwargs)
                     level_kwargs["metadata"] = None
-                    level_tile = choose_tiff_tile_shape(level.shape[1], level.shape[2], tile_size, compression)
+                    level_tile = choose_tiff_tile_shape(level_shape[0], level_shape[1], tile_size, compression)
                     if level_tile is None:
                         level_kwargs.pop("tile", None)
                     else:
@@ -1527,7 +1681,24 @@ def blockwise_write_ometiff_outputs(
                     if base_res is not None:
                         level_kwargs["resolution"] = (base_res / mag, base_res / mag)
                         level_kwargs["resolutionunit"] = "CENTIMETER"
-                    tif.write(level, subfiletype=1, **level_kwargs)
+                    print(
+                        f"[INFO] GigaTIME writing OME-TIFF pyramid level {level_idx} "
+                        f"shape={(channel_count, int(level_shape[0]), int(level_shape[1]))} "
+                        f"tile={level_tile}",
+                        flush=True,
+                    )
+                    tif.write(
+                        iter_cyx_tiff_tiles_from_level0(
+                            level0,
+                            out_shape_yx=(int(level_shape[0]), int(level_shape[1])),
+                            tile_shape=level_tile,
+                            downsample=mag,
+                        ),
+                        shape=(channel_count, int(level_shape[0]), int(level_shape[1])),
+                        dtype=output_dtype_np,
+                        subfiletype=1,
+                        **level_kwargs,
+                    )
             write_succeeded = True
         finally:
             del level0
@@ -1543,13 +1714,14 @@ def blockwise_write_ometiff_outputs(
 
     (outdir / "gigatime_channels.json").write_text(json.dumps(output_channel_names, indent=2), encoding="utf-8")
     (outdir / "gigatime_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    finalize_aux_outputs(
-        sample_id=sample_id,
-        quantifiers=quantifiers,
-        quant_dir=quant_dir,
-        jpg_exporter=jpg_exporter,
-        metadata=metadata,
-    )
+    if reuse_level0:
+        finalize_aux_outputs(
+            sample_id=sample_id,
+            quantifiers=quantifiers,
+            quant_dir=quant_dir,
+            jpg_exporter=jpg_exporter,
+            metadata=metadata,
+        )
 
 
 def blockwise_write_zarr_outputs(
@@ -2245,6 +2417,13 @@ def main():
                 jpg_channel_indices=jpg_channel_indices,
                 sample_id=sample_id,
                 resume_level0_buffer=bool(args.resume_level0_buffer),
+                skip_background_blocks=bool(args.skip_background_blocks),
+                skip_background_mask_path=str(args.skip_background_mask_path or ""),
+                skip_background_downsample=int(args.skip_background_downsample),
+                skip_background_min_fraction=float(args.skip_background_min_fraction),
+                skip_background_close_radius=int(args.skip_background_close_radius),
+                skip_background_min_obj_area=int(args.skip_background_min_obj_area),
+                skip_background_hole_area=int(args.skip_background_hole_area),
             )
             out_path = Path(args.outdir) / "gigatime_probs.ome.tif"
         else:

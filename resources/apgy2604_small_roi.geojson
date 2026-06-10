@@ -1,0 +1,41 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "apgy2604_small_roi",
+        "source": "codex_small_roi",
+        "width_px": 4096,
+        "height_px": 4096
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              42496,
+              51712
+            ],
+            [
+              46592,
+              51712
+            ],
+            [
+              46592,
+              55808
+            ],
+            [
+              42496,
+              55808
+            ],
+            [
+              42496,
+              51712
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

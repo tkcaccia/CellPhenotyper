@@ -43,7 +43,8 @@ RS
         "${nuclei_embeddings_dir}" \
         "${objects_assigned_csv}" \
         "kodama_output" \
-        "${params.kodama_embedding_mode}"
+        "${params.kodama_embedding_mode}" \
+        "${params.kodama_spark_top_features}"
 
       Rscript "${r_script}" \
         "kodama_output/rawdata.RData" \
@@ -51,6 +52,8 @@ RS
         --embedding-mode "${params.kodama_embedding_mode}" \
         --dims-to-run ${params.kodama_dims_to_run} \
         --spark-top ${params.kodama_spark_top_features} \
+        --landmarks ${params.kodama_landmarks} \
+        --kodama-ncomp ${params.kodama_ncomp} \
         --n-cores ${nCores}
     } > "KODAMA_${sample_id}.Rout" 2>&1
     """

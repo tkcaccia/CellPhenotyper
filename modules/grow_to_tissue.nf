@@ -48,6 +48,9 @@ process GROW_TO_TISSUE {
       --pyr-compression ${params.grow_pyr_compression} \
       --max-workers ${Math.max(1, Math.min(task.cpus as int, params.grow_max_workers as int))} \
       --downsample ${params.grow_downsample} \
+      --work-downsample ${params.grow_work_downsample} \
+      --fullres-max-pixels ${params.grow_fullres_max_pixels} \
+      --block-rows ${params.grow_block_rows} \
       ${tail_flags}
     """
 

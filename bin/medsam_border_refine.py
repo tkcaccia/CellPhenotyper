@@ -42,8 +42,8 @@ class MedSAMConfig:
     component_min_area: int = 200
     component_merge_distance: int = 24
     seed_dilation_radius: int = 8
-    core_erosion_radius: int = 36
-    outer_dilation_radius: int = 44
+    core_erosion_radius: int = 43
+    outer_dilation_radius: int = 53
     min_object_size: int = 5000
     smooth_radius: int = 5
     force_core_preservation: bool = True

@@ -45,6 +45,7 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
     if (device_value == 'cpu' && task_mem_gb <= 4) {
       resolved_rows_per_csv = Math.min(resolved_rows_per_csv, 2000)
     }
+    def paired_inner_square_mode = (params.uni2_paired_inner_square_mode ?: 'token_subset').toString()
     def uni2_script = "${projectDir}/${params.uni2_script}"
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     """
@@ -93,7 +94,6 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
     echo "[INFO] UNI2 shared runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=${initial_batch}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
-      rm -rf "\$OUTDIR_TILE" "\$OUTDIR_INNER"
       mkdir -p "\$OUTDIR_TILE" "\$OUTDIR_INNER"
 
       ATTEMPT_ERR=".uni2_shared_attempt_batch_\${ATTEMPT_BATCH}.err"
@@ -103,7 +103,7 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
         --mask "${mask_tif}" \\
         --outdir "\$OUTDIR_TILE" \\
         --paired-inner-square-outdir "\$OUTDIR_INNER" \\
-        --paired-inner-square-mode masked_forward \\
+        --paired-inner-square-mode ${paired_inner_square_mode} \\
         --image-level ${params.uni2_image_level} \\
         ${force_full_flag} \\
         --grid "${params.uni2_grid}" \\

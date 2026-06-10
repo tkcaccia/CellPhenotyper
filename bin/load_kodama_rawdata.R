@@ -6,7 +6,7 @@ if (length(args) < 6) {
     paste(
       "Usage: Rscript load_kodama_rawdata.R",
       "<tile_embeddings_dir> <cyto_embeddings_dir> <inner_square_embeddings_dir> <nuclei_embeddings_dir>",
-      "<objects_assigned_csv> <output_dir> [embedding_modes]"
+      "<objects_assigned_csv> <output_dir> [embedding_modes] [top_features_per_mode]"
     )
   )
 }
@@ -18,6 +18,10 @@ nuclei_dir <- args[4]
 annot_csv <- args[5]
 output_dir <- args[6]
 embedding_mode <- if (length(args) >= 7) args[7] else "all"
+top_features_per_mode <- if (length(args) >= 8) suppressWarnings(as.integer(args[8])) else 100L
+if (!is.finite(top_features_per_mode) || top_features_per_mode < 1L) {
+  top_features_per_mode <- 100L
+}
 
 normalize_modes <- function(mode_string) {
   x <- tolower(trimws(mode_string))
@@ -44,12 +48,61 @@ selected_modes <- normalize_modes(embedding_mode)
 
 library(data.table)
 
+read_embedding_header <- function(file_path) {
+  fread(file_path, nrows = 0L, showProgress = FALSE)
+}
+
+embedding_feature_columns <- function(files, mode_name) {
+  header <- read_embedding_header(files[[1L]])
+  feat_cols <- grep("^feat", colnames(header), value = TRUE)
+  if (length(feat_cols) == 0L) {
+    stop(paste("Embedding table for mode", mode_name, "has no feature columns starting with 'feat'"))
+  }
+  feat_cols
+}
+
+select_top_variance_features <- function(files, feat_cols, top_n, mode_name) {
+  if (length(feat_cols) <= top_n) {
+    return(feat_cols)
+  }
+
+  sums <- numeric(length(feat_cols))
+  sums_sq <- numeric(length(feat_cols))
+  counts <- numeric(length(feat_cols))
+  names(sums) <- feat_cols
+  names(sums_sq) <- feat_cols
+  names(counts) <- feat_cols
+
+  for (fp in files) {
+    dt <- fread(fp, select = feat_cols, showProgress = FALSE)
+    mat <- as.matrix(dt)
+    storage.mode(mat) <- "double"
+    ok <- !is.na(mat)
+    vals <- mat
+    vals[!ok] <- 0
+    sums <- sums + colSums(vals)
+    sums_sq <- sums_sq + colSums(vals * vals)
+    counts <- counts + colSums(ok)
+    rm(dt, mat, ok, vals)
+    gc(FALSE)
+  }
+
+  means <- sums / pmax(counts, 1)
+  variances <- (sums_sq / pmax(counts, 1)) - (means * means)
+  variances[!is.finite(variances)] <- -Inf
+  ordered <- names(sort(variances, decreasing = TRUE))
+  keep <- ordered[seq_len(min(top_n, length(ordered)))]
+  cat(sprintf("[INFO] mode=%s preselected_top_variance_features=%d of %d\n", mode_name, length(keep), length(feat_cols)))
+  keep
+}
+
 load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
+  if (!required) {
+    cat(sprintf("[INFO] mode=%s skipped (not selected)\n", mode_name))
+    return(NULL)
+  }
+
   if (!dir.exists(dir_path)) {
-    if (!required) {
-      cat(sprintf("[INFO] mode=%s skipped (directory missing and mode not selected): %s\n", mode_name, dir_path))
-      return(NULL)
-    }
     stop(paste("Embedding directory does not exist for mode", mode_name, ":", dir_path))
   }
 
@@ -60,21 +113,25 @@ load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
     pattern = "\\.csv(\\.gz)?$"
   )
   if (length(files) == 0L) {
-    if (!required) {
-      cat(sprintf("[INFO] mode=%s skipped (no embedding CSVs and mode not selected): %s\n", mode_name, dir_path))
-      return(NULL)
-    }
     stop(paste("No embedding CSV files found for mode", mode_name, "in", dir_path))
   }
+  files <- sort(files)
 
-  dt <- rbindlist(lapply(files, fread), fill = TRUE, use.names = TRUE)
+  feat_cols_all <- embedding_feature_columns(files, mode_name)
+  feat_cols <- select_top_variance_features(
+    files,
+    feat_cols_all,
+    top_features_per_mode,
+    mode_name
+  )
+  read_cols <- c("cell_id", feat_cols)
+  dt <- rbindlist(
+    lapply(files, function(fp) fread(fp, select = read_cols, showProgress = FALSE)),
+    fill = TRUE,
+    use.names = TRUE
+  )
   if (!("cell_id" %in% colnames(dt))) {
     stop(paste("Embedding table for mode", mode_name, "is missing 'cell_id' column"))
-  }
-
-  feat_cols <- grep("^feat", colnames(dt), value = TRUE)
-  if (length(feat_cols) == 0L) {
-    stop(paste("Embedding table for mode", mode_name, "has no feature columns starting with 'feat'"))
   }
 
   dt <- dt[, c("cell_id", feat_cols), with = FALSE]
@@ -126,6 +183,7 @@ mode_dirs <- list(
 available_modes <- c("tile", "nuclei", "cyto", "inner_square")
 cat(sprintf("[INFO] Loading embedding families: %s\n", paste(available_modes, collapse = ",")))
 cat(sprintf("[INFO] Selected embedding families: %s\n", paste(selected_modes, collapse = ",")))
+cat(sprintf("[INFO] Top features per selected family: %d\n", top_features_per_mode))
 
 loaded <- list()
 for (m in available_modes) {
@@ -181,18 +239,21 @@ rawdata_path <- file.path(output_dir, "rawdata.RData")
 save(
   ann_ids, common_ids, ann, xy, available_modes, selected_modes,
   embeddings_raw, mode_overlap_with_annotations,
-  r_tile, r_full, r_nuclei, r_cyto, r_inner,
-  file = rawdata_path
+  file = rawdata_path,
+  compress = FALSE
 )
 
-# Keep backward-compatible filename as well.
+# Keep a backward-compatible filename without serializing a second multi-GB copy.
 legacy_path <- file.path(output_dir, "raw_data.RData")
-save(
-  ann_ids, common_ids, ann, xy, available_modes, selected_modes,
-  embeddings_raw, mode_overlap_with_annotations,
-  r_tile, r_full, r_nuclei, r_cyto, r_inner,
-  file = legacy_path
-)
+if (file.exists(legacy_path)) {
+  unlink(legacy_path)
+}
+if (!file.symlink(basename(rawdata_path), legacy_path)) {
+  writeLines(
+    "raw_data.RData is intentionally not duplicated; use rawdata.RData.",
+    file.path(output_dir, "raw_data.RData.note.txt")
+  )
+}
 
 cat(sprintf("[INFO] Annotation cells=%d\n", length(ann_ids)))
 cat(sprintf("[INFO] Global shared cells (all modes)=%d\n", length(common_ids)))

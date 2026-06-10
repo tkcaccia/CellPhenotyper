@@ -36,6 +36,30 @@ def read_mask_2d(path: str) -> np.ndarray:
     return m
 
 
+def open_mask_2d(path: str) -> np.ndarray:
+    try:
+        m = tiff.memmap(path)
+    except Exception:
+        with tiff.TiffFile(path) as tif:
+            m = tif.pages[0].asarray(out="memmap")
+    if m.ndim > 2:
+        m = m[0]
+    if m.ndim != 2:
+        raise ValueError(f"Expected 2D mask TIFF, got shape={m.shape}")
+    if not np.issubdtype(m.dtype, np.integer):
+        raise ValueError(f"Expected integer label mask TIFF, got dtype={m.dtype}")
+    return m
+
+
+def smallest_mask_dtype(max_value: int) -> np.dtype:
+    max_value = int(max_value)
+    if max_value <= np.iinfo(np.uint16).max:
+        return np.dtype(np.uint16)
+    if max_value <= np.iinfo(np.uint32).max:
+        return np.dtype(np.uint32)
+    return np.dtype(np.uint64)
+
+
 def load_map(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df.columns = [c.strip().strip('"').strip("'") for c in df.columns]
@@ -84,6 +108,51 @@ def downsample_nearest(img: np.ndarray, factor: int) -> np.ndarray:
     return img[::f, ::f]
 
 
+def row_blocks(n_rows: int, block_rows: int):
+    block_rows = max(1, int(block_rows))
+    for y0 in range(0, int(n_rows), block_rows):
+        yield y0, min(int(n_rows), y0 + block_rows)
+
+
+def remap_mask_chunked(
+    labels: np.ndarray,
+    lut: np.ndarray,
+    out_path: str,
+    out_dtype: np.dtype,
+    default_value: int,
+    block_rows: int,
+) -> tuple[np.ndarray, dict]:
+    out = tiff.memmap(out_path, shape=labels.shape, dtype=out_dtype, bigtiff=True)
+    present_labels = set()
+    observed_clusters = set()
+    foreground_px = 0
+    mapped_px = 0
+
+    for y0, y1 in row_blocks(labels.shape[0], block_rows):
+        block = np.asarray(labels[y0:y1, :])
+        out_block = lut[block]
+        out[y0:y1, :] = out_block
+
+        fg = block != 0
+        foreground_px += int(fg.sum())
+        mapped = fg & (out_block != default_value)
+        mapped_px += int(mapped.sum())
+
+        if fg.any():
+            present_labels.update(int(x) for x in np.unique(block[fg]))
+        if mapped.any():
+            observed_clusters.update(int(x) for x in np.unique(out_block[mapped]))
+
+    out.flush()
+    stats = {
+        "present_labels": np.array(sorted(present_labels), dtype=np.int64),
+        "observed_clusters": np.array(sorted(observed_clusters), dtype=np.int64),
+        "foreground_px": foreground_px,
+        "mapped_px": mapped_px,
+    }
+    return out, stats
+
+
 def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
@@ -111,14 +180,57 @@ def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
     return np.clip(arr_f, 0, 255).astype(np.uint8)
 
 
-def read_preview_background(path: str, expected_shape: tuple[int, int]) -> np.ndarray:
-    bg = tiff.imread(path)
+def _preview_metadata(path: str) -> tuple[tuple[int, ...], np.dtype, int]:
+    with tiff.TiffFile(path) as tif:
+        page = tif.pages[0]
+        shape = tuple(page.shape)
+        dtype = np.dtype(page.dtype)
+        samples = 1
+        if len(shape) == 3:
+            if shape[-1] in (3, 4):
+                samples = shape[-1]
+            elif shape[0] in (3, 4):
+                samples = shape[0]
+        return shape, dtype, samples
+
+
+def read_preview_background(
+    path: str,
+    expected_shape: tuple[int, int],
+    downsample_factor: int = 1,
+    allow_full_read: bool = True,
+) -> np.ndarray | None:
+    f = max(1, int(downsample_factor))
+    bg = None
+    if f > 1:
+        try:
+            mm = tiff.memmap(path)
+            if mm.ndim > 3:
+                mm = mm[0]
+            if mm.ndim == 2:
+                bg = np.asarray(mm[::f, ::f])
+            elif mm.ndim == 3 and mm.shape[0] in (3, 4) and mm.shape[-1] not in (3, 4):
+                bg = np.asarray(mm[:, ::f, ::f])
+            elif mm.ndim == 3:
+                bg = np.asarray(mm[::f, ::f, :])
+        except Exception:
+            bg = None
+
+    if bg is None:
+        if not allow_full_read:
+            return None
+        bg = tiff.imread(path)
     if bg.ndim > 3:
         bg = bg[0]
     bg_rgb = to_uint8_rgb(bg)
-    if bg_rgb.shape[:2] != expected_shape:
+    expected_small_shape = (
+        (expected_shape[0] + f - 1) // f,
+        (expected_shape[1] + f - 1) // f,
+    )
+    if bg_rgb.shape[:2] not in (expected_shape, expected_small_shape):
         raise ValueError(
-            f"Preview background shape {bg_rgb.shape[:2]} does not match mask shape {expected_shape}. "
+            f"Preview background shape {bg_rgb.shape[:2]} does not match mask shape {expected_shape} "
+            f"or downsampled shape {expected_small_shape}. "
             "Expected crop_roi.tif aligned with labels."
         )
     return bg_rgb
@@ -142,14 +254,25 @@ def write_preview_overlay_png(
     preview_background_path: str,
     alpha: float,
 ) -> tuple[int, int]:
-    bg = read_preview_background(preview_background_path, cluster_mask.shape)
-    est_bytes = int(bg.nbytes + cluster_mask.nbytes)
+    bg_shape, bg_dtype, bg_samples = _preview_metadata(preview_background_path)
+    bg_pixels = int(np.prod(bg_shape[:2]))
+    bg_est_bytes = bg_pixels * bg_samples * int(bg_dtype.itemsize)
+    est_bytes = int(bg_est_bytes + cluster_mask.nbytes)
     threshold_bytes = int(float(size_threshold_mb) * 1024 * 1024)
     use_factor = int(factor_if_large) if est_bytes > threshold_bytes else 1
     use_factor = max(1, use_factor)
 
-    bg_small = downsample_nearest(bg, use_factor)
     mask_small = downsample_nearest(cluster_mask, use_factor)
+    bg_small = read_preview_background(
+        preview_background_path,
+        cluster_mask.shape,
+        downsample_factor=use_factor,
+        allow_full_read=(use_factor == 1),
+    )
+    if bg_small is None:
+        bg_small = np.full(mask_small.shape + (3,), 245, dtype=np.uint8)
+    elif bg_small.shape[:2] != mask_small.shape:
+        bg_small = downsample_nearest(bg_small, use_factor)
 
     overlay_rgb = colorize_cluster_mask(mask_small, default_value=default_value)
     fg = mask_small != default_value
@@ -174,6 +297,8 @@ def main():
                     help="Value for labels not found in CSV (default 0)")
     ap.add_argument("--compress", default="none", choices=["none", "zlib", "lzma"],
                     help="TIFF compression (default none)")
+    ap.add_argument("--block-rows", type=int, default=1024,
+                    help="Rows per chunk for memory-safe mask remapping (default 1024).")
 
     ap.add_argument("--preview", default=None,
                     help="Optional preview image path (e.g., cluster_mask_preview.png)")
@@ -188,7 +313,7 @@ def main():
 
     args = ap.parse_args()
 
-    labels = read_mask_2d(args.mask)
+    labels = open_mask_2d(args.mask)
     df = load_map(args.map)
 
     max_lab = int(labels.max())
@@ -198,22 +323,42 @@ def main():
             "If your labels are sparse with giant IDs, relabel mask to 1..N first."
         )
 
-    # LUT (look-up table): lut[label] = cluster
-    lut = np.full(max_lab + 1, args.default, dtype=np.int64)
     lab_ids = df["label"].to_numpy(dtype=np.int64)
     clus = df["cluster"].to_numpy(dtype=np.int64)
-
     valid = (lab_ids >= 0) & (lab_ids <= max_lab)
+
+    out_max_value = int(max(args.default, int(clus[valid].max()) if valid.any() else args.default))
+    if args.default < 0 or (valid.any() and int(clus[valid].min()) < 0):
+        lut_dtype = np.int32 if out_max_value <= np.iinfo(np.int32).max else np.int64
+    else:
+        lut_dtype = smallest_mask_dtype(out_max_value)
+
+    # LUT (look-up table): lut[label] = cluster. Keep the output dtype tied to cluster IDs,
+    # not the potentially large cell-label IDs.
+    lut = np.full(max_lab + 1, args.default, dtype=lut_dtype)
     lut[lab_ids[valid]] = clus[valid]
 
-    out = lut[labels]
+    if args.compress != "none":
+        print(
+            f"[INFO] Chunked cluster-mask writer uses uncompressed BigTIFF; "
+            f"requested compression '{args.compress}' is ignored to keep RAM bounded."
+        )
 
-    present_labels = np.unique(labels[labels != 0]).astype(np.int64, copy=False)
+    out_tif, remap_stats = remap_mask_chunked(
+        labels,
+        lut,
+        args.out,
+        out_dtype=lut_dtype,
+        default_value=args.default,
+        block_rows=args.block_rows,
+    )
+
+    present_labels = remap_stats["present_labels"]
     present_labels = present_labels[(present_labels >= 0) & (present_labels <= max_lab)]
     mapped_label_ids = np.intersect1d(present_labels, lab_ids[valid], assume_unique=False)
     expected_clusters = np.unique(lut[mapped_label_ids])
     expected_clusters = expected_clusters[expected_clusters != args.default]
-    observed_clusters = np.unique(out[(labels != 0) & (out != args.default)])
+    observed_clusters = remap_stats["observed_clusters"]
 
     if mapped_label_ids.size == 0:
         raise ValueError(
@@ -226,18 +371,6 @@ def main():
             f"Expected cluster IDs in mapped labels: {expected_clusters.tolist()}, "
             f"observed in output mask: {observed_clusters.tolist()}"
         )
-
-    # choose dtype
-    mx = int(out.max())
-    if mx <= np.iinfo(np.uint16).max:
-        out_tif = out.astype(np.uint16)
-    elif mx <= np.iinfo(np.uint32).max:
-        out_tif = out.astype(np.uint32)
-    else:
-        out_tif = out.astype(np.uint64)
-
-    comp = None if args.compress == "none" else args.compress
-    tiff.imwrite(args.out, out_tif, compression=comp)
 
     preview_factor_used = None
     preview_estimated_mb = None
@@ -266,8 +399,8 @@ def main():
             preview_estimated_mb = out_tif.nbytes / (1024.0 * 1024.0)
 
     # report
-    fg = int((labels != 0).sum())
-    mapped = int((out != args.default).sum())
+    fg = int(remap_stats["foreground_px"])
+    mapped = int(remap_stats["mapped_px"])
     print(
         f"[INFO] mask labels present={len(present_labels)} "
         f"mapped_labels={len(mapped_label_ids)} "

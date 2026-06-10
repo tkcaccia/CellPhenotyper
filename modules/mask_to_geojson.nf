@@ -27,6 +27,7 @@ process MASK_TO_GEOJSON {
     python "${geojson_script}" \
       --mask "${mask_tif}" \
       --page ${params.cluster_geojson_page} \
+      --max-page-side ${params.cluster_geojson_max_page_side} \
       --out "${sample_id}_${cluster_variant}_grown_mask_smooth_class.geojson" \
       --min-area ${params.cluster_geojson_min_area} \
       --smooth-buffer ${params.cluster_geojson_smooth_buffer} \

@@ -1,6 +1,10 @@
 args <- commandArgs(trailingOnly = TRUE)
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
 if (length(args) < 2L) {
-  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N (selects kodama_full_N.RData only)] [--k N] [--resolution auto|X] [--profile standard|fine]")
+  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N] [--k N] [--algorithm louvain|leiden|walktrap] [--landmark-cells N] [--landmark-assign-k N] [--landmark-sample-strategy random|grid|knn_inverse_distance] [--landmark-density-knn-k N] [--landmark-density-power X] [--walktrap-clusters N] [--resolution auto|X] [--profile standard|fine]")
 }
 
 kodama_dir <- args[1]
@@ -8,8 +12,20 @@ out_csv <- args[2]
 
 selected_file_dim <- 20L
 requested_k <- 50L
-resolution_mode <- "auto"
-fixed_resolution <- 0.03
+cluster_algorithm <- "leiden"
+walktrap_clusters <- 4L
+landmark_cells <- 10000L
+landmark_assign_k <- 50L
+landmark_sample_strategy <- "knn_inverse_distance"
+landmark_density_knn_k <- 50L
+landmark_density_power <- 2.0
+landmark_grid_bins <- 100L
+landmark_grid_max_per_bin <- 20L
+walktrap_max_cells <- landmark_cells
+walktrap_assign_k <- landmark_assign_k
+resolution_mode <- "fixed"
+fixed_resolution <- 0.3
+leiden_objective <- "modularity"
 resolution_grid <- c(0.005, 0.01, 0.02, 0.03, 0.04, 0.05)
 score_margin <- 0.015
 cluster_profile <- "standard"
@@ -35,6 +51,53 @@ if (length(args) > 2L) {
       i <- i + 2L
       next
     }
+    if (flag == "--algorithm" && i + 1L <= length(args)) {
+      cluster_algorithm <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--walktrap-clusters" && i + 1L <= length(args)) {
+      walktrap_clusters <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag %in% c("--landmark-cells", "--walktrap-max-cells") && i + 1L <= length(args)) {
+      landmark_cells <- as.integer(args[i + 1L])
+      walktrap_max_cells <- landmark_cells
+      i <- i + 2L
+      next
+    }
+    if (flag %in% c("--landmark-assign-k", "--walktrap-assign-k") && i + 1L <= length(args)) {
+      landmark_assign_k <- as.integer(args[i + 1L])
+      walktrap_assign_k <- landmark_assign_k
+      i <- i + 2L
+      next
+    }
+    if (flag == "--landmark-sample-strategy" && i + 1L <= length(args)) {
+      landmark_sample_strategy <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--landmark-density-knn-k" && i + 1L <= length(args)) {
+      landmark_density_knn_k <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--landmark-density-power" && i + 1L <= length(args)) {
+      landmark_density_power <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--landmark-grid-bins" && i + 1L <= length(args)) {
+      landmark_grid_bins <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--landmark-grid-max-per-bin" && i + 1L <= length(args)) {
+      landmark_grid_max_per_bin <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
     if (flag == "--resolution" && i + 1L <= length(args)) {
       value <- tolower(args[i + 1L])
       if (value == "auto") {
@@ -43,6 +106,11 @@ if (length(args) > 2L) {
         resolution_mode <- "fixed"
         fixed_resolution <- as.numeric(args[i + 1L])
       }
+      i <- i + 2L
+      next
+    }
+    if (flag == "--leiden-objective" && i + 1L <= length(args)) {
+      leiden_objective <- tolower(args[i + 1L])
       i <- i + 2L
       next
     }
@@ -81,8 +149,44 @@ if (!is.finite(selected_file_dim) || selected_file_dim < 2L) {
 if (!is.finite(requested_k) || requested_k < 2L) {
   stop("--k must be an integer >= 2.")
 }
+if (!(cluster_algorithm %in% c("louvain", "leiden", "walktrap"))) {
+  stop("--algorithm must be 'louvain', 'leiden', or 'walktrap'.")
+}
+if (!is.finite(walktrap_clusters) || walktrap_clusters < 2L) {
+  stop("--walktrap-clusters must be an integer >= 2.")
+}
+if (!is.finite(walktrap_max_cells) || walktrap_max_cells < 0L) {
+  stop("--walktrap-max-cells must be an integer >= 0. Use 0 for exact all-cell walktrap.")
+}
+if (!is.finite(walktrap_assign_k) || walktrap_assign_k < 1L) {
+  stop("--walktrap-assign-k must be an integer >= 1.")
+}
+if (!is.finite(landmark_cells) || landmark_cells < 0L) {
+  stop("--landmark-cells must be an integer >= 0. Use 0 for exact all-cell graph clustering.")
+}
+if (!is.finite(landmark_assign_k) || landmark_assign_k < 1L) {
+  stop("--landmark-assign-k must be an integer >= 1.")
+}
+if (!(landmark_sample_strategy %in% c("random", "grid", "knn_inverse_distance"))) {
+  stop("--landmark-sample-strategy must be 'random', 'grid', or 'knn_inverse_distance'.")
+}
+if (!is.finite(landmark_density_knn_k) || landmark_density_knn_k < 1L) {
+  stop("--landmark-density-knn-k must be an integer >= 1.")
+}
+if (!is.finite(landmark_density_power) || landmark_density_power <= 0) {
+  stop("--landmark-density-power must be a number > 0.")
+}
+if (!is.finite(landmark_grid_bins) || landmark_grid_bins < 2L) {
+  stop("--landmark-grid-bins must be an integer >= 2.")
+}
+if (!is.finite(landmark_grid_max_per_bin) || landmark_grid_max_per_bin < 1L) {
+  stop("--landmark-grid-max-per-bin must be an integer >= 1.")
+}
 if (resolution_mode == "fixed" && (!is.finite(fixed_resolution) || fixed_resolution <= 0)) {
   stop("--resolution must be 'auto' or a positive number.")
+}
+if (!(leiden_objective %in% c("modularity", "cpm"))) {
+  stop("--leiden-objective must be 'modularity' or 'CPM'.")
 }
 if (!(cluster_profile %in% c("standard", "fine"))) {
   stop("--profile must be 'standard' or 'fine'.")
@@ -108,8 +212,9 @@ require_namespace <- function(pkg) {
 
 require_namespace("bluster")
 require_namespace("igraph")
-if (resolution_mode == "auto") {
-  require_namespace("cluster")
+require_namespace("cluster")
+if (landmark_cells > 0L) {
+  require_namespace("BiocNeighbors")
 }
 
 list_kodama_files <- function(path) {
@@ -142,6 +247,13 @@ select_kodama_file <- function(target_dim, dims, files) {
 format_cluster_sizes <- function(membership) {
   sizes <- sort(table(as.integer(membership)), decreasing = TRUE)
   paste(sprintf("%s:%d", names(sizes), as.integer(sizes)), collapse = ";")
+}
+
+format_optional_number <- function(x, digits = 6L) {
+  if (is.null(x) || length(x) == 0L || !is.finite(x[1])) {
+    return("NA")
+  }
+  sprintf(paste0("%.", as.integer(digits), "f"), as.numeric(x[1]))
 }
 
 build_resolution_grid <- function(base_grid, cluster_profile, fine_multiplier, fine_max) {
@@ -236,9 +348,14 @@ merge_small_clusters <- function(vis, membership, min_size) {
   list(membership = renumber_membership(merged), merged_any = merged_any)
 }
 
-run_louvain <- function(graph_obj, vis, resolution_value, merge_min_size) {
+run_louvain <- function(graph_obj, vis, resolution_value, merge_min_size, algorithm = "louvain", leiden_objective = "modularity") {
   set.seed(1L)
-  cl <- igraph::cluster_louvain(graph_obj, resolution = resolution_value)
+  if (algorithm == "leiden") {
+    objective <- if (identical(tolower(leiden_objective), "cpm")) "CPM" else "modularity"
+    cl <- igraph::cluster_leiden(graph_obj, objective_function = objective, resolution = resolution_value)
+  } else {
+    cl <- igraph::cluster_louvain(graph_obj, resolution = resolution_value)
+  }
   membership <- renumber_membership(as.integer(cl$membership))
   sizes <- table(membership)
   tiny_threshold <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * sum(sizes)))
@@ -258,6 +375,300 @@ run_louvain <- function(graph_obj, vis, resolution_value, merge_min_size) {
     tiny_fraction = tiny_fraction,
     tiny_threshold = tiny_threshold,
     score = NA_real_
+  )
+}
+
+vote_membership <- function(nn_index, ref_membership) {
+  votes <- matrix(ref_membership[as.vector(nn_index)], nrow = nrow(nn_index), ncol = ncol(nn_index))
+  cluster_ids <- sort(unique(as.integer(ref_membership)))
+  vote_counts <- vapply(cluster_ids, function(cluster_id) rowSums(votes == cluster_id), numeric(nrow(votes)))
+  as.integer(cluster_ids[max.col(vote_counts, ties.method = "first")])
+}
+
+knn_query_indices <- function(data, query, k) {
+  data <- as.matrix(data)
+  query <- as.matrix(query)
+  k <- max(1L, min(as.integer(k), nrow(data)))
+
+  if (requireNamespace("Rnanoflann", quietly = TRUE)) {
+    nn <- Rnanoflann::nn(data = data, points = query, k = k, method = "euclidean", search = "standard", trans = TRUE)
+    return(list(index = matrix(as.integer(nn$indices), nrow = nrow(query), ncol = k), backend = "Rnanoflann"))
+  }
+
+  nn <- BiocNeighbors::queryKNN(
+    X = data,
+    query = query,
+    k = k,
+    BNPARAM = BiocNeighbors::KmknnParam(),
+    num.threads = 1L
+  )
+  list(index = nn$index, backend = "BiocNeighbors")
+}
+
+knn_self_mean_distance <- function(x, k) {
+  x <- as.matrix(x)
+  k <- max(1L, min(as.integer(k), nrow(x) - 1L))
+
+  if (requireNamespace("Rnanoflann", quietly = TRUE)) {
+    nn <- Rnanoflann::nn(data = x, points = x, k = k + 1L, method = "euclidean", search = "standard", trans = TRUE)
+    distances <- matrix(as.numeric(nn$distances), nrow = nrow(x), ncol = k + 1L)
+    indices <- matrix(as.integer(nn$indices), nrow = nrow(x), ncol = k + 1L)
+    # Rnanoflann returns each query point itself first for self-search; drop that zero-distance column.
+    if (all(indices[, 1L] == seq_len(nrow(x))) || all(distances[, 1L] == 0)) {
+      distances <- distances[, -1L, drop = FALSE]
+    } else {
+      distances <- distances[, seq_len(k), drop = FALSE]
+    }
+    return(list(mean_dist = rowMeans(distances), backend = "Rnanoflann"))
+  }
+
+  nn <- BiocNeighbors::findKNN(
+    X = x,
+    k = k,
+    BNPARAM = BiocNeighbors::KmknnParam(),
+    num.threads = 1L
+  )
+  list(mean_dist = rowMeans(nn$distance), backend = "BiocNeighbors")
+}
+
+assign_from_landmarks <- function(vis, landmark_vis, landmark_membership, landmark_idx, assign_k, label) {
+  used_assign_k <- max(1L, min(as.integer(assign_k), nrow(landmark_vis)))
+  cat(sprintf("[INFO] Assigning all %d cells from %s landmarks by %d-NN vote in KODAMA space\n", nrow(vis), label, used_assign_k))
+  flush.console()
+  nn <- knn_query_indices(landmark_vis, vis, used_assign_k)
+  cat(sprintf("[INFO] Landmark assignment KNN backend: %s\n", nn$backend))
+  flush.console()
+  membership <- vote_membership(nn$index, landmark_membership)
+  membership[landmark_idx] <- landmark_membership
+  names(membership) <- rownames(vis)
+  membership <- renumber_membership(membership)
+  backend <- nn$backend
+  rm(nn)
+  gc(FALSE)
+  list(membership = membership, assign_k = used_assign_k, knn_backend = backend)
+}
+
+knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power) {
+  max_total <- min(as.integer(max_total), nrow(vis))
+  if (max_total <= 0L || nrow(vis) <= max_total) {
+    return(seq_len(nrow(vis)))
+  }
+  used_density_k <- max(1L, min(as.integer(density_k), nrow(vis) - 1L))
+  density_power <- as.numeric(density_power)
+  cat(sprintf(
+    "[INFO] Selecting %d inverse-distance landmarks from %d cells using mean %d-NN distance and p=%.3f\n",
+    max_total,
+    nrow(vis),
+    used_density_k,
+    density_power
+  ))
+  flush.console()
+  nn <- knn_self_mean_distance(vis, used_density_k)
+  mean_dist <- nn$mean_dist
+  knn_backend <- nn$backend
+  cat(sprintf("[INFO] Inverse-distance landmark KNN backend: %s\n", knn_backend))
+  flush.console()
+  finite_positive <- mean_dist[is.finite(mean_dist) & mean_dist > 0]
+  distance_floor <- if (length(finite_positive)) {
+    as.numeric(stats::quantile(finite_positive, probs = 0.001, names = FALSE, na.rm = TRUE))
+  } else {
+    .Machine$double.eps
+  }
+  if (!is.finite(distance_floor) || distance_floor <= 0) {
+    distance_floor <- .Machine$double.eps
+  }
+  weights <- (1 / pmax(mean_dist, distance_floor))^density_power
+  weights[!is.finite(weights)] <- 0
+  max_weight <- suppressWarnings(max(weights, na.rm = TRUE))
+  if (!is.finite(max_weight) || max_weight <= 0 || sum(weights) <= 0) {
+    warning("Inverse-distance landmark weights were invalid; falling back to random landmark sampling.")
+    idx <- sort(sample.int(nrow(vis), max_total))
+  } else {
+    weights <- weights / max_weight
+    idx <- sort(sample.int(nrow(vis), size = max_total, replace = FALSE, prob = weights))
+  }
+  attr(idx, "density_k_used") <- used_density_k
+  attr(idx, "density_power") <- density_power
+  attr(idx, "density_knn_backend") <- knn_backend
+  attr(idx, "mean_density_distance_median_all") <- stats::median(mean_dist, na.rm = TRUE)
+  attr(idx, "mean_density_distance_median_selected") <- stats::median(mean_dist[idx], na.rm = TRUE)
+  rm(nn, weights, mean_dist)
+  gc(FALSE)
+  idx
+}
+
+select_landmarks <- function(vis, max_cells, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power) {
+  max_cells <- min(as.integer(max_cells), nrow(vis))
+  if (max_cells <= 0L || nrow(vis) <= max_cells) {
+    return(seq_len(nrow(vis)))
+  }
+  if (sample_strategy == "random") {
+    return(sort(sample.int(nrow(vis), max_cells)))
+  }
+  if (sample_strategy == "knn_inverse_distance") {
+    return(knn_inverse_distance_sample(vis, max_cells, density_k, density_power))
+  }
+  idx <- grid_balanced_sample(
+    vis,
+    bins = as.integer(grid_bins),
+    max_per_bin = as.integer(grid_max_per_bin),
+    max_total = max_cells
+  )
+  if (length(idx) < min(max_cells, 1000L)) {
+    warning(sprintf("Grid-balanced landmark sample produced only %d cells; falling back to random sample.", length(idx)))
+    idx <- sort(sample.int(nrow(vis), max_cells))
+  }
+  idx
+}
+
+run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power) {
+  set.seed(1L)
+  n_cells <- nrow(vis)
+  n_clusters <- as.integer(n_clusters)
+  max_cells <- as.integer(max_cells)
+
+  if (max_cells == 0L || n_cells <= max_cells) {
+    graph_k <- max(2L, min(as.integer(actual_k), n_cells - 1L))
+    cat(sprintf("[INFO] Walktrap mode: exact all-cell SNN graph with %d cells and k=%d\n", n_cells, graph_k))
+    flush.console()
+    graph_obj <- bluster::makeSNNGraph(as.matrix(vis), k = graph_k)
+    g_walk <- igraph::cluster_walktrap(graph_obj)
+    membership <- renumber_membership(as.integer(igraph::cut_at(g_walk, no = n_clusters)))
+    modularity <- igraph::modularity(graph_obj, membership = membership)
+    graph_cells <- n_cells
+    assignment_mode <- "exact"
+    used_assign_k <- 0L
+    assignment_knn_backend <- NA_character_
+  } else {
+    landmark_idx <- select_landmarks(vis, max_cells, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power)
+    landmark_vis <- vis[landmark_idx, , drop = FALSE]
+    graph_k <- max(2L, min(as.integer(actual_k), nrow(landmark_vis) - 1L))
+    cat(sprintf(
+      "[INFO] Walktrap mode: %s landmark SNN graph with %d/%d cells, graph k=%d, target clusters=%d\n",
+      sample_strategy,
+      nrow(landmark_vis),
+      n_cells,
+      graph_k,
+      n_clusters
+    ))
+    flush.console()
+    graph_obj <- bluster::makeSNNGraph(as.matrix(landmark_vis), k = graph_k)
+    g_walk <- igraph::cluster_walktrap(graph_obj)
+    landmark_membership <- renumber_membership(as.integer(igraph::cut_at(g_walk, no = n_clusters)))
+    names(landmark_membership) <- rownames(landmark_vis)
+    modularity <- igraph::modularity(graph_obj, membership = landmark_membership)
+
+    assigned <- assign_from_landmarks(vis, landmark_vis, landmark_membership, landmark_idx, assign_k, "walktrap")
+    membership <- assigned$membership
+    used_assign_k <- assigned$assign_k
+    assignment_knn_backend <- assigned$knn_backend
+    graph_cells <- nrow(landmark_vis)
+    assignment_mode <- "landmark_knn"
+    rm(assigned, landmark_vis, landmark_membership)
+    gc(FALSE)
+  }
+
+  list(
+    resolution = NA_real_,
+    membership = membership,
+    final_membership = membership,
+    raw_cluster_count = length(unique(membership)),
+    final_cluster_count = length(unique(membership)),
+    modularity = modularity,
+    silhouette = mean_silhouette(vis, membership),
+    tiny_count = 0L,
+    tiny_fraction = 0,
+    tiny_threshold = 0L,
+    score = NA_real_,
+    walktrap_cells_used = as.integer(graph_cells),
+    walktrap_assignment_mode = assignment_mode,
+    walktrap_assign_k_used = as.integer(used_assign_k),
+    landmark_algorithm = "walktrap",
+    landmark_cells_used = as.integer(graph_cells),
+    landmark_assignment_mode = assignment_mode,
+    landmark_assign_k_used = as.integer(used_assign_k),
+    landmark_assignment_knn_backend = as.character(assignment_knn_backend)
+  )
+}
+
+grid_balanced_sample <- function(vis, bins, max_per_bin, max_total) {
+  xr <- range(vis[, 1], finite = TRUE)
+  yr <- range(vis[, 2], finite = TRUE)
+  xb <- cut(vis[, 1], breaks = seq(xr[1], xr[2], length.out = bins + 1L), include.lowest = TRUE, labels = FALSE)
+  yb <- cut(vis[, 2], breaks = seq(yr[1], yr[2], length.out = bins + 1L), include.lowest = TRUE, labels = FALSE)
+  bin_id <- xb + bins * (yb - 1L)
+  by_bin <- split(seq_len(nrow(vis)), bin_id)
+  idx <- unlist(lapply(by_bin, function(ii) {
+    if (length(ii) <= max_per_bin) ii else sample(ii, max_per_bin)
+  }), use.names = FALSE)
+  idx <- sort(unique(idx))
+  if (length(idx) > max_total) {
+    idx <- sort(sample(idx, max_total))
+  }
+  idx
+}
+
+cluster_plot_colors <- function(vis, membership, algorithm) {
+  cluster_ids <- sort(unique(as.integer(membership)))
+  cols <- setNames(rep("#000000", length(cluster_ids)), as.character(cluster_ids))
+  cent <- do.call(rbind, lapply(cluster_ids, function(id) colMeans(vis[membership == id, , drop = FALSE])))
+  rownames(cent) <- as.character(cluster_ids)
+  sizes <- table(as.integer(membership))
+  if (length(cluster_ids) >= 4L) {
+    background <- names(which.max(sizes))
+    rest <- setdiff(rownames(cent), background)
+    left <- rest[which.min(cent[rest, 1])]
+    bottom <- rest[which.min(cent[rest, 2])]
+    green_candidates <- setdiff(rest, c(left, bottom))
+    green <- if (length(green_candidates)) green_candidates[1] else NA_character_
+    cols[background] <- "#000000"
+    cols[left] <- "#F2D51B"
+    cols[bottom] <- "#8B0000"
+    if (!is.na(green)) cols[green] <- "#007000"
+    extra <- setdiff(rest, c(left, bottom, green))
+    if (length(extra)) cols[extra] <- rep(c("#1F77B4", "#FF7F0E", "#9467BD"), length.out = length(extra))
+  } else if (length(cluster_ids) == 3L) {
+    left <- rownames(cent)[which.min(cent[, 1])]
+    bottom <- rownames(cent)[which.min(cent[, 2])]
+    rest <- setdiff(rownames(cent), c(left, bottom))
+    cols[left] <- "#F2D51B"
+    cols[bottom] <- "#8B0000"
+    if (length(rest)) cols[rest[1]] <- "#007000"
+  } else {
+    palette_hex <- c(
+      "#000000", "#007000", "#8B0000", "#F2D51B",
+      "#1F77B4", "#FF7F0E", "#9467BD", "#0082C8"
+    )
+    cols <- setNames(rep(palette_hex, length.out = length(cluster_ids)), as.character(cluster_ids))
+  }
+  cols
+}
+
+draw_membership_plot <- function(vis, membership, cluster_colors, algorithm, main = NULL) {
+  set.seed(1L)
+  plot_max_points <- 350000L
+  plot_idx <- if (nrow(vis) > plot_max_points) sort(sample.int(nrow(vis), plot_max_points)) else seq_len(nrow(vis))
+  plot(vis[plot_idx, 1], vis[plot_idx, 2],
+    pch = 16,
+    cex = 0.18,
+    col = grDevices::adjustcolor("black", alpha.f = 0.25),
+    xlab = "KODAMA dimension 1",
+    ylab = "KODAMA dimension 2",
+    main = main
+  )
+  for (cluster_id in names(cluster_colors)) {
+    idx <- plot_idx[membership[plot_idx] == as.integer(cluster_id)]
+    if (!length(idx)) next
+    color <- cluster_colors[cluster_id]
+    alpha <- if (identical(unname(color), "#000000")) 0.35 else 0.65
+    points(vis[idx, 1], vis[idx, 2], pch = 16, cex = 0.16, col = grDevices::adjustcolor(color, alpha.f = alpha))
+  }
+  legend("topright",
+    legend = sprintf("cluster %s n=%d", names(cluster_colors), as.integer(table(membership)[names(cluster_colors)])),
+    col = cluster_colors,
+    pch = 16,
+    bty = "n",
+    cex = 0.8
   )
 }
 
@@ -328,6 +739,156 @@ select_auto_fine <- function(evals, base_best, fine_score_margin, fine_min_clust
   more[[which.max(vapply(more, function(x) x$modularity, numeric(1)))]]
 }
 
+run_louvain_landmark <- function(
+  vis,
+  actual_k,
+  cluster_algorithm,
+  leiden_objective,
+  resolution_mode,
+  fixed_resolution,
+  resolution_grid_eval,
+  cluster_profile,
+  fine_score_margin,
+  fine_min_cluster_increase,
+  max_cells,
+  assign_k,
+  sample_strategy,
+  grid_bins,
+  grid_max_per_bin,
+  density_k,
+  density_power
+) {
+  set.seed(1L)
+  n_cells <- nrow(vis)
+  if (max_cells == 0L || n_cells <= max_cells) {
+    landmark_idx <- seq_len(n_cells)
+    assignment_mode <- "exact"
+  } else {
+    landmark_idx <- select_landmarks(vis, max_cells, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power)
+    assignment_mode <- "landmark_knn"
+  }
+  sampling_density_k_used <- attr(landmark_idx, "density_k_used") %||% NA_integer_
+  sampling_density_power <- attr(landmark_idx, "density_power") %||% NA_real_
+  sampling_density_knn_backend <- attr(landmark_idx, "density_knn_backend") %||% NA_character_
+  sampling_density_median_all <- attr(landmark_idx, "mean_density_distance_median_all") %||% NA_real_
+  sampling_density_median_selected <- attr(landmark_idx, "mean_density_distance_median_selected") %||% NA_real_
+  landmark_vis <- vis[landmark_idx, , drop = FALSE]
+  graph_k <- max(2L, min(as.integer(actual_k), nrow(landmark_vis) - 1L))
+  landmark_merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(landmark_vis)))
+
+  cat(sprintf(
+    "[INFO] %s mode: %s SNN graph with %d/%d cells, graph k=%d, profile=%s\n",
+    tools::toTitleCase(cluster_algorithm),
+    ifelse(assignment_mode == "exact", "exact all-cell", paste(sample_strategy, "landmark")),
+    nrow(landmark_vis),
+    n_cells,
+    graph_k,
+    cluster_profile
+  ))
+  flush.console()
+  graph_obj <- bluster::makeSNNGraph(as.matrix(landmark_vis), k = graph_k)
+
+  if (resolution_mode == "auto") {
+    cluster_cap <- preferred_cluster_cap(nrow(landmark_vis))
+    evals <- lapply(resolution_grid_eval, function(res) {
+      out <- run_louvain(graph_obj, landmark_vis, res, landmark_merge_min_size, cluster_algorithm, leiden_objective)
+      out$silhouette <- mean_silhouette(landmark_vis, out$membership)
+      sil_term <- if (is.finite(out$silhouette)) out$silhouette else -1
+      over_cap <- max(0L, out$final_cluster_count - cluster_cap)
+      out$score <- sil_term +
+        0.20 * out$modularity -
+        0.06 * out$final_cluster_count -
+        0.60 * out$tiny_fraction -
+        0.05 * out$tiny_count -
+        0.12 * over_cap
+      out$cluster_cap <- cluster_cap
+      out
+    })
+    base_best <- select_auto_best(evals, cluster_cap, score_margin)
+    landmark_best <- if (cluster_profile == "fine") {
+      select_auto_fine(evals, base_best, fine_score_margin, fine_min_cluster_increase)
+    } else {
+      base_best
+    }
+    cat(sprintf("[INFO] %s landmark auto-resolution grid: %s\n", tools::toTitleCase(cluster_algorithm), paste(sprintf("%.3f", resolution_grid_eval), collapse = ", ")))
+    for (item in evals) {
+      cat(sprintf(
+        "  - res=%.3f raw_clusters=%d final_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f score=%.4f\n",
+        item$resolution,
+        item$raw_cluster_count,
+        item$final_cluster_count,
+        ifelse(is.finite(item$silhouette), sprintf("%.4f", item$silhouette), "NA"),
+        item$modularity,
+        item$tiny_count,
+        item$tiny_fraction,
+        item$score
+      ))
+    }
+    cat(sprintf(
+      "[INFO] Selected %s landmark resolution %.3f raw_clusters=%d final_clusters=%d score=%.4f\n",
+      tools::toTitleCase(cluster_algorithm),
+      landmark_best$resolution,
+      landmark_best$raw_cluster_count,
+      landmark_best$final_cluster_count,
+      landmark_best$score
+    ))
+  } else {
+    effective_resolution <- fixed_resolution
+    if (cluster_profile == "fine") {
+      effective_resolution <- fixed_resolution * fine_resolution_multiplier
+    }
+    landmark_best <- run_louvain(graph_obj, landmark_vis, effective_resolution, landmark_merge_min_size, cluster_algorithm, leiden_objective)
+    cat(sprintf("[INFO] Selected %s landmark fixed resolution %.3f raw_clusters=%d final_clusters=%d\n",
+      tools::toTitleCase(cluster_algorithm),
+      landmark_best$resolution,
+      landmark_best$raw_cluster_count,
+      landmark_best$final_cluster_count
+    ))
+  }
+  flush.console()
+
+  landmark_membership <- renumber_membership(landmark_best$final_membership)
+  names(landmark_membership) <- rownames(landmark_vis)
+  if (assignment_mode == "exact") {
+    membership <- landmark_membership
+    used_assign_k <- 0L
+    assignment_knn_backend <- NA_character_
+  } else {
+    assigned <- assign_from_landmarks(vis, landmark_vis, landmark_membership, landmark_idx, assign_k, cluster_algorithm)
+    membership <- assigned$membership
+    used_assign_k <- assigned$assign_k
+    assignment_knn_backend <- assigned$knn_backend
+    rm(assigned)
+  }
+  membership <- renumber_membership(membership)
+  rm(graph_obj, landmark_vis, landmark_membership)
+  gc(FALSE)
+
+  list(
+    resolution = landmark_best$resolution,
+    membership = membership,
+    final_membership = membership,
+    raw_cluster_count = length(unique(membership)),
+    final_cluster_count = length(unique(membership)),
+    modularity = landmark_best$modularity,
+    silhouette = mean_silhouette(vis, membership),
+    tiny_count = landmark_best$tiny_count,
+    tiny_fraction = landmark_best$tiny_fraction,
+    tiny_threshold = landmark_best$tiny_threshold,
+    score = landmark_best$score,
+    landmark_algorithm = cluster_algorithm,
+    landmark_cells_used = as.integer(length(landmark_idx)),
+    landmark_assignment_mode = assignment_mode,
+    landmark_assign_k_used = as.integer(used_assign_k),
+    landmark_density_k_used = as.integer(sampling_density_k_used),
+    landmark_density_power = as.numeric(sampling_density_power),
+    landmark_density_knn_backend = as.character(sampling_density_knn_backend),
+    landmark_assignment_knn_backend = as.character(assignment_knn_backend),
+    landmark_density_median_all = as.numeric(sampling_density_median_all),
+    landmark_density_median_selected = as.numeric(sampling_density_median_selected)
+  )
+}
+
 picked <- {
   info <- list_kodama_files(kodama_dir)
   select_kodama_file(selected_file_dim, info$dims, info$files)
@@ -349,71 +910,79 @@ if (ncol(vis) < 2L) {
   stop(sprintf("Expected 'vis' to have at least 2 columns. Found: %d", ncol(vis)))
 }
 
+input_vis_dims <- ncol(vis)
 vis <- vis[, seq_len(min(2L, ncol(vis))), drop = FALSE]
 actual_vis_dims <- ncol(vis)
 actual_k <- max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
-graph_obj <- bluster::makeSNNGraph(vis, k = actual_k)
 merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
 resolution_grid_eval <- build_resolution_grid(resolution_grid, cluster_profile, fine_resolution_multiplier, fine_resolution_max)
+cat(sprintf(
+  "[INFO] Loaded KODAMA vis: cells=%d input_dims=%d clustering_dims=%d requested_k=%d actual_k=%d\n",
+  nrow(vis),
+  input_vis_dims,
+  actual_vis_dims,
+  requested_k,
+  actual_k
+))
+flush.console()
 
-if (resolution_mode == "auto") {
-  cluster_cap <- preferred_cluster_cap(nrow(vis))
-  evals <- lapply(resolution_grid_eval, function(res) {
-    out <- run_louvain(graph_obj, vis, res, merge_min_size)
-    out$silhouette <- mean_silhouette(vis, out$membership)
-    sil_term <- if (is.finite(out$silhouette)) out$silhouette else -1
-    over_cap <- max(0L, out$final_cluster_count - cluster_cap)
-    out$score <- sil_term +
-      0.20 * out$modularity -
-      0.06 * out$final_cluster_count -
-      0.60 * out$tiny_fraction -
-      0.05 * out$tiny_count -
-      0.12 * over_cap
-    out$cluster_cap <- cluster_cap
-    out
-  })
-  base_best <- select_auto_best(evals, cluster_cap, score_margin)
-  best <- if (cluster_profile == "fine") {
-    select_auto_fine(evals, base_best, fine_score_margin, fine_min_cluster_increase)
-  } else {
-    base_best
-  }
-
+if (cluster_algorithm == "walktrap") {
+  best <- run_walktrap_fixed(
+    vis,
+    actual_k,
+    walktrap_clusters,
+    landmark_cells,
+    landmark_assign_k,
+    landmark_sample_strategy,
+    landmark_grid_bins,
+    landmark_grid_max_per_bin,
+    landmark_density_knn_k,
+    landmark_density_power
+  )
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
-  cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
-  cat(sprintf("[INFO] Auto-resolution grid: %s\n", paste(sprintf("%.3f", resolution_grid_eval), collapse = ", ")))
-  cat(sprintf("[INFO] Preferred raw cluster cap for auto mode: %d\n", cluster_cap))
-  cat("[INFO] Auto-resolution candidates:\n")
-  for (item in evals) {
-    cat(sprintf(
-      "  - res=%.3f raw_clusters=%d final_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f over_cap=%d score=%.4f\n",
-      item$resolution,
-      item$raw_cluster_count,
-      item$final_cluster_count,
-      ifelse(is.finite(item$silhouette), sprintf("%.4f", item$silhouette), "NA"),
-      item$modularity,
-      item$tiny_count,
-      item$tiny_fraction,
-      max(0L, item$final_cluster_count - cluster_cap),
-      item$score
-    ))
-  }
-  cat(sprintf(
-    "[INFO] Selected auto resolution %.3f with raw_clusters=%d final_clusters=%d (score=%.4f)\n",
-    best$resolution,
-    best$raw_cluster_count,
+  cat(sprintf("[INFO] Cluster algorithm: walktrap\n"))
+  cat(sprintf("[INFO] Walktrap requested clusters=%d graph_cells=%d assignment=%s assign_k=%d final clusters=%d silhouette=%s modularity=%.4f\n",
+    as.integer(walktrap_clusters),
+    best$landmark_cells_used,
+    best$landmark_assignment_mode,
+    best$landmark_assign_k_used,
     best$final_cluster_count,
-    best$score
+    ifelse(is.finite(best$silhouette), sprintf("%.4f", best$silhouette), "NA"),
+    best$modularity
   ))
 } else {
-  effective_resolution <- fixed_resolution
-  if (cluster_profile == "fine") {
-    effective_resolution <- fixed_resolution * fine_resolution_multiplier
-  }
-  best <- run_louvain(graph_obj, vis, effective_resolution, merge_min_size)
+  best <- run_louvain_landmark(
+    vis,
+    actual_k,
+    cluster_algorithm,
+    leiden_objective,
+    resolution_mode,
+    fixed_resolution,
+    resolution_grid_eval,
+    cluster_profile,
+    fine_score_margin,
+    fine_min_cluster_increase,
+    landmark_cells,
+    landmark_assign_k,
+    landmark_sample_strategy,
+    landmark_grid_bins,
+    landmark_grid_max_per_bin,
+    landmark_density_knn_k,
+    landmark_density_power
+  )
   cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
-  cat(sprintf("[INFO] Cluster profile: %s\n", cluster_profile))
-  cat(sprintf("[INFO] Fixed resolution %.3f with raw_clusters=%d final_clusters=%d modularity=%.4f\n", best$resolution, best$raw_cluster_count, best$final_cluster_count, best$modularity))
+  cat(sprintf("[INFO] Cluster algorithm: %s\n", cluster_algorithm))
+  cat(sprintf(
+    "[INFO] %s landmark resolution=%s graph_cells=%d assignment=%s assign_k=%d final clusters=%d silhouette=%s modularity=%.4f\n",
+    tools::toTitleCase(cluster_algorithm),
+    ifelse(is.finite(best$resolution), sprintf("%.3f", best$resolution), "NA"),
+    best$landmark_cells_used,
+    best$landmark_assignment_mode,
+    best$landmark_assign_k_used,
+    best$final_cluster_count,
+    ifelse(is.finite(best$silhouette), sprintf("%.4f", best$silhouette), "NA"),
+    best$modularity
+  ))
 }
 
 raw_membership <- renumber_membership(best$membership)
@@ -441,6 +1010,30 @@ summary_df <- data.frame(
   loaded_dim = as.integer(picked$dim),
   requested_k = as.integer(requested_k),
   actual_k = as.integer(actual_k),
+  cluster_algorithm = cluster_algorithm,
+  leiden_objective = leiden_objective,
+  landmark_cells = as.integer(landmark_cells),
+  landmark_sample_strategy = landmark_sample_strategy,
+  landmark_density_knn_k = as.integer(landmark_density_knn_k),
+  landmark_density_power = as.numeric(landmark_density_power),
+  landmark_grid_bins = as.integer(landmark_grid_bins),
+  landmark_grid_max_per_bin = as.integer(landmark_grid_max_per_bin),
+  landmark_assign_k = as.integer(landmark_assign_k),
+  landmark_algorithm = as.character(best$landmark_algorithm %||% cluster_algorithm),
+  landmark_cells_used = as.integer(best$landmark_cells_used %||% NA_integer_),
+  landmark_assignment_mode = as.character(best$landmark_assignment_mode %||% NA_character_),
+  landmark_assign_k_used = as.integer(best$landmark_assign_k_used %||% NA_integer_),
+  landmark_density_k_used = as.integer(best$landmark_density_k_used %||% NA_integer_),
+  landmark_density_knn_backend = as.character(best$landmark_density_knn_backend %||% NA_character_),
+  landmark_assignment_knn_backend = as.character(best$landmark_assignment_knn_backend %||% NA_character_),
+  landmark_density_median_all = as.numeric(best$landmark_density_median_all %||% NA_real_),
+  landmark_density_median_selected = as.numeric(best$landmark_density_median_selected %||% NA_real_),
+  walktrap_clusters = as.integer(walktrap_clusters),
+  walktrap_max_cells = as.integer(walktrap_max_cells),
+  walktrap_assign_k = as.integer(walktrap_assign_k),
+  walktrap_cells_used = as.integer(best$walktrap_cells_used %||% NA_integer_),
+  walktrap_assignment_mode = as.character(best$walktrap_assignment_mode %||% NA_character_),
+  walktrap_assign_k_used = as.integer(best$walktrap_assign_k_used %||% NA_integer_),
   resolution_mode = resolution_mode,
   selected_resolution = as.numeric(best$resolution),
   raw_cluster_count = as.integer(raw_cluster_count),
@@ -453,22 +1046,26 @@ summary_df <- data.frame(
 write.csv(summary_df, summary_path, row.names = FALSE, quote = TRUE)
 
 pdf_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.pdf"))
-palette_hex <- c(
-  "#E6194B", "#3CB44B", "#FFE119", "#0082C8",
-  "#F58230", "#911EB4", "#46F0F0", "#F032E6",
-  "#D2F53C", "#FABEBE", "#008080", "#E6BEFF",
-  "#AA6E28", "#FFFAC8", "#800000", "#AAFFC3"
-)
-cluster_ids <- sort(unique(as.integer(final_membership)))
-cluster_colors <- setNames(rep(palette_hex, length.out = length(cluster_ids)), cluster_ids)
-membership_colors <- unname(cluster_colors[as.character(as.integer(final_membership))])
 pdf(pdf_path)
-plot(vis, pch = 20, col = membership_colors, cex = 1)
+cluster_colors <- cluster_plot_colors(vis, final_membership, cluster_algorithm)
+draw_membership_plot(
+  vis,
+  final_membership,
+  cluster_colors,
+  cluster_algorithm,
+  main = sprintf("%s | %s", sample_id, cluster_algorithm)
+)
 dev.off()
 
 png_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.png"))
 png(filename = png_path, width = 1800, height = 1400, res = 180)
-plot(vis, pch = 20, col = membership_colors, cex = 1)
+draw_membership_plot(
+  vis,
+  final_membership,
+  cluster_colors,
+  cluster_algorithm,
+  main = sprintf("%s | %s", sample_id, cluster_algorithm)
+)
 dev.off()
 
 cat(sprintf("[INFO] Requested --dim=%d loaded kodama_full_%d.RData\n", selected_file_dim, picked$dim))
@@ -476,6 +1073,35 @@ if (!isTRUE(picked$exact)) {
   cat("[INFO] Requested dim file was not present; nearest lower available file was used.\n")
 }
 cat(sprintf("[INFO] Requested k=%d actual k=%d\n", requested_k, actual_k))
+cat(sprintf("[INFO] Cluster algorithm=%s\n", cluster_algorithm))
+cat(sprintf("[INFO] Landmark cells requested=%d used=%d strategy=%s assignment=%s assign_k=%d\n",
+  as.integer(landmark_cells),
+  as.integer(best$landmark_cells_used %||% NA_integer_),
+  landmark_sample_strategy,
+  as.character(best$landmark_assignment_mode %||% NA_character_),
+  as.integer(best$landmark_assign_k_used %||% NA_integer_)
+))
+if (landmark_sample_strategy == "knn_inverse_distance") {
+  cat(sprintf("[INFO] Inverse-distance landmarks density_k=%d p=%.3f median_mean_density_distance_all=%s selected=%s\n",
+    as.integer(best$landmark_density_k_used %||% landmark_density_knn_k),
+    as.numeric(best$landmark_density_power %||% landmark_density_power),
+    format_optional_number(best$landmark_density_median_all, 6L),
+    format_optional_number(best$landmark_density_median_selected, 6L)
+  ))
+  cat(sprintf("[INFO] Inverse-distance landmarks KNN backend=%s assignment KNN backend=%s\n",
+    as.character(best$landmark_density_knn_backend %||% NA_character_),
+    as.character(best$landmark_assignment_knn_backend %||% NA_character_)
+  ))
+}
+if (cluster_algorithm == "walktrap") {
+  cat(sprintf("[INFO] Walktrap requested clusters=%d\n", walktrap_clusters))
+  cat(sprintf("[INFO] Walktrap max cells=%d cells used=%d assignment=%s assign_k=%d\n",
+    walktrap_max_cells,
+    as.integer(best$walktrap_cells_used),
+    as.character(best$walktrap_assignment_mode),
+    as.integer(best$walktrap_assign_k_used)
+  ))
+}
 cat(sprintf("[INFO] Raw clusters=%d final clusters=%d merge_min_size=%d\n", raw_cluster_count, final_cluster_count, merge_min_size))
 cat(sprintf("[INFO] Raw cluster sizes=%s\n", raw_cluster_sizes))
 cat(sprintf("[INFO] Final cluster sizes=%s\n", final_cluster_sizes))

@@ -900,7 +900,7 @@ workflow {
     }
   }
 
-  if (run_cell_assignment || run_cytoplasm || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
+  if (run_cell_assignment || run_cytoplasm || run_gigatime || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_cluster_geojson) {
     def objects_assigned_ch = Channel.empty()
     if (run_cell_assignment) {
       def assign_input_ch = objects_for_assignment_ch
@@ -1141,19 +1141,20 @@ workflow {
     }
 
     def cluster_primary_variant = (params.cluster_primary_variant ?: 'standard').toString().trim()
-    def cluster_secondary_variant = (params.cluster_secondary_variant ?: 'fine').toString().trim()
+    def cluster_secondary_variant = (params.cluster_secondary_variant ?: '').toString().trim()
     def cluster_secondary_profile = (params.cluster_secondary_profile ?: 'fine').toString().trim().toLowerCase()
     if (!cluster_primary_variant) cluster_primary_variant = 'standard'
-    if (!cluster_secondary_variant) cluster_secondary_variant = 'fine'
-    if (cluster_primary_variant == cluster_secondary_variant) {
-      error "cluster_primary_variant and cluster_secondary_variant must be different."
-    }
     def cluster_resolution_value = (params.cluster_resolution ?: 'auto').toString().trim()
     if (!cluster_resolution_value) cluster_resolution_value = 'auto'
     def cluster_variant_defs = [
-      [variant: cluster_primary_variant, profile: 'standard', resolution: cluster_resolution_value],
-      [variant: cluster_secondary_variant, profile: cluster_secondary_profile ?: 'fine', resolution: cluster_resolution_value]
+      [variant: cluster_primary_variant, profile: 'standard', resolution: cluster_resolution_value]
     ]
+    if (cluster_secondary_variant && !(cluster_secondary_variant.toLowerCase() in ['none', 'false', 'off', '0'])) {
+      if (cluster_primary_variant == cluster_secondary_variant) {
+        error "cluster_primary_variant and cluster_secondary_variant must be different."
+      }
+      cluster_variant_defs << [variant: cluster_secondary_variant, profile: cluster_secondary_profile ?: 'fine', resolution: cluster_resolution_value]
+    }
     def cluster_variant_request_ch = image_input_ch.flatMap { sample_id, _ ->
       cluster_variant_defs.collect { spec ->
         def sample_key = "${sample_id}::${spec.variant}"

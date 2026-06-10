@@ -28,6 +28,7 @@ process BUILD_TISSUE_MASK {
       --preview-factor ${params.tissue_preview_factor} \\
       --work-downsample ${params.tissue_work_downsample} \\
       --auto-no-downsample-max-side ${params.tissue_auto_no_downsample_max_side} \\
+      --max-work-pixels ${params.tissue_max_work_pixels} \\
       --close-radius ${params.tissue_close_radius} \\
       --min-obj-area ${params.tissue_min_obj_area} \\
       --hole-area ${params.tissue_hole_area} \\

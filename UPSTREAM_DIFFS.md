@@ -130,6 +130,9 @@ Changes relative to the previous pipeline behavior:
 2. It now loads only the selected embedding families.
 3. The current default is `tile,inner_square`.
 4. Placeholder handling was added so missing unused embedding families do not block execution.
+5. For large WSI runs, KODAMA uses a memory-bounded landmark/projection path after PCA rather than constructing the full all-cell KODAMA network in RAM.
+6. The runtime image must include the R nearest-neighbor/projection packages `BiocNeighbors`, `RANN`, `RcppHNSW`, `RcppAnnoy`, and `uwot`; these are installed into the micromamba R library, not a user-home R library, because Singularity tasks run with `--no-home`.
+7. The pipeline explicitly sets KODAMA's internal PLS component count with `kodama_ncomp = 2`. This is separate from `kodama_dims_to_run = 20`: KODAMA still receives 20 PCA dimensions, but the native stochastic PLS optimization avoids transient high-component class states that can emit `Mat::col(): index out of bounds` on Linux.
 
 ### MedSAM
 

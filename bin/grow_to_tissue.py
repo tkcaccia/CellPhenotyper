@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 import numpy as np
 
+import tifffile
 from tifffile import imread, imwrite
 from scipy.ndimage import distance_transform_edt
 
@@ -109,6 +110,36 @@ def load_tiff(path: str, name: str) -> np.ndarray:
 def load_mask_2d(path: str, name: str) -> np.ndarray:
     return ensure_2d(load_tiff(path, name), name)
 
+
+def tiff_2d_shape_dtype(path: str, name: str) -> tuple[tuple[int, int], np.dtype]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{name} not found: {path}")
+    with tifffile.TiffFile(path) as tf:
+        page = tf.pages[0]
+        shape = tuple(page.shape)
+        dtype = np.dtype(page.dtype)
+    if len(shape) == 3 and shape[0] == 1:
+        shape = shape[1:]
+    elif len(shape) == 3 and shape[-1] == 1:
+        shape = shape[:2]
+    if len(shape) != 2:
+        raise ValueError(f"{name} must be 2D. Got shape={shape}")
+    return (int(shape[0]), int(shape[1])), dtype
+
+
+def open_tiff_2d(path: str, name: str) -> np.ndarray:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{name} not found: {path}")
+    try:
+        arr = tifffile.memmap(path)
+    except Exception:
+        with tifffile.TiffFile(path) as tf:
+            arr = tf.pages[0].asarray(out="memmap")
+    arr = ensure_2d(arr, name)
+    if not np.issubdtype(arr.dtype, np.integer):
+        arr = arr.astype(np.int32)
+    return arr
+
 def resize_mask_to_shape(mask: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
     """Nearest-neighbor resize for label/binary masks to match target (H,W)."""
     if mask.shape == target_shape:
@@ -122,6 +153,12 @@ def resize_mask_to_shape(mask: np.ndarray, target_shape: tuple[int, int]) -> np.
         anti_aliasing=False
     )
     return out.astype(mask.dtype, copy=False)
+
+
+def row_blocks(n_rows: int, block_rows: int):
+    block_rows = max(1, int(block_rows))
+    for y0 in range(0, int(n_rows), block_rows):
+        yield y0, min(int(n_rows), y0 + block_rows)
 
 
 def require_tool(exe: str):
@@ -240,6 +277,159 @@ def grow_clusters_with_nearest_seed(seeds: np.ndarray, tissue: np.ndarray) -> np
     return grown
 
 
+def downsample_seed_labels_mode(labels: np.ndarray, factor: int, block_rows_out: int) -> np.ndarray:
+    f = max(1, int(factor))
+    h, w = labels.shape
+    out_h = int(np.ceil(h / f))
+    out_w = int(np.ceil(w / f))
+    out = np.zeros((out_h, out_w), dtype=labels.dtype)
+    rows_out = max(1, int(block_rows_out))
+
+    for oy0 in range(0, out_h, rows_out):
+        oy1 = min(out_h, oy0 + rows_out)
+        y0 = oy0 * f
+        y1 = min(h, oy1 * f)
+        block = np.asarray(labels[y0:y1, :])
+        pad_h = (oy1 - oy0) * f - block.shape[0]
+        pad_w = out_w * f - block.shape[1]
+        if pad_h or pad_w:
+            block = np.pad(block, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=0)
+        reshaped = block.reshape((oy1 - oy0), f, out_w, f)
+        ids = np.unique(block)
+        ids = ids[ids != 0]
+        if ids.size == 0:
+            continue
+        best = np.zeros((oy1 - oy0, out_w), dtype=labels.dtype)
+        best_count = np.zeros((oy1 - oy0, out_w), dtype=np.uint16)
+        for lab in ids:
+            counts = (reshaped == lab).sum(axis=(1, 3)).astype(np.uint16, copy=False)
+            take = counts > best_count
+            best[take] = lab
+            best_count[take] = counts[take]
+        out[oy0:oy1, :] = best
+    return out
+
+
+def downsample_tissue_any(tissue: np.ndarray, factor: int, block_rows_out: int) -> np.ndarray:
+    f = max(1, int(factor))
+    h, w = tissue.shape
+    out_h = int(np.ceil(h / f))
+    out_w = int(np.ceil(w / f))
+    out = np.zeros((out_h, out_w), dtype=bool)
+    rows_out = max(1, int(block_rows_out))
+
+    for oy0 in range(0, out_h, rows_out):
+        oy1 = min(out_h, oy0 + rows_out)
+        y0 = oy0 * f
+        y1 = min(h, oy1 * f)
+        block = np.asarray(tissue[y0:y1, :]) > 0
+        pad_h = (oy1 - oy0) * f - block.shape[0]
+        pad_w = out_w * f - block.shape[1]
+        if pad_h or pad_w:
+            block = np.pad(block, ((0, pad_h), (0, pad_w)), mode="constant", constant_values=False)
+        out[oy0:oy1, :] = block.reshape((oy1 - oy0), f, out_w, f).any(axis=(1, 3))
+    return out
+
+
+def write_upsampled_lowres_mask(
+    low_mask: np.ndarray,
+    tissue_full: np.ndarray | None,
+    out_path: str,
+    full_shape: tuple[int, int],
+    factor: int,
+    dtype: np.dtype,
+    block_rows: int,
+) -> tuple[np.ndarray, int]:
+    f = max(1, int(factor))
+    h, w = full_shape
+    out = tifffile.memmap(out_path, shape=(h, w), dtype=dtype, bigtiff=True)
+    nonzero = 0
+    for y0, y1 in row_blocks(h, block_rows):
+        ly0 = y0 // f
+        ly1 = int(np.ceil(y1 / f))
+        low_block = low_mask[ly0:ly1, :]
+        up = np.repeat(np.repeat(low_block, f, axis=0), f, axis=1)
+        y_offset = y0 - ly0 * f
+        up = up[y_offset:y_offset + (y1 - y0), :w]
+        up = up.astype(dtype, copy=False)
+        if tissue_full is not None:
+            tissue_block = np.asarray(tissue_full[y0:y1, :]) > 0
+            up[~tissue_block] = 0
+        out[y0:y1, :] = up
+        nonzero += int(np.count_nonzero(up))
+    out.flush()
+    return out, nonzero
+
+
+def grow_downsampled_to_fullres(
+    seed_path: str,
+    tissue_path: str,
+    out_flat_tif: str,
+    factor: int,
+    block_rows: int,
+    min_seed_area: int,
+    restrict_to_seeded_components_flag: bool,
+    fill_holes_area: int,
+    close_radius: int,
+) -> tuple[np.ndarray, float]:
+    seeds_full = open_tiff_2d(seed_path, "seed mask")
+    f = max(1, int(factor))
+    tissue_arr = open_tiff_2d(tissue_path, "tissue mask")
+    low_shape = (int(np.ceil(seeds_full.shape[0] / f)), int(np.ceil(seeds_full.shape[1] / f)))
+    if tissue_arr.shape == seeds_full.shape:
+        tissue_full_for_write = tissue_arr
+        tissue_low = downsample_tissue_any(tissue_arr, f, max(1, int(np.ceil(block_rows / f))))
+    elif tissue_arr.shape == low_shape:
+        print(f"[INFO] Tissue mask is already on the downsampled grow grid: {tissue_arr.shape}")
+        tissue_full_for_write = None
+        tissue_low = np.asarray(tissue_arr) > 0
+    else:
+        raise ValueError(
+            f"Downsampled grow requires tissue mask on the seed grid or requested low-res grid. "
+            f"Got tissue={tissue_arr.shape}, seeds={seeds_full.shape}, expected_low={low_shape}."
+        )
+
+    rows_out = max(1, int(np.ceil(block_rows / f)))
+    print(f"[INFO] Downsampled grow: full_shape={seeds_full.shape}, factor={f}, block_rows={block_rows}")
+    seeds_low = downsample_seed_labels_mode(seeds_full, f, rows_out)
+    print(f"[INFO] Downsampled grow grid: {seeds_low.shape}, seed_labels={np.unique(seeds_low[seeds_low > 0]).tolist()}")
+
+    low_fill_holes_area = max(1, int(np.ceil(fill_holes_area / float(f * f)))) if fill_holes_area > 0 else 0
+    low_close_radius = max(1, int(np.ceil(close_radius / float(f)))) if close_radius > 0 else 0
+    tissue_low = improve_tissue_mask(
+        tissue_bool=tissue_low,
+        image_rgb=None,
+        fill_holes_area=low_fill_holes_area,
+        close_radius=low_close_radius,
+        add_nuclei=False,
+        nuclei_thresh=0,
+        nuclei_dilate=0,
+    )
+
+    low_min_seed_area = max(1, int(np.ceil(min_seed_area / float(f * f)))) if min_seed_area > 1 else 0
+    if low_min_seed_area > 1:
+        seeds_low = remove_small_seed_components_per_label(seeds_low, low_min_seed_area)
+    seeds_low[~tissue_low] = 0
+    if restrict_to_seeded_components_flag:
+        tissue_low = restrict_tissue_to_seeded_components(tissue_low, seeds_low)
+        seeds_low[~tissue_low] = 0
+
+    grown_low = grow_clusters_with_nearest_seed(seeds_low, tissue_low)
+    maxlab = int(grown_low.max()) if grown_low.size else 0
+    out_dtype = np.uint16 if maxlab <= 65535 else np.uint32
+    grown_full, nonzero = write_upsampled_lowres_mask(
+        grown_low,
+        tissue_full_for_write,
+        out_flat_tif,
+        full_shape=seeds_full.shape,
+        factor=f,
+        dtype=out_dtype,
+        block_rows=block_rows,
+    )
+    frac = float(nonzero / max(1, seeds_full.shape[0] * seeds_full.shape[1]))
+    return grown_full, frac
+
+
 def downsample_nearest(arr: np.ndarray, factor: int) -> np.ndarray:
     f = int(max(1, factor))
     if f <= 1:
@@ -276,6 +466,50 @@ def to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
     return np.clip(arr_f, 0, 255).astype(np.uint8)
 
 
+def preview_metadata(path: str) -> tuple[tuple[int, ...], np.dtype, int]:
+    with tifffile.TiffFile(path) as tf:
+        page = tf.pages[0]
+        shape = tuple(page.shape)
+        dtype = np.dtype(page.dtype)
+    samples = 1
+    if len(shape) == 3:
+        if shape[-1] in (3, 4):
+            samples = shape[-1]
+        elif shape[0] in (3, 4):
+            samples = shape[0]
+    return shape, dtype, samples
+
+
+def read_preview_background_small(path: str, expected_shape: tuple[int, int], factor: int) -> np.ndarray | None:
+    f = max(1, int(factor))
+    try:
+        bg = tifffile.memmap(path)
+        if bg.ndim > 3:
+            bg = bg[0]
+        if bg.ndim == 2:
+            bg = np.asarray(bg[::f, ::f])
+        elif bg.ndim == 3 and bg.shape[0] in (3, 4) and bg.shape[-1] not in (3, 4):
+            bg = np.asarray(bg[:, ::f, ::f])
+        elif bg.ndim == 3:
+            bg = np.asarray(bg[::f, ::f, :])
+        else:
+            return None
+    except Exception:
+        if f > 1:
+            return None
+        bg = imread(path)
+    if bg.ndim > 3:
+        bg = bg[0]
+    bg_rgb = to_uint8_rgb(bg)
+    expected_small = ((expected_shape[0] + f - 1) // f, (expected_shape[1] + f - 1) // f)
+    if bg_rgb.shape[:2] not in (expected_shape, expected_small):
+        raise ValueError(
+            f"Preview background shape {bg_rgb.shape[:2]} does not match grown mask shape {expected_shape} "
+            f"or downsampled shape {expected_small}."
+        )
+    return bg_rgb
+
+
 def colorize_label_mask(label_mask: np.ndarray, default_value: int = 0) -> np.ndarray:
     out = np.zeros(label_mask.shape + (3,), dtype=np.uint8)
     label_ids = np.unique(label_mask)
@@ -301,22 +535,23 @@ def save_preview_png(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    bg_est_bytes = grown.shape[0] * grown.shape[1] * 3
     if image_path and os.path.exists(image_path):
-        bg = to_uint8_rgb(imread(image_path))
-        if bg.shape[:2] != grown.shape:
-            raise ValueError(
-                f"Preview background shape {bg.shape[:2]} does not match grown mask shape {grown.shape}. "
-                "Expected crop_roi.tif aligned with mask."
-            )
-    else:
-        bg = np.full(grown.shape + (3,), 255, dtype=np.uint8)
-
-    est_bytes = int(bg.nbytes + grown.nbytes)
+        bg_shape, bg_dtype, bg_samples = preview_metadata(image_path)
+        bg_est_bytes = int(np.prod(bg_shape[:2])) * bg_samples * int(bg_dtype.itemsize)
+    est_bytes = int(bg_est_bytes + grown.nbytes)
     threshold_bytes = int(float(size_threshold_mb) * 1024 * 1024)
     use_factor = int(max(1, factor)) if est_bytes > threshold_bytes else 1
 
-    bg_small = downsample_nearest(bg, use_factor)
     grown_small = downsample_nearest(grown, use_factor)
+    if image_path and os.path.exists(image_path):
+        bg_small = read_preview_background_small(image_path, grown.shape, use_factor)
+    else:
+        bg_small = None
+    if bg_small is None:
+        bg_small = np.full(grown_small.shape + (3,), 255, dtype=np.uint8)
+    elif bg_small.shape[:2] != grown_small.shape:
+        bg_small = downsample_nearest(bg_small, use_factor)
     overlay = colorize_label_mask(grown_small, default_value=default_value)
     fg = grown_small != default_value
 
@@ -444,6 +679,12 @@ def main():
     ap.add_argument("--legacy", action="store_true", help="Write Bio-Formats 5.9.x-compatible pyramid.")
     ap.add_argument("--overwrite", action="store_true", help="Overwrite existing output.")
     ap.add_argument("--keep-tmp", action="store_true", help="Keep intermediate .rawdir.")
+    ap.add_argument("--work-downsample", type=int, default=1,
+                    help="For very large masks, grow on this downsampled grid and stream back to full resolution.")
+    ap.add_argument("--fullres-max-pixels", type=int, default=50_000_000,
+                    help="Use full-resolution EDT only up to this many pixels when --work-downsample > 1.")
+    ap.add_argument("--block-rows", type=int, default=512,
+                    help="Rows per block for memory-safe full-resolution writes.")
 
     ap.add_argument("--method", default="classic_existing", choices=["classic_existing", "medsam_border_refine"],
                     help="Step-16 method: original baseline or MedSAM border refinement.")
@@ -461,6 +702,69 @@ def main():
     ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=False)
 
     args = ap.parse_args()
+
+    seed_shape, _ = tiff_2d_shape_dtype(args.mask, "seed mask")
+    seed_pixels = int(seed_shape[0] * seed_shape[1])
+    use_downsampled_classic = (
+        args.method == "classic_existing"
+        and int(args.work_downsample) > 1
+        and seed_pixels > int(args.fullres_max_pixels)
+    )
+    if use_downsampled_classic:
+        print(
+            f"[INFO] Large mask detected ({seed_pixels:,} px > {int(args.fullres_max_pixels):,}); "
+            f"using downsampled classic grow with factor={int(args.work_downsample)}."
+        )
+        outdir = os.path.dirname(args.out) or "."
+        os.makedirs(outdir, exist_ok=True)
+        tmp_flat = os.path.join(outdir, f".tmp_flat_{os.getpid()}_{int(time.time())}.tif")
+        grown, frac = grow_downsampled_to_fullres(
+            seed_path=args.mask,
+            tissue_path=args.tissue_mask,
+            out_flat_tif=tmp_flat,
+            factor=int(args.work_downsample),
+            block_rows=int(args.block_rows),
+            min_seed_area=int(args.min_seed_area),
+            restrict_to_seeded_components_flag=bool(args.restrict_to_seeded_components),
+            fill_holes_area=int(args.fill_holes_area),
+            close_radius=int(args.close_radius),
+        )
+        try:
+            pyramidize_with_raw2ometiff(
+                in_tif=tmp_flat,
+                out_ome_tif=args.out,
+                compression=args.pyr_compression,
+                max_workers=args.max_workers,
+                downsample=args.downsample,
+                overwrite=args.overwrite,
+                keep_tmp=args.keep_tmp,
+                legacy=args.legacy,
+            )
+        except Exception as e:
+            print(f"[WARN] Pyramidal conversion failed ({e}). Writing flat TIFF fallback to: {args.out}")
+            if os.path.exists(args.out):
+                if args.overwrite:
+                    os.remove(args.out)
+                else:
+                    raise
+            shutil.copyfile(tmp_flat, args.out)
+        if args.preview:
+            save_preview_png(
+                image_path=args.image,
+                grown=grown,
+                out_png=args.preview,
+                factor=args.preview_factor,
+                size_threshold_mb=args.preview_threshold_mb,
+                alpha=args.preview_alpha,
+                default_value=0,
+            )
+        try:
+            os.remove(tmp_flat)
+        except Exception:
+            pass
+        print(f"[OK] method={args.method} downsampled_factor={int(args.work_downsample)} labeled tissue fraction: {frac:.4f}")
+        print(f"[OK] done: {args.out}")
+        return
 
     seeds = load_mask_2d(args.mask, "seed mask").astype(np.int32)
     tissue_raw = load_mask_2d(args.tissue_mask, "tissue mask")

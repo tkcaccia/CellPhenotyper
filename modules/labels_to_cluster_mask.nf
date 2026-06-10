@@ -26,6 +26,7 @@ process LABELS_TO_CLUSTER_MASK {
       --out "${sample_id}_${cluster_variant}_cluster_mask.tif" \
       --default ${params.cluster_mask_default_value} \
       --compress "${params.cluster_mask_compression}" \
+      --block-rows ${params.cluster_mask_block_rows} \
       --preview "${sample_id}_${cluster_variant}_cluster_mask_preview.png" \
       --preview-factor ${params.cluster_mask_preview_factor} \
       --preview-threshold-mb ${params.cluster_mask_preview_threshold_mb} \

@@ -7,7 +7,6 @@ import tifffile
 import zarr
 from PIL import Image
 
-from skimage.color import rgb2lab
 from skimage.filters import threshold_otsu
 from skimage.morphology import (
     remove_small_objects,
@@ -135,6 +134,45 @@ def scaled_cleanup_params(close_radius: int, min_obj_area: int, hole_area: int, 
     hole_area_s = 0 if hole_area <= 0 else max(1, int(round(hole_area / scale2)))
     return close_radius_s, min_obj_area_s, hole_area_s
 
+def round_up_power_of_two(value: int) -> int:
+    value = int(max(1, value))
+    return 1 << (value - 1).bit_length()
+
+def cap_work_downsample(height: int, width: int, requested: int, max_work_pixels: int) -> int:
+    """
+    Keep the tissue-mask working image bounded for WSI-scale inputs.
+
+    Downstream steps resize this mask to the clustering grid, so a coarser
+    working mask is preferable to letting LAB-sized temporaries exhaust RAM.
+    """
+    requested = int(max(1, requested))
+    max_work_pixels = int(max(0, max_work_pixels))
+    if max_work_pixels <= 0:
+        return requested
+
+    out_h = int(np.ceil(height / float(requested)))
+    out_w = int(np.ceil(width / float(requested)))
+    if out_h * out_w <= max_work_pixels:
+        return requested
+
+    needed = int(np.ceil(np.sqrt((float(height) * float(width)) / float(max_work_pixels))))
+    return max(requested, round_up_power_of_two(needed))
+
+def rgb_tissue_score(rgb: np.ndarray) -> np.ndarray:
+    """
+    Memory-light tissue score for RGB slides.
+
+    The older LAB chroma path allocates several large float arrays. This uses
+    uint8 channel spread plus darkness, which captures stained tissue against
+    bright background while keeping only one float32 score image.
+    """
+    maxc = rgb.max(axis=2).astype(np.int16, copy=False)
+    minc = rgb.min(axis=2).astype(np.int16, copy=False)
+    saturation = maxc - minc
+    darkness = 255 - maxc
+    score = np.maximum(saturation * 2, darkness).astype(np.float32, copy=False)
+    return score
+
 def save_preview(mask: np.ndarray, out_png: str, factor: int = 10):
     # Downsample for quick QC
     h, w = mask.shape
@@ -182,15 +220,9 @@ def build_tissue_mask(image: np.ndarray,
             mx = rgb.max()
             rgb = (rgb.astype(np.float32) / (mx if mx else 1.0) * 255.0).clip(0, 255).astype(np.uint8)
 
-        # LAB: tissue tends to deviate from white background in a*/b*
-        lab = rgb2lab(rgb)
-        a = lab[..., 1]
-        b = lab[..., 2]
-        chroma = np.sqrt(a*a + b*b)
-
-        # Otsu threshold on chroma
-        t = threshold_otsu(chroma)
-        mask = chroma > t
+        score = rgb_tissue_score(rgb)
+        t = threshold_otsu(score)
+        mask = score > t
 
     # Clean up
     if close_radius > 0:
@@ -255,6 +287,8 @@ def main():
                     help="Downsample factor used during tissue-mask computation (1 = full resolution).")
     ap.add_argument("--auto-no-downsample-max-side", type=int, default=1024,
                     help="If max(image_height,image_width) <= this value, force work_downsample=1. Set 0 to disable.")
+    ap.add_argument("--max-work-pixels", type=int, default=40000000,
+                    help="Increase work_downsample automatically when the working image would exceed this many pixels. Set 0 to disable.")
 
     # Mask cleanup knobs
     ap.add_argument("--close-radius", type=int, default=10,
@@ -279,6 +313,7 @@ def main():
     if args.auto_no_downsample_max_side > 0:
         if max(h0, w0) <= int(args.auto_no_downsample_max_side):
             work_downsample = 1
+    work_downsample = cap_work_downsample(h0, w0, work_downsample, args.max_work_pixels)
 
     image = read_image_lazy_downsample(args.image, work_downsample)
 

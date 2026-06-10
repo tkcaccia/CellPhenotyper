@@ -112,7 +112,6 @@ PY
     echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=${initial_batch}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
-      rm -rf "\$OUTDIR"
       mkdir -p "\$OUTDIR"
 
       ATTEMPT_ERR=".uni2_attempt_batch_\${ATTEMPT_BATCH}.err"

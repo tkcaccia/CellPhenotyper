@@ -37,6 +37,16 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def medsamSmoothRadius = "--medsam-smooth-radius ${params.medsam_smooth_radius}"
     def medsamClusterTileSize = "--medsam-cluster-tile-size ${params.medsam_cluster_tile_size}"
     def medsamClusterTileOverlap = "--medsam-cluster-tile-overlap ${params.medsam_cluster_tile_overlap}"
+    def medsamLargeImageMode = "--large-image-mode ${(params.medsam_large_image_mode ?: 'auto').toString()}"
+    def medsamLargeImageMaxPixels = "--large-image-max-pixels ${params.medsam_large_image_max_pixels}"
+    def medsamStreamBlockRows = "--stream-block-rows ${params.medsam_stream_block_rows}"
+    def medsamStreamResumeTmp = params.medsam_stream_resume_tmp ? "--stream-resume-tmp \"${params.medsam_stream_resume_tmp}\"" : ''
+    def medsamStreamResumeTiles = (params.medsam_stream_resume_tiles as int) > 0 ? "--stream-resume-tiles ${params.medsam_stream_resume_tiles}" : ''
+    def medsamStreamResumeGridY = (params.medsam_stream_resume_grid_y as int) > 0 ? "--stream-resume-grid-y ${params.medsam_stream_resume_grid_y}" : ''
+    def medsamStreamResumeGridX = (params.medsam_stream_resume_grid_x as int) > 0 ? "--stream-resume-grid-x ${params.medsam_stream_resume_grid_x}" : ''
+    def medsamStreamProgressJson = params.medsam_stream_progress_json ? "--stream-progress-json \"${params.medsam_stream_progress_json}\"" : ''
+    def medsamQcCropSize = "--medsam-qc-crop-size ${params.medsam_qc_crop_size}"
+    def medsamQcRandomSeed = "--medsam-qc-random-seed ${params.medsam_qc_random_seed}"
     def medsamCorePreservation = (params.medsam_force_core_preservation as boolean) ? '--medsam-force-core-preservation' : '--no-medsam-force-core-preservation'
     def medsamSaveDebug = (params.medsam_save_debug as boolean) ? '--medsam-save-debug' : '--no-medsam-save-debug'
     def tail_flags = [overwrite_flag, keep_tmp_flag, legacy_flag].findAll { it?.trim() }.join(' ')
@@ -68,6 +78,16 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       ${medsamSmoothRadius} \
       ${medsamClusterTileSize} \
       ${medsamClusterTileOverlap} \
+      ${medsamLargeImageMode} \
+      ${medsamLargeImageMaxPixels} \
+      ${medsamStreamBlockRows} \
+      ${medsamStreamResumeTmp} \
+      ${medsamStreamResumeTiles} \
+      ${medsamStreamResumeGridY} \
+      ${medsamStreamResumeGridX} \
+      ${medsamStreamProgressJson} \
+      ${medsamQcCropSize} \
+      ${medsamQcRandomSeed} \
       ${medsamCorePreservation} \
       ${medsamSaveDebug} \
       ${tail_flags}

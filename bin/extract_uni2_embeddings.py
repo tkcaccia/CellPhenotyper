@@ -1093,7 +1093,7 @@ def parse_args():
     p.add_argument("--outdir", required=True)
     p.add_argument("--paired-inner-square-outdir", default="",
                    help="Optional second output directory for paired inner_square embeddings")
-    p.add_argument("--paired-inner-square-mode", default="masked_forward",
+    p.add_argument("--paired-inner-square-mode", default="token_subset",
                    choices=["masked_forward", "token_subset"],
                    help=(
                        "How to produce --paired-inner-square-outdir. "
@@ -1147,6 +1147,8 @@ def parse_args():
     p.add_argument("--mask-block", type=int, default=4096)
     p.add_argument("--max-cells", type=int, default=0,
                    help="Process only the first N labels after filtering; intended for quick validation only.")
+    p.add_argument("--disable-grid-resume", action="store_true",
+                   help="Disable grid-level resume from completed UNI2 shard folders.")
 
     # NEW: global scaling sampling
     p.add_argument("--scale-samples", type=int, default=200)
@@ -1161,6 +1163,7 @@ def parse_args():
 def main():
     args = parse_args()
     paired_mode = str(args.paired_inner_square_mode)
+    print(f"[INFO] paired_inner_square_mode={paired_mode}", flush=True)
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     secondary_outdir = Path(args.paired_inner_square_outdir).resolve() if args.paired_inner_square_outdir else None
@@ -1277,6 +1280,7 @@ def main():
             "tile_out": tile_out,
             "row_parts": [],
             "row_count": 0,
+            "total_rows": 0,
             "shard_idx": 0,
             "feat_dim": None,
             "feat_cols": None,
@@ -1291,6 +1295,7 @@ def main():
         feat_df = pd.DataFrame(feats_np, columns=state["feat_cols"])
         state["row_parts"].append(pd.concat([meta_df.reset_index(drop=True), feat_df], axis=1))
         state["row_count"] += feats_np.shape[0]
+        state["total_rows"] += feats_np.shape[0]
 
     def flush_writer(state: Dict[str, Any]):
         if state["row_count"] == 0:
@@ -1301,6 +1306,56 @@ def main():
         state["row_parts"] = []
         state["row_count"] = 0
         state["shard_idx"] += 1
+
+    def grid_marker_path(tile_out: Path) -> Path:
+        return tile_out / f".{tag}_grid_complete.json"
+
+    def grid_marker_matches_current_mode(marker_path: Path) -> bool:
+        try:
+            marker = json.loads(marker_path.read_text())
+        except Exception:
+            return False
+        return str(marker.get("paired_inner_square_mode", "")) == paired_mode
+
+    def grid_is_complete(tile_out: Path, secondary_tile_out: Optional[Path]) -> bool:
+        primary_marker = grid_marker_path(tile_out)
+        if not primary_marker.exists():
+            return False
+        if secondary_tile_out is not None and not grid_marker_matches_current_mode(primary_marker):
+            return False
+        if not any(tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
+            return False
+        if secondary_tile_out is not None:
+            secondary_marker = grid_marker_path(secondary_tile_out)
+            if not secondary_marker.exists():
+                return False
+            if not grid_marker_matches_current_mode(secondary_marker):
+                return False
+            if not any(secondary_tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
+                return False
+        return True
+
+    def reset_incomplete_grid(tile_out: Path, secondary_tile_out: Optional[Path], tile_tiles: Optional[Path]) -> None:
+        for path in (tile_out, secondary_tile_out, tile_tiles):
+            if path is not None and path.exists():
+                shutil.rmtree(path)
+            if path is not None:
+                path.mkdir(parents=True, exist_ok=True)
+
+    def write_grid_marker(state: Dict[str, Any], tr: int, tc: int, start_idx: int, end_idx: int) -> None:
+        marker = {
+            "grid_r": int(tr),
+            "grid_c": int(tc),
+            "index_start": int(start_idx),
+            "index_end": int(end_idx),
+            "rows_written": int(state["total_rows"]),
+            "shards": int(state["shard_idx"]),
+            "encoder": str(args.encoder),
+            "tag": str(tag),
+            "paired_inner_square_mode": str(paired_mode),
+            "completed_at_unix": time.time(),
+        }
+        grid_marker_path(state["tile_out"]).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
 
     batch_primary_items = []
     batch_secondary_items = []
@@ -1409,6 +1464,12 @@ def main():
             tile_out = tile_folder(outdir, tr, tc)
             secondary_tile_out = tile_folder(secondary_outdir, tr, tc) if secondary_outdir is not None else None
             tile_tiles = tile_folder(tiles_root, tr, tc) if args.save_tiles else None
+
+            resume_enabled = not bool(args.disable_grid_resume)
+            if resume_enabled and grid_is_complete(tile_out, secondary_tile_out):
+                print(f"[INFO] UNI2 resume: skipping completed grid {tr:02d},{tc:02d}", flush=True)
+                continue
+            reset_incomplete_grid(tile_out, secondary_tile_out, tile_tiles)
 
             primary_state = init_writer_state(tile_out)
             secondary_state = init_writer_state(secondary_tile_out) if secondary_tile_out is not None else None
@@ -1558,6 +1619,9 @@ def main():
             flush_writer(primary_state)
             if secondary_state is not None:
                 flush_writer(secondary_state)
+            write_grid_marker(primary_state, tr, tc, s, e)
+            if secondary_state is not None:
+                write_grid_marker(secondary_state, tr, tc, s, e)
 
     print("🎉 Done.")
 

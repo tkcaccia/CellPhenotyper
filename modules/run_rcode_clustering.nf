@@ -29,6 +29,17 @@ process RUN_RCODE_CLUSTERING {
       "${sample_id}_${cluster_variant}_cluster.csv" \
       --dim ${params.cluster_kodama_dim} \
       --k ${params.cluster_snn_k} \
+      --algorithm ${params.cluster_algorithm} \
+      --walktrap-clusters ${params.cluster_walktrap_clusters} \
+      --walktrap-max-cells ${params.cluster_walktrap_max_cells} \
+      --walktrap-assign-k ${params.cluster_walktrap_assign_k} \
+      --landmark-cells ${params.cluster_landmark_cells} \
+      --landmark-assign-k ${params.cluster_landmark_assign_k} \
+      --landmark-sample-strategy ${params.cluster_landmark_sample_strategy} \
+      --landmark-density-knn-k ${params.cluster_landmark_density_knn_k} \
+      --landmark-density-power ${params.cluster_landmark_density_power} \
+      --landmark-grid-bins ${params.cluster_landmark_grid_bins} \
+      --landmark-grid-max-per-bin ${params.cluster_landmark_grid_max_per_bin} \
       --resolution ${cluster_resolution} \
       --profile ${cluster_profile} \
       --fine-multiplier ${params.cluster_fine_resolution_multiplier} \

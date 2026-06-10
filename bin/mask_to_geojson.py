@@ -8,6 +8,7 @@ import tifffile
 import rasterio
 from rasterio.features import shapes
 from shapely.geometry import shape as shp_shape
+from shapely.geometry import Polygon
 from shapely.geometry import mapping
 from shapely.ops import unary_union
 
@@ -22,14 +23,50 @@ def normalize_mask(arr: np.ndarray) -> np.ndarray:
     raise ValueError(f"Mask must be 2D. Got shape={arr.shape}")
 
 
-def read_tiff_page(path: str, page: int) -> np.ndarray:
+def _spatial_shape(shape):
+    shape = tuple(int(x) for x in shape)
+    if len(shape) == 2:
+        return shape
+    if len(shape) == 3 and shape[0] == 1:
+        return shape[1:]
+    if len(shape) == 3 and shape[-1] == 1:
+        return shape[:2]
+    raise ValueError(f"Mask page must be 2D. Got shape={shape}")
+
+
+def read_tiff_page(path: str, page: int, max_page_side: int) -> tuple[np.ndarray, float, float, int]:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Mask not found: {path}")
     with tifffile.TiffFile(path) as tf:
-        if page < 0 or page >= len(tf.pages):
-            raise ValueError(f"--page {page} out of range. This TIFF has {len(tf.pages)} pages.")
-        arr = tf.pages[page].asarray()
-    return normalize_mask(arr)
+        series = tf.series[0]
+        levels = list(getattr(series, "levels", []) or [])
+        if levels:
+            full_h, full_w = _spatial_shape(levels[0].shape)
+            if page < 0:
+                max_page_side = max(1, int(max_page_side))
+                chosen = 0
+                for idx, level in enumerate(levels):
+                    lh, lw = _spatial_shape(level.shape)
+                    chosen = idx
+                    if max(lh, lw) <= max_page_side:
+                        break
+                page = chosen
+            if page < 0 or page >= len(levels):
+                raise ValueError(f"--page {page} out of range. This TIFF series has {len(levels)} pyramid levels.")
+            level = levels[page]
+            arr = level.asarray()
+            page_h, page_w = _spatial_shape(arr.shape)
+        else:
+            if page < 0:
+                page = 0
+            if page >= len(tf.pages):
+                raise ValueError(f"--page {page} out of range. This TIFF has {len(tf.pages)} pages.")
+            full_h, full_w = _spatial_shape(tf.pages[0].shape)
+            arr = tf.pages[page].asarray()
+            page_h, page_w = _spatial_shape(arr.shape)
+    scale_x = float(full_w) / float(page_w)
+    scale_y = float(full_h) / float(page_h)
+    return normalize_mask(arr), scale_x, scale_y, int(page)
 
 
 def cast_for_rasterio(data: np.ndarray, binary: bool) -> np.ndarray:
@@ -106,20 +143,107 @@ def drop_holes(geom):
     return geom
 
 
-def iter_polygons_from_mask(mask2d: np.ndarray, binary: bool):
+def iter_polygons_from_mask(mask2d: np.ndarray, binary: bool, scale_x: float, scale_y: float):
     data = cast_for_rasterio(mask2d, binary=binary)
 
-    # Pixel coords: x=col, y=row
-    transform = rasterio.Affine(1, 0, 0, 0, 1, 0)
+    # Pixel coords: x=col, y=row, scaled back to level-0 pixel coordinates.
+    transform = rasterio.Affine(float(scale_x), 0, 0, 0, float(scale_y), 0)
 
     for geom, val in shapes(data, mask=(data > 0), transform=transform, connectivity=8):
         yield geom, int(val)
 
 
+def default_polygon_backend() -> str:
+    try:
+        import cv2  # noqa: F401
+        return "opencv"
+    except Exception:
+        pass
+    try:
+        from skimage import measure  # noqa: F401
+        return "skimage"
+    except Exception:
+        return "rasterio"
+
+
+def contour_to_polygon(contour, scale_x: float, scale_y: float):
+    pts = contour.reshape(-1, 2)
+    if pts.shape[0] < 3:
+        return None
+    coords = [(float(x) * float(scale_x), float(y) * float(scale_y)) for x, y in pts]
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+    poly = Polygon(coords)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if poly.is_empty:
+        return None
+    return poly
+
+
+def skimage_contour_to_polygon(contour, scale_x: float, scale_y: float):
+    if contour.shape[0] < 3:
+        return None
+    coords = [(float(col) * float(scale_x), float(row) * float(scale_y)) for row, col in contour]
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+    poly = Polygon(coords)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if poly.is_empty:
+        return None
+    return poly
+
+
+def iter_contours_from_mask(mask2d: np.ndarray, binary: bool, scale_x: float, scale_y: float, min_area: float, backend: str):
+    if backend == "skimage":
+        yield from iter_skimage_contours_from_mask(mask2d, binary, scale_x, scale_y, min_area)
+        return
+    import cv2
+
+    data = cast_for_rasterio(mask2d, binary=binary)
+    values = [1] if binary else [int(v) for v in np.unique(data) if int(v) > 0]
+    area_scale = float(scale_x) * float(scale_y)
+    for val in values:
+        if binary:
+            m = (data > 0).astype(np.uint8)
+        else:
+            m = (data == val).astype(np.uint8)
+        contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            if contour.shape[0] < 3:
+                continue
+            if min_area > 0 and (float(cv2.contourArea(contour)) * area_scale) < float(min_area):
+                continue
+            poly = contour_to_polygon(contour, scale_x, scale_y)
+            if poly is not None:
+                yield poly, val
+
+
+def iter_skimage_contours_from_mask(mask2d: np.ndarray, binary: bool, scale_x: float, scale_y: float, min_area: float):
+    from skimage import measure
+
+    data = cast_for_rasterio(mask2d, binary=binary)
+    values = [1] if binary else [int(v) for v in np.unique(data) if int(v) > 0]
+    for val in values:
+        m = (data > 0) if binary else (data == val)
+        contours = measure.find_contours(m.astype(np.uint8), 0.5, fully_connected="high")
+        for contour in contours:
+            poly = skimage_contour_to_polygon(contour, scale_x, scale_y)
+            if poly is None:
+                continue
+            if min_area > 0 and poly.area < float(min_area):
+                continue
+            yield poly, val
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mask", required=True, help="Input mask TIFF (binary or labeled; can be pyramidal/OME-TIFF)")
-    ap.add_argument("--page", type=int, default=0, help="TIFF page to read (0 = full-res)")
+    ap.add_argument("--page", type=int, default=0,
+                    help="TIFF page/pyramid level to read (0 = full-res; -1 = auto-select by --max-page-side)")
+    ap.add_argument("--max-page-side", type=int, default=8192,
+                    help="When --page -1, choose the first pyramid level with max(height,width) <= this value.")
     ap.add_argument("--out", required=True, help="Output GeoJSON file")
 
     ap.add_argument("--binary", action="store_true", help="Treat mask as binary foreground (mask>0)")
@@ -128,6 +252,8 @@ def main():
     ap.add_argument("--dissolve-by-value", action="store_true",
                     help="Labeled: merge polygons per value into one MultiPolygon per value (best for small GeoJSON).")
     ap.add_argument("--min-area", type=float, default=0.0, help="Drop polygons with area < this (pixel^2)")
+    ap.add_argument("--polygon-backend", choices=("auto", "opencv", "skimage", "rasterio"), default="auto",
+                    help="Polygon extraction backend. Contour backends are faster for one-geometry-per-label outputs.")
 
     # Strong smoothing controls
     ap.add_argument("--smooth-buffer", type=float, default=0.0,
@@ -150,7 +276,15 @@ def main():
 
     args = ap.parse_args()
 
-    mask2d = read_tiff_page(args.mask, args.page)
+    mask2d, scale_x, scale_y, resolved_page = read_tiff_page(args.mask, args.page, args.max_page_side)
+    polygon_backend = args.polygon_backend
+    if polygon_backend == "auto":
+        polygon_backend = default_polygon_backend()
+    print(
+        f"[INFO] mask page={resolved_page} shape={mask2d.shape} "
+        f"scale_x={scale_x:.6g} scale_y={scale_y:.6g} polygon_backend={polygon_backend}",
+        flush=True,
+    )
     group_map = load_group_map(args.group_map)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -161,19 +295,23 @@ def main():
     if args.binary:
         if args.dissolve:
             geoms = []
-            for geom, val in iter_polygons_from_mask(mask2d, binary=True):
-                g = shp_shape(geom)
-                if args.min_area > 0 and g.area < args.min_area:
+            polygon_iter = (
+                iter_contours_from_mask(mask2d, binary=True, scale_x=scale_x, scale_y=scale_y, min_area=args.min_area, backend=polygon_backend)
+                if polygon_backend in ("opencv", "skimage")
+                else ((shp_shape(geom), val) for geom, val in iter_polygons_from_mask(mask2d, binary=True, scale_x=scale_x, scale_y=scale_y))
+            )
+            for g, val in polygon_iter:
+                if polygon_backend not in ("opencv", "skimage") and args.min_area > 0 and g.area < args.min_area:
                     continue
-                g = smooth_geom(g, args.smooth_buffer, args.smooth_passes,
-                                args.simplify, args.preserve_topology)
-                if args.fill_holes:
-                    g = drop_holes(g)
                 if not g.is_empty:
                     geoms.append(g)
 
             if geoms:
                 merged = unary_union(geoms)
+                merged = smooth_geom(merged, args.smooth_buffer, args.smooth_passes,
+                                     args.simplify, args.preserve_topology)
+                if args.fill_holes:
+                    merged = drop_holes(merged)
                 features.append({
                     "type": "Feature",
                     "geometry": mapping(merged),
@@ -183,7 +321,7 @@ def main():
                     }
                 })
         else:
-            for geom, val in iter_polygons_from_mask(mask2d, binary=True):
+            for geom, val in iter_polygons_from_mask(mask2d, binary=True, scale_x=scale_x, scale_y=scale_y):
                 g = shp_shape(geom)
                 if args.min_area > 0 and g.area < args.min_area:
                     continue
@@ -212,20 +350,24 @@ def main():
     if args.dissolve_by_value:
         # buckets: value -> list of geometries; then unary_union into one feature per value
         buckets: dict[int, list] = {}
-        for geom, val in iter_polygons_from_mask(mask2d, binary=False):
-            g = shp_shape(geom)
-            if args.min_area > 0 and g.area < args.min_area:
+        polygon_iter = (
+            iter_contours_from_mask(mask2d, binary=False, scale_x=scale_x, scale_y=scale_y, min_area=args.min_area, backend=polygon_backend)
+            if polygon_backend in ("opencv", "skimage")
+            else ((shp_shape(geom), val) for geom, val in iter_polygons_from_mask(mask2d, binary=False, scale_x=scale_x, scale_y=scale_y))
+        )
+        for g, val in polygon_iter:
+            if polygon_backend not in ("opencv", "skimage") and args.min_area > 0 and g.area < args.min_area:
                 continue
-            g = smooth_geom(g, args.smooth_buffer, args.smooth_passes,
-                            args.simplify, args.preserve_topology)
-            if args.fill_holes:
-                g = drop_holes(g)
             if g.is_empty:
                 continue
             buckets.setdefault(val, []).append(g)
 
         for val, geoms in sorted(buckets.items(), key=lambda x: x[0]):
             merged = unary_union(geoms)
+            merged = smooth_geom(merged, args.smooth_buffer, args.smooth_passes,
+                                 args.simplify, args.preserve_topology)
+            if args.fill_holes:
+                merged = drop_holes(merged)
             features.append({
                 "type": "Feature",
                 "geometry": mapping(merged),
@@ -236,7 +378,7 @@ def main():
             })
     else:
         # one feature per connected region (each still gets classification based on its value)
-        for geom, val in iter_polygons_from_mask(mask2d, binary=False):
+        for geom, val in iter_polygons_from_mask(mask2d, binary=False, scale_x=scale_x, scale_y=scale_y):
             g = shp_shape(geom)
             if args.min_area > 0 and g.area < args.min_area:
                 continue
@@ -259,7 +401,7 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(gj, f)
 
-    print(f"[OK] read: {args.mask} (page {args.page})")
+    print(f"[OK] read: {args.mask} (page {resolved_page})")
     print(f"[OK] wrote {len(features)} feature(s) -> {args.out}")
 
 
