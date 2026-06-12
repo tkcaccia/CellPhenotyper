@@ -424,6 +424,7 @@ workflow {
   def marker_quantification_enabled = (((params.marker_quantification_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def grandqc_enabled = (((params.grandqc_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def tma_enabled = (((params.tma_enable ?: true).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+  def uni2_reuse_existing = (((params.uni2_reuse_existing ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
   def run_convert = should_run_stage('convert')
   def run_grandqc = should_run_stage('grandqc') && grandqc_enabled
   def run_stardist = should_run_stage('stardist')
@@ -433,7 +434,7 @@ workflow {
   def run_cell_assignment = should_run_stage('cell_assignment')
   def run_cytoplasm = should_run_stage('cytoplasm')
   def run_marker_quantification = should_run_stage('marker_quantification') && gigatime_enabled && marker_quantification_enabled
-  def run_uni2 = should_run_stage('uni2')
+  def run_uni2 = should_run_stage('uni2') && !uni2_reuse_existing
   def run_kodama = should_run_stage('kodama')
   def run_clustering = should_run_stage('clustering')
   def run_cluster_mask = should_run_stage('cluster_mask')
@@ -478,6 +479,9 @@ workflow {
   def include_uni2_inner_square = params.uni2_include_inner_square == null ? kodama_requested_modes.contains('inner_square') : (params.uni2_include_inner_square as boolean)
   def use_roi_crop_for_uni2 = params.uni2_use_roi_crop == null ? true : (params.uni2_use_roi_crop as boolean)
   def fuse_tile_inner_square_uni2 = params.uni2_fuse_tile_inner_square == null ? true : (params.uni2_fuse_tile_inner_square as boolean)
+  if (should_run_stage('uni2') && uni2_reuse_existing) {
+    println "UNI-2 stage is inside the requested window, but --uni2_reuse_existing=true; published 09_embeddings will be used instead of recomputing UNI-2."
+  }
   if (run_kodama && run_uni2) {
     def missingKodamaModes = []
     if (kodama_requested_modes.contains('nuclei') && !include_uni2_nuclei) missingKodamaModes << 'nuclei'

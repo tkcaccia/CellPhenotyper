@@ -236,6 +236,7 @@ UNI-2 behavior:
 - `uni2_target_mpp=0.25` makes the source crop physically calibrated before the 224 x 224 UNI2 input transform. If a StarDist crop lost OME pixel-size metadata, UNI2 recovers the MPP from the crop `shift.json` and the original input image when possible; otherwise it uses `uni2_default_source_mpp`.
 - For a source image at `0.08706 µm/px`, the default 224-pixel UNI2 input is extracted from a 643-pixel source crop, giving an effective resolution of about `0.25 µm/px`.
 - `uni2_save_tiles=false` is the production default. KODAMA reads the embedding CSVs, not the per-cell PNG crops, so saving tiles is mainly for debugging/QC and can dominate disk I/O on large runs.
+- `uni2_reuse_existing=false` is the fresh-run default. Set `--uni2_reuse_existing true` for recovery runs where `09_embeddings/<sample>/embeddings_<sample>_*` already exists and should be consumed by KODAMA instead of scheduling UNI-2 again, even if the requested stage window includes `uni2`.
 
 MedSAM behavior:
 
