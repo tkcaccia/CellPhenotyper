@@ -153,7 +153,10 @@ GPU run notes:
 | `gigatime_patch_size` | `256` | Patch size for tiled GigaTIME inference. |
 | `gigatime_stride` | `128` | Patch stride for tiled GigaTIME inference. Lower than `gigatime_patch_size` by default so overlapping tiles and raised-cosine blending reduce visible seam artifacts. |
 | `gigatime_batch_size` | `4` | Batch size for GigaTIME inference. |
-| `gigatime_output_compression` | `deflate` | Compression for `gigatime_probs.ome.tif`. |
+| `gigatime_output_format` | `zarr` | Persist the GigaTIME marker image as chunked `gigatime_probs.zarr` by default. This is safer for WSI-scale slides than writing a pyramidal OME-TIFF during inference because it avoids a full level-0 staging image in host RAM/page cache. |
+| `gigatime_output_channels` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels persisted in the GigaTIME image store. Integrated single-cell quantification is still computed from all GigaTIME model channels. |
+| `gigatime_jpg_markers` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels exported as lightweight JPEG previews for visual QC. |
+| `gigatime_output_compression` | `jpeg` | Compression for `gigatime_probs.ome.tif` when `--gigatime_output_format ome_tiff` is explicitly requested. |
 | `gigatime_cpus` | `8` | CPU allocation. |
 | `gigatime_memory_gb` | `24` | RAM allocation. |
 | `gigatime_time` | `12h` | Time allocation. |
