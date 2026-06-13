@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import csv
+import gc
 import json
 import math
 import os
@@ -24,6 +25,14 @@ try:
     import pyvips
 except Exception:
     pyvips = None
+
+if pyvips is not None:
+    try:
+        pyvips.cache_set_max(0)
+        pyvips.cache_set_max_files(0)
+        pyvips.cache_set_max_mem(64 * 1024 * 1024)
+    except Exception:
+        pass
 
 
 CHANNEL_NAMES = [
@@ -558,7 +567,22 @@ class LazyCropReader:
         self.page = int(page)
         self.factor = max(1, int(factor))
         self.vips_image = None
-        if pyvips is not None:
+        use_pyvips = pyvips is not None
+        if use_pyvips:
+            try:
+                with tifffile.TiffFile(path) as tf:
+                    page_shape = tuple(int(v) for v in tf.pages[self.page].shape)
+                if len(page_shape) >= 2:
+                    if len(page_shape) == 3 and page_shape[-1] in (1, 3, 4):
+                        pixel_count = int(page_shape[0]) * int(page_shape[1])
+                    elif len(page_shape) == 3 and page_shape[0] in (1, 3, 4):
+                        pixel_count = int(page_shape[1]) * int(page_shape[2])
+                    else:
+                        pixel_count = int(page_shape[0]) * int(page_shape[1])
+                    use_pyvips = pixel_count <= int(os.environ.get("GIGATIME_PYVIPS_MAX_PIXELS", "1000000000"))
+            except Exception:
+                use_pyvips = pyvips is not None
+        if use_pyvips:
             try:
                 self.vips_image = pyvips.Image.new_from_file(path, access="random", page=self.page)
             except Exception:
@@ -1626,6 +1650,9 @@ def blockwise_write_ometiff_outputs(
                     )
                     tile_probs = tile_probs[output_channel_indices, :, :]
                     level0[:, y0:y1, x0:x1] = encode_probability_cyx(tile_probs, output_dtype)
+                    del region_rgb, local_positions, accum, counts, tile_probs
+                    if done % 10 == 0:
+                        gc.collect()
                     done += 1
                     if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
                         print(f"[INFO] GigaTIME blockwise tile {done}/{total_tiles}")
@@ -1905,6 +1932,9 @@ def blockwise_write_zarr_outputs(
             )
             tile_probs = tile_probs[output_channel_indices, :, :]
             arr[:, y0:y1, x0:x1] = encode_probability_cyx(tile_probs, output_dtype)
+            del region_rgb, local_positions, accum, counts, tile_probs
+            if done % 10 == 0:
+                gc.collect()
             done += 1
             if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
                 print(f"[INFO] GigaTIME blockwise tile {done}/{total_tiles}", flush=True)
@@ -2053,6 +2083,9 @@ def blockwise_process_without_store(
                 tile_probs_all_cyx=tile_probs,
                 jpg_channel_indices=jpg_channel_indices,
             )
+            del region_rgb, local_positions, accum, counts, tile_probs
+            if done % 10 == 0:
+                gc.collect()
             done += 1
             if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
                 print(f"[INFO] GigaTIME blockwise tile {done}/{total_tiles}", flush=True)
