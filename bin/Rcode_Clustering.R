@@ -455,7 +455,7 @@ knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power
   }
   used_density_k <- max(1L, min(as.integer(density_k), nrow(vis) - 1L))
   density_power <- as.numeric(density_power)
-  density_reference_cells <- suppressWarnings(as.integer(Sys.getenv("KODAMA_LANDMARK_DENSITY_REFERENCE_CELLS", "200000")))
+  density_reference_cells <- suppressWarnings(as.integer(Sys.getenv("KODAMA_LANDMARK_DENSITY_REFERENCE_CELLS", "50000")))
   if (!is.finite(density_reference_cells) || density_reference_cells <= 0L) {
     density_reference_cells <- nrow(vis)
   }
