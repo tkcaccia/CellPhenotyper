@@ -455,15 +455,35 @@ knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power
   }
   used_density_k <- max(1L, min(as.integer(density_k), nrow(vis) - 1L))
   density_power <- as.numeric(density_power)
+  density_reference_cells <- suppressWarnings(as.integer(Sys.getenv("KODAMA_LANDMARK_DENSITY_REFERENCE_CELLS", "200000")))
+  if (!is.finite(density_reference_cells) || density_reference_cells <= 0L) {
+    density_reference_cells <- nrow(vis)
+  }
+  if (nrow(vis) > density_reference_cells) {
+    set.seed(1L)
+    reference_idx <- sort(sample.int(nrow(vis), density_reference_cells))
+    density_vis <- vis[reference_idx, , drop = FALSE]
+    used_density_k <- max(1L, min(as.integer(density_k), nrow(density_vis) - 1L))
+    cat(sprintf(
+      "[INFO] Estimating inverse-distance landmark density on %d/%d reference cells using mean %d-NN distance\n",
+      nrow(density_vis),
+      nrow(vis),
+      used_density_k
+    ))
+    flush.console()
+  } else {
+    reference_idx <- seq_len(nrow(vis))
+    density_vis <- vis
+  }
   cat(sprintf(
-    "[INFO] Selecting %d inverse-distance landmarks from %d cells using mean %d-NN distance and p=%.3f\n",
+    "[INFO] Selecting %d inverse-distance landmarks from %d candidate cells using mean %d-NN distance and p=%.3f\n",
     max_total,
-    nrow(vis),
+    nrow(density_vis),
     used_density_k,
     density_power
   ))
   flush.console()
-  nn <- knn_self_mean_distance(vis, used_density_k)
+  nn <- knn_self_mean_distance(density_vis, used_density_k)
   mean_dist <- nn$mean_dist
   knn_backend <- nn$backend
   cat(sprintf("[INFO] Inverse-distance landmark KNN backend: %s\n", knn_backend))
@@ -482,17 +502,19 @@ knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power
   max_weight <- suppressWarnings(max(weights, na.rm = TRUE))
   if (!is.finite(max_weight) || max_weight <= 0 || sum(weights) <= 0) {
     warning("Inverse-distance landmark weights were invalid; falling back to random landmark sampling.")
-    idx <- sort(sample.int(nrow(vis), max_total))
+    idx_local <- sort(sample.int(nrow(density_vis), max_total))
   } else {
     weights <- weights / max_weight
-    idx <- sort(sample.int(nrow(vis), size = max_total, replace = FALSE, prob = weights))
+    idx_local <- sort(sample.int(nrow(density_vis), size = max_total, replace = FALSE, prob = weights))
   }
+  idx <- sort(reference_idx[idx_local])
   attr(idx, "density_k_used") <- used_density_k
   attr(idx, "density_power") <- density_power
   attr(idx, "density_knn_backend") <- knn_backend
+  attr(idx, "density_reference_cells") <- length(reference_idx)
   attr(idx, "mean_density_distance_median_all") <- stats::median(mean_dist, na.rm = TRUE)
-  attr(idx, "mean_density_distance_median_selected") <- stats::median(mean_dist[idx], na.rm = TRUE)
-  rm(nn, weights, mean_dist)
+  attr(idx, "mean_density_distance_median_selected") <- stats::median(mean_dist[idx_local], na.rm = TRUE)
+  rm(nn, weights, mean_dist, density_vis, reference_idx, idx_local)
   gc(FALSE)
   idx
 }
