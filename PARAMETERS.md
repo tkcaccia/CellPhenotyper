@@ -153,6 +153,8 @@ GPU run notes:
 | `gigatime_patch_size` | `256` | Patch size for tiled GigaTIME inference. |
 | `gigatime_stride` | `128` | Patch stride for tiled GigaTIME inference. Lower than `gigatime_patch_size` by default so overlapping tiles and raised-cosine blending reduce visible seam artifacts. |
 | `gigatime_batch_size` | `4` | Batch size for GigaTIME inference. |
+| `gigatime_strict_target_mpp` | `false` | When `false`, GigaTIME uses the requested target MPP when feasible but may increase the effective MPP for very large WSI to respect `gigatime_max_output_gib`. This prevents full-slide native-resolution outputs from exhausting host RAM. |
+| `gigatime_max_output_gib` | `8.0` | Maximum estimated uncompressed persisted GigaTIME image size before automatic extra downsampling is applied when strict target MPP is disabled. |
 | `gigatime_output_format` | `zarr` | Persist the GigaTIME marker image as chunked `gigatime_probs.zarr` by default. This is safer for WSI-scale slides than writing a pyramidal OME-TIFF during inference because it avoids a full level-0 staging image in host RAM/page cache. |
 | `gigatime_output_channels` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels persisted in the GigaTIME image store. Integrated single-cell quantification is still computed from all GigaTIME model channels. |
 | `gigatime_jpg_markers` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels exported as lightweight JPEG previews for visual QC. |
