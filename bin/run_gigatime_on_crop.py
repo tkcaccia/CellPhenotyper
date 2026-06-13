@@ -762,13 +762,18 @@ class TileQuantifier:
         target_shape: tuple[int, int],
         channel_names: list[str],
         block_size: int,
+        max_label: int | None = None,
     ):
         self.mask_name = str(mask_name)
         self.mask_path = str(mask_path)
         self.target_shape = (int(target_shape[0]), int(target_shape[1]))
         self.channel_names = list(channel_names)
         self.mask_reader = LazyMaskReader(mask_path)
-        self.max_label = _scan_max_label(self.mask_reader, self.target_shape, block_size)
+        self.max_label = int(max_label) if max_label is not None else _scan_max_label(
+            self.mask_reader,
+            self.target_shape,
+            block_size,
+        )
         self.enabled = self.max_label > 0
         self.counts = np.zeros(self.max_label + 1, dtype=np.int64) if self.enabled else None
         self.sum_y = np.zeros(self.max_label + 1, dtype=np.float64) if self.enabled else None
@@ -1369,16 +1374,17 @@ def build_quantifiers(
     block_size: int,
 ) -> list[TileQuantifier]:
     quantifiers: list[TileQuantifier] = []
+    shared_max_label: int | None = None
     if nuclei_mask_path:
-        quantifiers.append(
-            TileQuantifier(
-                mask_name="nuclei",
-                mask_path=nuclei_mask_path,
-                target_shape=target_shape,
-                channel_names=channel_names,
-                block_size=block_size,
-            )
+        nuclei_quantifier = TileQuantifier(
+            mask_name="nuclei",
+            mask_path=nuclei_mask_path,
+            target_shape=target_shape,
+            channel_names=channel_names,
+            block_size=block_size,
         )
+        shared_max_label = int(nuclei_quantifier.max_label)
+        quantifiers.append(nuclei_quantifier)
     if cyto_mask_path:
         quantifiers.append(
             TileQuantifier(
@@ -1387,6 +1393,7 @@ def build_quantifiers(
                 target_shape=target_shape,
                 channel_names=channel_names,
                 block_size=block_size,
+                max_label=shared_max_label,
             )
         )
     return quantifiers
