@@ -50,8 +50,23 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def medsamCorePreservation = (params.medsam_force_core_preservation as boolean) ? '--medsam-force-core-preservation' : '--no-medsam-force-core-preservation'
     def medsamSaveDebug = (params.medsam_save_debug as boolean) ? '--medsam-save-debug' : '--no-medsam-save-debug'
     def tail_flags = [overwrite_flag, keep_tmp_flag, legacy_flag].findAll { it?.trim() }.join(' ')
+    def memoryBudgetGb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
+    def medsamAutoHardware = (params.hardware_auto as boolean) && (params.medsam_refine_auto_hardware as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu'
+    def resolvedMaxWorkers = Math.max(1, Math.min(task.cpus as int, params.medsam_refine_max_workers as int))
+    if (medsamAutoHardware) {
+      def autoWorkerCap = Math.max(resolvedMaxWorkers, params.medsam_refine_max_auto_workers as int)
+      def profileWorkers = resolvedMaxWorkers
+      if (hardwareProfile == 'aggressive' && memoryBudgetGb >= 32) {
+        profileWorkers = Math.min(autoWorkerCap, 4)
+      } else if (hardwareProfile != 'conservative' && memoryBudgetGb >= 24) {
+        profileWorkers = Math.min(autoWorkerCap, 3)
+      }
+      resolvedMaxWorkers = Math.max(resolvedMaxWorkers, Math.min(task.cpus as int, profileWorkers))
+    }
     """
     set -euo pipefail
+    echo "[INFO] MedSAM runtime tune: profile=${hardwareProfile}, auto_hardware=${medsamAutoHardware}, memory_budget_gb=${memoryBudgetGb}, max_workers=${resolvedMaxWorkers}"
 
     python "${refine_script}" \
       --sample-id "${sample_id}_${cluster_variant}" \
@@ -64,7 +79,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       --preview-threshold-mb ${params.grow_preview_threshold_mb} \
       --preview-alpha ${params.grow_preview_alpha} \
       --pyr-compression ${params.grow_pyr_compression} \
-      --max-workers ${Math.max(1, Math.min(task.cpus as int, params.medsam_refine_max_workers as int))} \
+      --max-workers ${resolvedMaxWorkers} \
       --downsample ${params.grow_downsample} \
       ${medsamCheckpoint} \
       ${medsamDevice} \

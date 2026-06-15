@@ -29,7 +29,15 @@ process RUN_GIGATIME_ON_CROP {
     def skip_background_flag = params.gigatime_skip_background_blocks ? '--skip-background-blocks' : ''
     def jpg_save_tiles_flag = params.gigatime_jpg_save_tiles ? '--jpg-save-tiles' : ''
     def output_format = params.gigatime_output_format ?: 'ome_tiff'
-    def auto_hardware_flag = params.gigatime_auto_hardware ? '--auto-hardware' : ''
+    def global_auto_hardware = params.containsKey('hardware_auto') ? params.hardware_auto : true
+    def resolved_auto_hardware = params.gigatime_auto_hardware == null ? global_auto_hardware : params.gigatime_auto_hardware
+    def resolved_hardware_profile = params.gigatime_hardware_profile?.toString()?.trim()
+    if (!resolved_hardware_profile) resolved_hardware_profile = (params.hardware_profile ?: 'balanced').toString()
+    def resolved_max_auto_batch = (params.gigatime_max_auto_batch as int) > 0 ? (params.gigatime_max_auto_batch as int) : (params.hardware_max_auto_batch as int)
+    def resolved_max_auto_block_size = (params.gigatime_max_auto_block_size as int) > 0 ? (params.gigatime_max_auto_block_size as int) : (params.hardware_max_auto_block_size as int)
+    def resolved_max_auto_output_gib = (params.gigatime_max_auto_output_gib as double) > 0 ? (params.gigatime_max_auto_output_gib as double) : (params.hardware_max_auto_output_gib as double)
+    def resolved_min_free_system_gb = (params.gigatime_min_free_system_gb as double) > 0 ? (params.gigatime_min_free_system_gb as double) : (params.hardware_min_free_system_gb as double)
+    def auto_hardware_flag = resolved_auto_hardware ? '--auto-hardware' : ''
     def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
     """
     set -euo pipefail
@@ -99,12 +107,12 @@ PY
       --stride ${params.gigatime_stride} \\
       --batch-size ${params.gigatime_batch_size} \\
       ${auto_hardware_flag} \\
-      --hardware-profile ${params.gigatime_hardware_profile} \\
-      --max-auto-batch ${params.gigatime_max_auto_batch} \\
-      --max-auto-block-size ${params.gigatime_max_auto_block_size} \\
-      --max-auto-output-gib ${params.gigatime_max_auto_output_gib} \\
+      --hardware-profile ${resolved_hardware_profile} \\
+      --max-auto-batch ${resolved_max_auto_batch} \\
+      --max-auto-block-size ${resolved_max_auto_block_size} \\
+      --max-auto-output-gib ${resolved_max_auto_output_gib} \\
       --task-memory-gb ${task_mem_gb} \\
-      --min-free-system-gb ${params.gigatime_min_free_system_gb} \\
+      --min-free-system-gb ${resolved_min_free_system_gb} \\
       --device "${device_value}" \\
       --auto-threshold-mpix ${params.gigatime_auto_threshold_mpix} \\
       --max-side ${params.gigatime_max_side} \\

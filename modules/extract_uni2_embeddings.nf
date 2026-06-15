@@ -109,7 +109,45 @@ PY
 
     OUTDIR="embeddings_${sample_id}_${embedding_mode}"
     ATTEMPT_BATCH=${initial_batch}
-    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=${initial_batch}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
+    HARDWARE_AUTO="${params.hardware_auto}"
+    UNI2_AUTO_HARDWARE="${params.uni2_auto_hardware}"
+    HARDWARE_PROFILE="${params.hardware_profile}"
+    UNI2_MAX_AUTO_BATCH="${params.uni2_max_auto_batch}"
+    if [[ "${device_value}" == "cuda" && "\$HARDWARE_AUTO" == "true" && "\$UNI2_AUTO_HARDWARE" == "true" ]]; then
+      GPU_TOTAL_MIB=0
+      if command -v nvidia-smi >/dev/null 2>&1; then
+        GPU_TOTAL_MIB="\$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | awk '{print int(\$1)}')"
+      fi
+      AUTO_BATCH=${requested_batch}
+      case "\$HARDWARE_PROFILE" in
+        aggressive)
+          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=256
+          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=128
+          else AUTO_BATCH=96
+          fi
+          ;;
+        conservative)
+          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=96
+          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=64
+          else AUTO_BATCH=32
+          fi
+          ;;
+        *)
+          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=96
+          else AUTO_BATCH=64
+          fi
+          ;;
+      esac
+      if [[ ${task_mem_gb} -le 16 && "\$AUTO_BATCH" -gt 64 ]]; then AUTO_BATCH=64; fi
+      if [[ ${task_mem_gb} -le 24 && "\$AUTO_BATCH" -gt 128 ]]; then AUTO_BATCH=128; fi
+      if [[ "\$AUTO_BATCH" -gt "\$UNI2_MAX_AUTO_BATCH" ]]; then AUTO_BATCH="\$UNI2_MAX_AUTO_BATCH"; fi
+      if [[ "\$AUTO_BATCH" -gt "\$ATTEMPT_BATCH" ]]; then ATTEMPT_BATCH="\$AUTO_BATCH"; fi
+    fi
+    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
       mkdir -p "\$OUTDIR"

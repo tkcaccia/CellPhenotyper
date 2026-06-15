@@ -36,6 +36,30 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
     def memoryBudgetGb = Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))
+    def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
+    def stardistAutoHardware = (params.hardware_auto as boolean) && (params.stardist_auto_hardware as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu'
+    def resolvedTilesX = Math.max(1, params.stardist_tiles_x as int)
+    def resolvedTilesY = Math.max(1, params.stardist_tiles_y as int)
+    def resolvedBigBlockSize = Math.max(512, params.stardist_big_block_size as int)
+    def resolvedBigTilesX = Math.max(1, params.stardist_big_tiles_x as int)
+    def resolvedBigTilesY = Math.max(1, params.stardist_big_tiles_y as int)
+    if (stardistAutoHardware) {
+      def minTiles = Math.max(1, params.stardist_min_auto_tiles as int)
+      def maxBlock = Math.max(resolvedBigBlockSize, params.stardist_max_auto_block_size as int)
+      if (hardwareProfile == 'aggressive' && memoryBudgetGb >= 32) {
+        resolvedTilesX = Math.max(minTiles, Math.min(resolvedTilesX, 8))
+        resolvedTilesY = Math.max(minTiles, Math.min(resolvedTilesY, 8))
+        resolvedBigBlockSize = Math.min(maxBlock, Math.max(resolvedBigBlockSize, 8192))
+        resolvedBigTilesX = Math.max(2, Math.min(resolvedBigTilesX, 2))
+        resolvedBigTilesY = Math.max(2, Math.min(resolvedBigTilesY, 2))
+      } else if (hardwareProfile != 'conservative' && memoryBudgetGb >= 24) {
+        resolvedTilesX = Math.max(minTiles, Math.min(resolvedTilesX, 16))
+        resolvedTilesY = Math.max(minTiles, Math.min(resolvedTilesY, 16))
+        resolvedBigBlockSize = Math.min(maxBlock, Math.max(resolvedBigBlockSize, 6144))
+        resolvedBigTilesX = Math.max(2, Math.min(resolvedBigTilesX, 3))
+        resolvedBigTilesY = Math.max(2, Math.min(resolvedBigTilesY, 3))
+      }
+    }
     """
     set -euo pipefail
 
@@ -206,6 +230,7 @@ PY
     fi
 
     mkdir -p stardist_out
+    echo "[INFO] StarDist runtime tune: profile=${hardwareProfile}, auto_hardware=${stardistAutoHardware}, memory_budget_gb=${memoryBudgetGb}, tiles=${resolvedTilesY}x${resolvedTilesX}, big_block_size=${resolvedBigBlockSize}, big_tiles=${resolvedBigTilesY}x${resolvedBigTilesX}"
 
     if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
       echo "[DEBUG] StarDist GPU diagnostics"
@@ -235,16 +260,16 @@ PY
       --prob ${params.stardist_prob} \\
       --nms ${params.stardist_nms} \\
       \${MIN_AREA_FLAG} \\
-      --tiles ${params.stardist_tiles_y} ${params.stardist_tiles_x} \\
+      --tiles ${resolvedTilesY} ${resolvedTilesX} \\
       --pad ${params.stardist_crop_pad} \\
       --full-format "${resolvedFullFormat}" \\
       --full-out "stardist_out/labels_full.${resolvedFullFormat}" \\
       --big-mode "${params.stardist_big_mode}" \\
       --big-threshold-mpix ${params.stardist_big_threshold_mpix} \\
-      --big-block-size ${params.stardist_big_block_size} \\
+      --big-block-size ${resolvedBigBlockSize} \\
       --big-min-overlap ${params.stardist_big_min_overlap} \\
       --big-context ${params.stardist_big_context} \\
-      --big-tiles ${params.stardist_big_tiles_y} ${params.stardist_big_tiles_x} \\
+      --big-tiles ${resolvedBigTilesY} ${resolvedBigTilesX} \\
       --big-preview-max-side ${params.stardist_big_preview_max_side} \\
       --big-tiff-tile ${params.stardist_big_tiff_tile} \\
       --memory-budget-gb ${memoryBudgetGb} \\

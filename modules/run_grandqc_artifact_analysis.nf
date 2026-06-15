@@ -25,6 +25,11 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     def bootstrap_flag = params.grandqc_bootstrap_deps ? '--bootstrap-deps' : ''
     def download_flag = params.grandqc_download_models ? '--download-models' : ''
     def geojson_flag = params.grandqc_create_geojson ? '--create-geojson' : ''
+    def requestedGrandqcDevice = (params.grandqc_device ?: 'auto').toString()
+    def resolvedGrandqcDevice = requestedGrandqcDevice
+    if (requestedGrandqcDevice == 'auto' && (params.hardware_auto as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu') {
+      resolvedGrandqcDevice = 'cuda'
+    }
     """
     set -euo pipefail
 
@@ -34,12 +39,13 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
+    echo "[INFO] GrandQC runtime tune: profile=${params.hardware_profile}, requested_device=${requestedGrandqcDevice}, resolved_device=${resolvedGrandqcDevice}, patch_size=${params.grandqc_patch_size}, overlap=${params.grandqc_artifact_overlap_fraction}"
 
     python "${script_path}" \
       --image "${ome_tif}" \
       --outdir "grandqc_${sample_id}" \
       --sample-id "${sample_id}" \
-      --device "${params.grandqc_device}" \
+      --device "${resolvedGrandqcDevice}" \
       --cache-dir "${cache_dir}" \
       --default-source-mpp ${params.grandqc_default_source_mpp} \
       --artifact-mpp-model ${params.grandqc_artifact_mpp_model} \
