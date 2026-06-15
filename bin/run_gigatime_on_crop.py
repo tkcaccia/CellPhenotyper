@@ -1041,6 +1041,119 @@ def output_dtype_info(output_dtype: str) -> tuple[np.dtype, int, float | None]:
     raise ValueError(f"Unsupported output dtype: {output_dtype}")
 
 
+def _system_mem_available_gib() -> float | None:
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+            values = {}
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2:
+                    values[parts[0].rstrip(":")] = float(parts[1]) / (1024.0 * 1024.0)
+            if values.get("MemAvailable"):
+                return float(values["MemAvailable"])
+            if values.get("MemFree"):
+                return float(values["MemFree"])
+    except Exception:
+        return None
+    return None
+
+
+def _cuda_mem_free_gib(device: torch.device) -> tuple[float | None, float | None]:
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None, None
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        return float(free_bytes) / (1024.0 ** 3), float(total_bytes) / (1024.0 ** 3)
+    except Exception:
+        return None, None
+
+
+def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> dict:
+    mem_available = _system_mem_available_gib()
+    cuda_free, cuda_total = _cuda_mem_free_gib(device)
+    requested = {
+        "batch_size": int(args.batch_size),
+        "block_size": int(args.block_size),
+        "max_output_gib": float(args.max_output_gib),
+    }
+    if not bool(args.auto_hardware):
+        return {
+            "enabled": False,
+            "requested": requested,
+            "effective": dict(requested),
+            "system_mem_available_gib": mem_available,
+            "cuda_mem_free_gib": cuda_free,
+            "cuda_mem_total_gib": cuda_total,
+        }
+
+    task_memory = float(args.task_memory_gb) if float(args.task_memory_gb or 0) > 0 else None
+    usable_mem = mem_available
+    if task_memory is not None:
+        usable_mem = min(usable_mem, task_memory) if usable_mem is not None else task_memory
+    if usable_mem is not None:
+        usable_mem = max(0.0, usable_mem - float(args.min_free_system_gb))
+
+    if usable_mem is not None and usable_mem < 4.0:
+        raise RuntimeError(
+            "GigaTIME cannot run safely: estimated usable system memory after reserve is "
+            f"{usable_mem:.2f} GiB. Increase RAM/swap or lower concurrent workload before running."
+        )
+
+    effective_batch = max(1, int(args.batch_size))
+    effective_block = max(256, int(args.block_size))
+    effective_budget = max(0.25, float(args.max_output_gib))
+
+    if usable_mem is not None:
+        if usable_mem < 8.0:
+            effective_block = min(effective_block, 512)
+            effective_budget = min(effective_budget, 0.75)
+            effective_batch = 1
+        elif usable_mem < 16.0:
+            effective_block = min(effective_block, 768)
+            effective_budget = min(effective_budget, 1.25)
+            effective_batch = 1
+        elif usable_mem < 24.0:
+            effective_block = min(effective_block, 1024)
+            effective_budget = min(effective_budget, 2.0)
+            effective_batch = 1
+        else:
+            effective_block = min(effective_block, 1536)
+            effective_budget = min(effective_budget, 4.0)
+
+    if cuda_free is not None:
+        if cuda_free < 4.0:
+            effective_batch = 1
+            effective_block = min(effective_block, 512)
+        elif cuda_free < 8.0:
+            effective_batch = min(effective_batch, 1)
+            effective_block = min(effective_block, 1024)
+        elif cuda_free < 12.0:
+            effective_batch = min(effective_batch, 2)
+
+    # TIFF/JPEG encoders are happiest with multiples of 16; Zarr also benefits from regular chunks.
+    effective_block = max(256, int(effective_block))
+    effective_block = max(256, (effective_block // 16) * 16)
+    args.batch_size = int(effective_batch)
+    args.block_size = int(effective_block)
+    args.max_output_gib = float(effective_budget)
+
+    return {
+        "enabled": True,
+        "requested": requested,
+        "effective": {
+            "batch_size": int(args.batch_size),
+            "block_size": int(args.block_size),
+            "max_output_gib": float(args.max_output_gib),
+        },
+        "system_mem_available_gib": mem_available,
+        "task_memory_gb": task_memory,
+        "min_free_system_gb": float(args.min_free_system_gb),
+        "usable_system_mem_gib": usable_mem,
+        "cuda_mem_free_gib": cuda_free,
+        "cuda_mem_total_gib": cuda_total,
+    }
+
+
 def _zarr_directory_store(path: Path):
     if hasattr(zarr, "DirectoryStore"):
         return zarr.DirectoryStore(str(path))
@@ -2230,6 +2343,12 @@ def parse_args():
     ap.add_argument("--patch-size", type=int, default=256, help="Inference patch size (default from model card: 256)")
     ap.add_argument("--stride", type=int, default=128, help="Sliding-window stride")
     ap.add_argument("--batch-size", type=int, default=4, help="Inference batch size")
+    ap.add_argument("--auto-hardware", action="store_true",
+                    help="Adapt GigaTIME batch/tile/output budget to live system RAM and GPU memory.")
+    ap.add_argument("--task-memory-gb", type=float, default=0.0,
+                    help="Memory budget assigned by the workflow engine; 0 means use live MemAvailable only.")
+    ap.add_argument("--min-free-system-gb", type=float, default=6.0,
+                    help="RAM reserve kept free when auto-adapting GigaTIME settings.")
     ap.add_argument("--device", choices=["cpu", "cuda"], default="cpu", help="Inference device")
     ap.add_argument("--compression", default="deflate", help="Output TIFF compression")
     ap.add_argument("--auto-threshold-mpix", type=float, default=100.0,
@@ -2293,6 +2412,17 @@ def main():
     token = (os.environ.get("HF_TOKEN") or "").strip() or None
     offline = str(os.environ.get("HF_HUB_OFFLINE", "")).strip().lower() in {"1", "true", "yes", "on"}
     device = resolve_device(args.device)
+    hardware_meta = adapt_gigatime_hardware(args, device)
+    print(
+        "[INFO] GigaTIME hardware adaptation "
+        f"enabled={hardware_meta['enabled']} "
+        f"requested={hardware_meta['requested']} "
+        f"effective={hardware_meta['effective']} "
+        f"system_mem_available_gib={hardware_meta.get('system_mem_available_gib')} "
+        f"cuda_mem_free_gib={hardware_meta.get('cuda_mem_free_gib')} "
+        f"cuda_mem_total_gib={hardware_meta.get('cuda_mem_total_gib')}",
+        flush=True,
+    )
     output_channel_indices, output_channel_names = resolve_output_channels(args.output_channels, default_all=True)
     jpg_channel_indices, jpg_channel_names = resolve_output_channels(args.jpg_markers, default_all=False)
     sample_id = Path(args.outdir).name.replace("gigatime_", "", 1)
@@ -2337,6 +2467,7 @@ def main():
     image_meta["strict_target_mpp"] = bool(args.strict_target_mpp)
     image_meta["blockwise"] = bool(args.blockwise or effective_output_dtype != "float32" or args.output_format == "zarr")
     image_meta["block_size"] = int(args.block_size)
+    image_meta["hardware_adaptation"] = hardware_meta
     image_meta["predictor"] = bool(effective_predictor)
     image_meta["pyramidal"] = bool(args.pyramid and args.output_format == "ome_tiff")
     if output_scale_max is not None:

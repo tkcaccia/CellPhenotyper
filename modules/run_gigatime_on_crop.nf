@@ -29,6 +29,8 @@ process RUN_GIGATIME_ON_CROP {
     def skip_background_flag = params.gigatime_skip_background_blocks ? '--skip-background-blocks' : ''
     def jpg_save_tiles_flag = params.gigatime_jpg_save_tiles ? '--jpg-save-tiles' : ''
     def output_format = params.gigatime_output_format ?: 'ome_tiff'
+    def auto_hardware_flag = params.gigatime_auto_hardware ? '--auto-hardware' : ''
+    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
     """
     set -euo pipefail
 
@@ -96,6 +98,9 @@ PY
       --patch-size ${params.gigatime_patch_size} \\
       --stride ${params.gigatime_stride} \\
       --batch-size ${params.gigatime_batch_size} \\
+      ${auto_hardware_flag} \\
+      --task-memory-gb ${task_mem_gb} \\
+      --min-free-system-gb ${params.gigatime_min_free_system_gb} \\
       --device "${device_value}" \\
       --auto-threshold-mpix ${params.gigatime_auto_threshold_mpix} \\
       --max-side ${params.gigatime_max_side} \\
