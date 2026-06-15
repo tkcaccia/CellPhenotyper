@@ -1076,9 +1076,14 @@ def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> d
         "block_size": int(args.block_size),
         "max_output_gib": float(args.max_output_gib),
     }
+    profile = str(getattr(args, "hardware_profile", "balanced") or "balanced").strip().lower()
+    if profile not in {"conservative", "balanced", "aggressive"}:
+        profile = "balanced"
+
     if not bool(args.auto_hardware):
         return {
             "enabled": False,
+            "profile": profile,
             "requested": requested,
             "effective": dict(requested),
             "system_mem_available_gib": mem_available,
@@ -1099,36 +1104,69 @@ def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> d
             f"{usable_mem:.2f} GiB. Increase RAM/swap or lower concurrent workload before running."
         )
 
-    effective_batch = max(1, int(args.batch_size))
-    effective_block = max(256, int(args.block_size))
-    effective_budget = max(0.25, float(args.max_output_gib))
+    # Start from a hardware-derived target, not from the conservative defaults.
+    batch_cap = max(1, int(args.max_auto_batch))
+    block_cap = max(256, int(args.max_auto_block_size))
+    budget_cap = max(0.25, float(args.max_auto_output_gib))
 
-    if usable_mem is not None:
-        if usable_mem < 8.0:
-            effective_block = min(effective_block, 512)
-            effective_budget = min(effective_budget, 0.75)
-            effective_batch = 1
-        elif usable_mem < 16.0:
-            effective_block = min(effective_block, 768)
-            effective_budget = min(effective_budget, 1.25)
-            effective_batch = 1
-        elif usable_mem < 24.0:
-            effective_block = min(effective_block, 1024)
-            effective_budget = min(effective_budget, 2.0)
-            effective_batch = 1
-        else:
-            effective_block = min(effective_block, 1536)
-            effective_budget = min(effective_budget, 4.0)
+    mem_batch = 1
+    mem_block = 512
+    mem_budget = 0.75
+    if usable_mem is None:
+        mem_block, mem_budget = 1024, 2.0
+    elif usable_mem < 8.0:
+        mem_block, mem_budget = 512, 0.75
+    elif usable_mem < 16.0:
+        mem_block, mem_budget = 768, 1.25
+    elif usable_mem < 24.0:
+        mem_block, mem_budget = 1024, 2.0
+    elif usable_mem < 48.0:
+        mem_block, mem_budget = 1536, 4.0
+        mem_batch = 2
+    elif usable_mem < 96.0:
+        mem_block, mem_budget = 2048, 8.0
+        mem_batch = 4
+    else:
+        mem_block, mem_budget = 3072, 16.0
+        mem_batch = 8
 
+    gpu_batch = batch_cap
+    gpu_block = block_cap
     if cuda_free is not None:
         if cuda_free < 4.0:
-            effective_batch = 1
-            effective_block = min(effective_block, 512)
+            gpu_batch, gpu_block = 1, 512
         elif cuda_free < 8.0:
-            effective_batch = min(effective_batch, 1)
-            effective_block = min(effective_block, 1024)
+            gpu_batch, gpu_block = 1, 1024
         elif cuda_free < 12.0:
-            effective_batch = min(effective_batch, 2)
+            gpu_batch, gpu_block = 2, 1024
+        elif cuda_free < 20.0:
+            gpu_batch, gpu_block = 4, 1536
+        elif cuda_free < 32.0:
+            gpu_batch, gpu_block = 8, 2048
+        elif cuda_free < 48.0:
+            gpu_batch, gpu_block = 12, 2048
+        else:
+            gpu_batch, gpu_block = 16, 3072
+
+    profile_scale = {
+        "conservative": {"batch": 0.5, "block": 0.75, "budget": 0.5},
+        "balanced": {"batch": 1.0, "block": 1.0, "budget": 1.0},
+        "aggressive": {"batch": 1.5, "block": 1.25, "budget": 1.5},
+    }[profile]
+
+    auto_batch = max(1, int(math.floor(min(mem_batch, gpu_batch) * profile_scale["batch"])))
+    auto_block = max(256, int(math.floor(min(mem_block, gpu_block) * profile_scale["block"])))
+    auto_budget = max(0.25, float(min(mem_budget, budget_cap) * profile_scale["budget"]))
+
+    # User-requested values are respected as lower bounds when safe; explicit max-auto values are hard caps.
+    effective_batch = min(batch_cap, max(max(1, int(args.batch_size)), auto_batch))
+    effective_block = min(block_cap, max(max(256, int(args.block_size)), auto_block))
+    effective_budget = min(budget_cap, max(max(0.25, float(args.max_output_gib)), auto_budget))
+
+    # If the live hardware is smaller than the requested values, safety wins.
+    effective_batch = min(effective_batch, max(1, int(min(mem_batch, gpu_batch))))
+    effective_block = min(effective_block, max(256, int(min(mem_block, gpu_block))))
+    effective_budget = min(effective_budget, max(0.25, float(mem_budget)))
 
     # TIFF/JPEG encoders are happiest with multiples of 16; Zarr also benefits from regular chunks.
     effective_block = max(256, int(effective_block))
@@ -1139,11 +1177,24 @@ def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> d
 
     return {
         "enabled": True,
+        "profile": profile,
         "requested": requested,
         "effective": {
             "batch_size": int(args.batch_size),
             "block_size": int(args.block_size),
             "max_output_gib": float(args.max_output_gib),
+        },
+        "limits": {
+            "max_auto_batch": int(batch_cap),
+            "max_auto_block_size": int(block_cap),
+            "max_auto_output_gib": float(budget_cap),
+        },
+        "derived_caps": {
+            "memory_batch": int(mem_batch),
+            "memory_block_size": int(mem_block),
+            "memory_output_gib": float(mem_budget),
+            "gpu_batch": int(gpu_batch),
+            "gpu_block_size": int(gpu_block),
         },
         "system_mem_available_gib": mem_available,
         "task_memory_gb": task_memory,
@@ -2345,6 +2396,14 @@ def parse_args():
     ap.add_argument("--batch-size", type=int, default=4, help="Inference batch size")
     ap.add_argument("--auto-hardware", action="store_true",
                     help="Adapt GigaTIME batch/tile/output budget to live system RAM and GPU memory.")
+    ap.add_argument("--hardware-profile", choices=["conservative", "balanced", "aggressive"], default="balanced",
+                    help="Hardware adaptation profile: conservative prioritizes safety, balanced uses moderate acceleration, aggressive uses larger batches/tiles on high-memory GPUs.")
+    ap.add_argument("--max-auto-batch", type=int, default=16,
+                    help="Hard upper bound for hardware-adapted GigaTIME batch size.")
+    ap.add_argument("--max-auto-block-size", type=int, default=3072,
+                    help="Hard upper bound for hardware-adapted block size.")
+    ap.add_argument("--max-auto-output-gib", type=float, default=16.0,
+                    help="Hard upper bound for hardware-adapted output budget in GiB.")
     ap.add_argument("--task-memory-gb", type=float, default=0.0,
                     help="Memory budget assigned by the workflow engine; 0 means use live MemAvailable only.")
     ap.add_argument("--min-free-system-gb", type=float, default=6.0,
@@ -2416,6 +2475,7 @@ def main():
     print(
         "[INFO] GigaTIME hardware adaptation "
         f"enabled={hardware_meta['enabled']} "
+        f"profile={hardware_meta.get('profile')} "
         f"requested={hardware_meta['requested']} "
         f"effective={hardware_meta['effective']} "
         f"system_mem_available_gib={hardware_meta.get('system_mem_available_gib')} "

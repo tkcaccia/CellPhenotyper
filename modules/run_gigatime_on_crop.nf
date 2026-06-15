@@ -99,6 +99,10 @@ PY
       --stride ${params.gigatime_stride} \\
       --batch-size ${params.gigatime_batch_size} \\
       ${auto_hardware_flag} \\
+      --hardware-profile ${params.gigatime_hardware_profile} \\
+      --max-auto-batch ${params.gigatime_max_auto_batch} \\
+      --max-auto-block-size ${params.gigatime_max_auto_block_size} \\
+      --max-auto-output-gib ${params.gigatime_max_auto_output_gib} \\
       --task-memory-gb ${task_mem_gb} \\
       --min-free-system-gb ${params.gigatime_min_free_system_gb} \\
       --device "${device_value}" \\
