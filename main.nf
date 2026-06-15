@@ -105,10 +105,16 @@ workflow {
       return 8
     }
   }
-  def configured_max_memory_gb = parse_positive_int(paramOr('max_memory_gb', 8), 8)
   def host_memory_gb = detect_host_memory_gb()
+  def raw_max_memory = paramOr('max_memory_gb', 'auto')
+  def raw_max_memory_text = raw_max_memory == null ? 'auto' : raw_max_memory.toString().trim().toLowerCase()
+  def configured_max_memory_gb = (raw_max_memory_text in ['', '0', 'auto'])
+    ? host_memory_gb
+    : parse_positive_int(raw_max_memory, host_memory_gb)
   def effective_max_memory_gb = Math.max(2, Math.min(configured_max_memory_gb, host_memory_gb))
-  if (effective_max_memory_gb != configured_max_memory_gb) {
+  if (raw_max_memory_text in ['', '0', 'auto']) {
+    println "Runtime resource auto-detection: max_memory_gb=${effective_max_memory_gb} (host total RAM: ${host_memory_gb} GB)."
+  } else if (effective_max_memory_gb != configured_max_memory_gb) {
     println "WARN: Reducing max_memory_gb from ${configured_max_memory_gb} to ${effective_max_memory_gb} (host total RAM: ${host_memory_gb} GB)."
   }
   params.max_memory_gb = effective_max_memory_gb
