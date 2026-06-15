@@ -1245,9 +1245,11 @@ def run_region_inference(
     device: torch.device,
     patch_size: int,
     batch_size: int,
+    channel_indices: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     h, w = image_rgb.shape[:2]
-    accum = np.zeros((len(CHANNEL_NAMES), h, w), dtype=np.float32)
+    selected_channels = list(channel_indices) if channel_indices is not None else list(range(len(CHANNEL_NAMES)))
+    accum = np.zeros((len(selected_channels), h, w), dtype=np.float32)
     counts = np.zeros((1, h, w), dtype=np.float32)
     blend_window = make_blend_window(patch_size)[None, :, :]
     use_autocast = device.type == "cuda"
@@ -1267,6 +1269,8 @@ def run_region_inference(
             with autocast_ctx:
                 logits = model(tensor)
                 probs = torch.sigmoid(logits).float().cpu().numpy()
+                if selected_channels != list(range(len(CHANNEL_NAMES))):
+                    probs = probs[:, selected_channels, :, :]
 
             for pred, (y, x) in zip(probs, batch_positions):
                 weighted = pred * blend_window
@@ -1914,6 +1918,7 @@ def blockwise_write_zarr_outputs(
                 device=device,
                 patch_size=patch_size,
                 batch_size=batch_size,
+                channel_indices=output_channel_indices,
             )
             off_y = y0 - ry0
             off_x = x0 - rx0
@@ -1930,7 +1935,6 @@ def blockwise_write_zarr_outputs(
                 tile_probs_all_cyx=tile_probs,
                 jpg_channel_indices=jpg_channel_indices,
             )
-            tile_probs = tile_probs[output_channel_indices, :, :]
             arr[:, y0:y1, x0:x1] = encode_probability_cyx(tile_probs, output_dtype)
             del region_rgb, local_positions, accum, counts, tile_probs
             if done % 10 == 0:
@@ -2383,12 +2387,14 @@ def main():
         nuclei_mask_path=str(args.nuclei_mask or ""),
         cyto_mask_path=str(args.cyto_mask or ""),
         target_shape=target_shape,
-        channel_names=list(CHANNEL_NAMES),
+        channel_names=list(output_channel_names if args.output_format != "none" else jpg_channel_names),
         block_size=max(512, int(args.block_size)),
     )
     quant_dir = Path(args.quant_dir).resolve() if str(args.quant_dir or "").strip() else None
     jpg_exporter = None
     if jpg_channel_names:
+        selected_for_jpg = output_channel_indices if args.output_format != "none" else list(range(len(CHANNEL_NAMES)))
+        jpg_channel_positions = [selected_for_jpg.index(idx) for idx in jpg_channel_indices if idx in selected_for_jpg]
         jpg_exporter = JpegTileExporter(
             outdir=Path(args.outdir),
             full_shape_yx=target_shape,
@@ -2396,7 +2402,7 @@ def main():
             quality=int(args.jpg_quality),
             preview_max_side=int(args.jpg_preview_max_side),
             save_tiles=bool(args.jpg_save_tiles),
-            channel_indices=jpg_channel_indices,
+            channel_indices=jpg_channel_positions,
             channel_names=jpg_channel_names,
         )
     if image_meta["blockwise"]:
