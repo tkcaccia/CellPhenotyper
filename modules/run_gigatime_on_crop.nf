@@ -127,8 +127,9 @@ usable = max(0.0, (usable or 0.0) - reserve)
 print(f"{usable:.3f}")
 PY
 )
-        if python - <<PY
-usable = float("${usable}")
+        if python - "\$usable" <<PY
+import sys
+usable = float(sys.argv[1])
 needed = float("${min_usable_memory_gb}")
 raise SystemExit(0 if usable >= needed else 1)
 PY
