@@ -49,14 +49,16 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 
 - Docker profile uses GHCR images.
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
+- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: docker` by default, selecting the verified `2.7-gpu-amd64` OCI runtime instead of legacy GPU SIF metadata.
 - In GPU mode, only GPU-capable steps (StarDist, UNI-2 embeddings) use the GPU container; other steps stay on the CPU container.
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
-Currently verified and published for `v2.3`:
+Currently verified and published:
 
+- Docker GPU amd64 (`v2.7`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
-- Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
+- Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
 - Verified local/cluster SIF filenames:
   - `cellphenotyper-2.3-amd64.sif`
   - `cellphenotyper-2.3-gpu-amd64.sif`
@@ -68,7 +70,7 @@ Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
 ```
 
 ## UNI-2 token setup (required)
@@ -244,8 +246,7 @@ nextflow run main.nf \
   --outdir_base results_example_gpu \
   --compute_device gpu \
   --host_arch amd64 \
-  --runtime_image_mode manual \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```

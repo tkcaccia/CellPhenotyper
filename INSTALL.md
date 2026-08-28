@@ -173,7 +173,7 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. For now, the verified `v2.3` artifacts are the `amd64` CPU and `amd64` GPU Docker tags, plus locally created SIFs built from those tags.
+Use published runtime images. The current validated GPU amd64 runtime is `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`; the `v2.3` CPU amd64 image remains the legacy CPU reference. Local SIFs can be built from either verified Docker tag.
 The current amd64 SIF builds are larger than ordinary GitHub release asset limits, so prefer local `apptainer pull` / `singularity pull` from the verified Docker tags.
 
 Container rule:
@@ -185,7 +185,7 @@ Container rule:
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
 
 Reference Singularity filenames built from those tags:
 
@@ -211,13 +211,14 @@ PY
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
-Default behavior is `runtime_image_mode: auto` and `singularity_image_source: auto`.
+Default behavior is `runtime_image_mode: auto`, `singularity_image_source: auto` for CPU roles, and `singularity_gpu_image_source: docker` for GPU roles.
 For a stable `v2.3` run today, prefer a manually specified local `.sif` created from the verified Docker tag.
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
 - `runtime_image_mode: auto`
 - `singularity_image_source: auto`
+- `singularity_gpu_image_source: docker`
 - `singularity_image: ""`
 
 To force a specific manual image, set:
@@ -400,4 +401,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64` in `pipeline_paramers.yml`

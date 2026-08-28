@@ -37,11 +37,13 @@ nextflow run main.nf -profile singularity \
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
-| `container_cpu_tag` | `2.2` | Legacy generic fallback; multi-arch CPU manifest tag. Architecture-specific CPU tags below remain authoritative. |
-| `container_cpu_tag_amd64` | `2.2-amd64` | CPU tag for amd64 hosts. |
-| `container_cpu_tag_arm64` | `2.2-arm64` | CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `2.2-gpu` | Multi-arch GPU tag used when `compute_device` resolves to GPU. |
+| `container_gpu_repo` | `ghcr.io/tkcaccia/cellphenotyper-runtime` | GHCR repository used for the current amd64 GPU runtime. |
+| `container_cpu_tag` | `2.6` | Legacy generic fallback; multi-arch CPU manifest tag. Architecture-specific CPU tags below remain authoritative. |
+| `container_cpu_tag_amd64` | `2.6-amd64` | CPU tag for amd64 hosts. |
+| `container_cpu_tag_arm64` | `2.6-arm64` | CPU tag for arm64 hosts. |
+| `container_gpu_tag` | `2.7-gpu-amd64` | Validated amd64 GPU tag used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` tries local `.sif`, then GHCR ORAS SIF tags, then legacy release assets, then `docker://` fallback. Valid values: `auto`, `oras`, `release`, `docker`. |
+| `singularity_gpu_image_source` | `docker` | GPU-specific Singularity/Apptainer source. The verified `2.7-gpu-amd64` runtime is pulled from its Docker OCI image by default. |
 | `singularity_oras_repo` | `ghcr.io/tkcaccia/cellphenotyper` | GHCR repository used to resolve ORAS-hosted `.sif` tags. |
 | `singularity_cpu_oras_tag_amd64` | `2.2-sif-amd64` | CPU ORAS tag for amd64 hosts. |
 | `singularity_cpu_oras_tag_arm64` | `2.2-sif-arm64` | CPU ORAS tag for arm64 hosts. |

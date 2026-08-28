@@ -35,11 +35,13 @@ end_point: auto
 # `gpu_container_image` is explicitly provided.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
+container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime
 container_cpu_tag: 2.6   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 2.6-amd64
 container_cpu_tag_arm64: 2.6-arm64
-container_gpu_tag: 2.6-gpu
+container_gpu_tag: 2.7-gpu-amd64
 singularity_image_source: auto   # auto | oras | release | docker
+singularity_gpu_image_source: docker   # use the verified GPU OCI runtime through Singularity/Apptainer
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
 singularity_cpu_oras_tag_amd64: 2.6-sif-amd64
 singularity_cpu_oras_tag_arm64: 2.6-sif-arm64

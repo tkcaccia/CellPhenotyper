@@ -10,7 +10,13 @@ Current default branch:
 
 - `main`
 
-Verified Docker tags for the current `v2.3` runtime validation:
+Verified current GPU runtime:
+
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
+- Initial validated publication digest: `sha256:25b774075104f41b11633f88c188cbc809aa27d01384aa6a0554aef5ac67d075`
+- Published and validated by `.github/workflows/publish-runtime-release.yml` run `33208931247`.
+
+Legacy `v2.3` runtime references:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
 - GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
@@ -27,6 +33,7 @@ Runtime dependency note:
 - Official runtime images must also include the full KODAMA R stack (`KODAMA`, `KODAMAextra`, `SPARK`, `umap`, `bluster`) at build time. Normal pipeline runs should not depend on host `R_LIBS_USER`, host Python environments, or task-local runtime installs.
 - `Nextflow` still launches on the host and therefore still needs a host-side Java 17+ runtime even when every pipeline tool runs inside Docker or Singularity.
 - Internal tissue masks should be written as plain compressed TIFFs, not pyramidal TIFFs, because downstream `tifffile` readers must be able to reopen them reliably during `GROW_TO_TISSUE`.
+- The targeted amd64 GPU update is triggered by a tag such as `runtime-v2.7-buildN`. It publishes `2.7-gpu-amd64` to the repository-linked `cellphenotyper-runtime` package and runs the R isolation, TITAN/CONCH, KODAMA/fastPLS, source-integrity, and repository test checks before succeeding.
 
 Expected Singularity filenames for release `v2.3` when built or uploaded:
 
