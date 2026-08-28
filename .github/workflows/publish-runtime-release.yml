@@ -1,6 +1,9 @@
 name: Publish Runtime Release
 
 on:
+  push:
+    tags:
+      - "runtime-v*"
   workflow_dispatch:
     inputs:
       version:
@@ -21,10 +24,30 @@ env:
   TF_WHEEL_NAME: tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 jobs:
+  release_version:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - id: version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#runtime-v}"
+          else
+            version="${DISPATCH_VERSION}"
+          fi
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?$ ]]
+          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+
   docker-publish:
     name: Docker ${{ matrix.tag }}
-    if: ${{ inputs.publish_target == 'all' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 'all' }}
     runs-on: ${{ matrix.runs_on }}
+    needs: release_version
     permissions:
       contents: read
       packages: write
@@ -73,15 +96,17 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           provenance: false
-          tags: ${{ env.IMAGE_REPO }}:${{ inputs.version }}-${{ matrix.tag }}
+          tags: ${{ env.IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-${{ matrix.tag }}
           build-args: |
-            STARDIST_TF_WHEEL_URL=https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version }}/${{ env.TF_WHEEL_NAME }}
+            STARDIST_TF_WHEEL_URL=https://github.com/${{ github.repository }}/releases/download/v${{ needs.release_version.outputs.version }}/${{ env.TF_WHEEL_NAME }}
 
   docker-manifests:
     name: Docker manifest tags
-    if: ${{ inputs.publish_target == 'all' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 'all' }}
     runs-on: ubuntu-latest
-    needs: docker-publish
+    needs:
+      - release_version
+      - docker-publish
     permissions:
       contents: read
       packages: write
@@ -97,7 +122,7 @@ jobs:
       - name: Create multi-arch tags
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ needs.release_version.outputs.version }}"
           REPO="${IMAGE_REPO}"
           docker buildx imagetools create \
             -t "${REPO}:${VERSION}" \
@@ -118,9 +143,11 @@ jobs:
 
   singularity-assets:
     name: SIF ${{ matrix.docker_tag }}
-    if: ${{ inputs.publish_target == 'all' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 'all' }}
     runs-on: ${{ matrix.runs_on }}
-    needs: docker-manifests
+    needs:
+      - release_version
+      - docker-manifests
     permissions:
       contents: write
       packages: write
@@ -167,11 +194,11 @@ jobs:
           set -euo pipefail
           mkdir -p /var/tmp/apptainer/tmp /var/tmp/apptainer/cache /var/tmp/apptainer/out
           ./singularity/publish_sif_release_asset.sh \
-            --version "${{ inputs.version }}" \
+            --version "${{ needs.release_version.outputs.version }}" \
             --source docker \
             --device "${{ matrix.device }}" \
             --docker-repo "${IMAGE_REPO}" \
-            --docker-tag "${{ inputs.version }}-${{ matrix.docker_tag }}" \
+            --docker-tag "${{ needs.release_version.outputs.version }}-${{ matrix.docker_tag }}" \
             --oras-repo "${IMAGE_REPO}" \
             --upload-mode auto \
             --asset-arch "${{ matrix.asset_arch }}" \
@@ -183,8 +210,9 @@ jobs:
 
   gpu-amd64-update:
     name: Docker gpu-amd64 dependency/source update
-    if: ${{ inputs.publish_target == 'gpu-amd64-update' }}
+    if: ${{ github.event_name == 'push' || inputs.publish_target == 'gpu-amd64-update' }}
     runs-on: ubuntu-latest
+    needs: release_version
     timeout-minutes: 180
     permissions:
       contents: read
@@ -210,12 +238,12 @@ jobs:
           provenance: false
           build-args: |
             BASE_IMAGE=${{ env.IMAGE_REPO }}:2.6-gpu
-          tags: ${{ env.IMAGE_REPO }}:${{ inputs.version }}-gpu-amd64
+          tags: ${{ env.IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
 
       - name: Verify published runtime
         run: |
           set -euo pipefail
-          IMAGE="${IMAGE_REPO}:${{ inputs.version }}-gpu-amd64"
+          IMAGE="${IMAGE_REPO}:${{ needs.release_version.outputs.version }}-gpu-amd64"
           docker pull "${IMAGE}"
           docker run --rm "${IMAGE}" bash -lc '
             set -euo pipefail
