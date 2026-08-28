@@ -21,6 +21,7 @@ on:
 
 env:
   IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper
+  UPDATE_IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper-runtime
   TF_WHEEL_NAME: tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 jobs:
@@ -237,14 +238,16 @@ jobs:
           platforms: linux/amd64
           push: true
           provenance: false
+          cache-from: type=gha,scope=gpu-amd64-update
+          cache-to: type=gha,mode=max,scope=gpu-amd64-update
           build-args: |
             BASE_IMAGE=${{ env.IMAGE_REPO }}:2.3-gpu-amd64
-          tags: ${{ env.IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
+          tags: ${{ env.UPDATE_IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
 
       - name: Verify published runtime
         run: |
           set -euo pipefail
-          IMAGE="${IMAGE_REPO}:${{ needs.release_version.outputs.version }}-gpu-amd64"
+          IMAGE="${UPDATE_IMAGE_REPO}:${{ needs.release_version.outputs.version }}-gpu-amd64"
           docker pull "${IMAGE}"
           docker run --rm "${IMAGE}" bash -lc '
             set -euo pipefail
