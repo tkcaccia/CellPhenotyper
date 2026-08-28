@@ -37,6 +37,7 @@ jobs:
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             version="${GITHUB_REF_NAME#runtime-v}"
+            version="${version%%-build*}"
           else
             version="${DISPATCH_VERSION}"
           fi
@@ -86,7 +87,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+          password: ${{ github.token }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -117,7 +118,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+          password: ${{ github.token }}
 
       - name: Create multi-arch tags
         run: |
@@ -187,9 +188,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APPTAINER_DOCKER_USERNAME: ${{ github.actor }}
-          APPTAINER_DOCKER_PASSWORD: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+          APPTAINER_DOCKER_PASSWORD: ${{ github.token }}
           SINGULARITY_DOCKER_USERNAME: ${{ github.actor }}
-          SINGULARITY_DOCKER_PASSWORD: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+          SINGULARITY_DOCKER_PASSWORD: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p /var/tmp/apptainer/tmp /var/tmp/apptainer/cache /var/tmp/apptainer/out
@@ -226,7 +227,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+          password: ${{ github.token }}
 
       - name: Build and push amd64 GPU update
         uses: docker/build-push-action@v6
