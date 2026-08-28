@@ -238,7 +238,7 @@ jobs:
           push: true
           provenance: false
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.6-gpu
+            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.3-gpu-amd64
           tags: ${{ env.IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
 
       - name: Verify published runtime
