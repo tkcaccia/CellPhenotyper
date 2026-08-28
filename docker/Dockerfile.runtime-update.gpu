@@ -21,11 +21,16 @@ RUN set -euo pipefail && \
       "import conch, einops_exts, torch, transformers; assert transformers.__version__.split('.')[0] == '4'; assert torch.cuda.is_available() or torch.backends.cuda.is_built(); print('TITAN runtime dependencies passed')"
 
 RUN set -euo pipefail && \
-    micromamba env remove -y -n kodama-r && \
+    if [ -d /opt/micromamba/envs/kodama-r ]; then \
+      micromamba env remove -y -n kodama-r; \
+    fi && \
     micromamba create -y -n kodama-r -c conda-forge -c bioconda --channel-priority strict \
-      'r-base>=4.6' zlib libuv && \
+      'r-base>=4.6' zlib libuv
+
+RUN set -euo pipefail && \
+    export MAKEFLAGS=-j1 && \
     micromamba run -n kodama-r Rscript -e \
-      'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Rcpp", "withr", "generics", "data.table", "R.utils", "remotes", "Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=4L)'
+      'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Rcpp", "withr", "generics", "data.table", "R.utils", "remotes", "Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=1L)'
 
 RUN set -euo pipefail && \
     micromamba run -n kodama-r Rscript -e \
