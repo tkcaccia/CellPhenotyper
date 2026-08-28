@@ -253,4 +253,6 @@ jobs:
             /opt/micromamba/envs/kodama-r/bin/Rscript -e "library(KODAMA); library(fastPLS); library(ggplot2); library(rmarkdown)"
             grep -q "if ivalue > block" /opt/cellphenotyper/bin/run_stardist_roi_segmentation.py
             grep -q "03d_cell_consensus" /opt/cellphenotyper/UPSTREAM_DIFFS.md
+            cd /opt/cellphenotyper
+            /opt/micromamba/envs/stardist/bin/python -m unittest discover -s tests -v
           '

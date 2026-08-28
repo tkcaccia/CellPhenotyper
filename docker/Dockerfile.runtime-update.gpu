@@ -3,6 +3,10 @@ FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG CONCH_REVISION=141cc09c
+ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
+ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
+ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
+ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 
 RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
@@ -17,15 +21,25 @@ RUN set -euo pipefail && \
       "import conch, einops_exts, torch, transformers; assert transformers.__version__.split('.')[0] == '4'; assert torch.cuda.is_available() or torch.backends.cuda.is_built(); print('TITAN runtime dependencies passed')"
 
 RUN set -euo pipefail && \
-    micromamba install -y -n kodama-r -c conda-forge libuv && \
+    micromamba env remove -y -n kodama-r && \
+    micromamba create -y -n kodama-r -c conda-forge -c bioconda --channel-priority strict \
+      'r-base>=4.6' zlib libuv && \
     micromamba run -n kodama-r Rscript -e \
-      'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=4L); stopifnot(getRversion() >= "4.6.0"); library(ggplot2); library(rmarkdown)'
+      'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Rcpp", "withr", "generics", "data.table", "R.utils", "remotes", "Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=4L)'
 
 RUN set -euo pipefail && \
     micromamba run -n kodama-r Rscript -e \
       "remotes::install_github('tkcaccia/fastPLS@${FASTPLS_REVISION}', dependencies=FALSE, upgrade='never')" && \
     micromamba run -n kodama-r Rscript -e \
-      'stopifnot(getRversion() >= "4.6.0"); library(fastPLS); library(ggplot2); library(rmarkdown); cat("PathoFMPred runtime dependencies passed\n")' && \
+      "remotes::install_github('Bioconductor/BiocGenerics@${BIOCGENERICS_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e \
+      "remotes::install_github('Bioconductor/S4Vectors@${S4VECTORS_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e \
+      "remotes::install_github('tkcaccia/fastEmbedR@${FASTEMBEDR_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e \
+      "remotes::install_github('tkcaccia/KODAMA@${KODAMA_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e \
+      'stopifnot(getRversion() >= "4.6.0", packageVersion("fastEmbedR") >= "0.99.5", packageVersion("KODAMA") == "0.99.7"); library(KODAMA); library(fastEmbedR); library(fastPLS); library(data.table); library(ggplot2); library(rmarkdown); cat("KODAMA and PathoFMPred runtime dependencies passed\n")' && \
     micromamba clean -a -y
 
 RUN mkdir -p /opt/cellphenotyper/empty-r-library
@@ -41,5 +55,6 @@ COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+COPY tests /opt/cellphenotyper/tests
 
 CMD ["/bin/bash"]
