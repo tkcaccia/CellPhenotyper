@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version/tag suffix (for example 2.3)
+        description: Release version/tag suffix (for example 2.7)
         required: true
-        default: "2.3"
+        default: "2.7"
+      publish_target:
+        description: Build the complete matrix or refresh only the amd64 GPU runtime
+        required: true
+        default: gpu-amd64-update
+        type: choice
+        options:
+          - gpu-amd64-update
+          - all
 
 env:
   IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper
@@ -15,6 +23,7 @@ env:
 jobs:
   docker-publish:
     name: Docker ${{ matrix.tag }}
+    if: ${{ inputs.publish_target == 'all' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
       contents: read
@@ -70,6 +79,7 @@ jobs:
 
   docker-manifests:
     name: Docker manifest tags
+    if: ${{ inputs.publish_target == 'all' }}
     runs-on: ubuntu-latest
     needs: docker-publish
     permissions:
@@ -108,6 +118,7 @@ jobs:
 
   singularity-assets:
     name: SIF ${{ matrix.docker_tag }}
+    if: ${{ inputs.publish_target == 'all' }}
     runs-on: ${{ matrix.runs_on }}
     needs: docker-manifests
     permissions:
@@ -169,3 +180,48 @@ jobs:
             --outdir /var/tmp/apptainer/out \
             --force \
             --upload
+
+  gpu-amd64-update:
+    name: Docker gpu-amd64 dependency/source update
+    if: ${{ inputs.publish_target == 'gpu-amd64-update' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
+
+      - name: Build and push amd64 GPU update
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.runtime-update.gpu
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.6-gpu
+          tags: ${{ env.IMAGE_REPO }}:${{ inputs.version }}-gpu-amd64
+
+      - name: Verify published runtime
+        run: |
+          set -euo pipefail
+          IMAGE="${IMAGE_REPO}:${{ inputs.version }}-gpu-amd64"
+          docker pull "${IMAGE}"
+          docker run --rm "${IMAGE}" bash -lc '
+            set -euo pipefail
+            test "$R_LIBS_USER" = /opt/cellphenotyper/empty-r-library
+            /opt/micromamba/envs/stardist/bin/python -c "import conch, torch, transformers; assert torch.backends.cuda.is_built(); assert transformers.__version__.split(chr(46))[0] == chr(52)"
+            /opt/micromamba/envs/kodama-r/bin/Rscript -e "library(KODAMA); library(fastPLS); library(ggplot2); library(rmarkdown)"
+            grep -q "if ivalue > block" /opt/cellphenotyper/bin/run_stardist_roi_segmentation.py
+            grep -q "03d_cell_consensus" /opt/cellphenotyper/UPSTREAM_DIFFS.md
+          '
