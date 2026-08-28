@@ -48,8 +48,17 @@ selected_modes <- normalize_modes(embedding_mode)
 
 library(data.table)
 
+fread_embedding <- function(file_path, ...) {
+  if (grepl("\\.gz$", file_path, ignore.case = TRUE)) {
+    # data.table otherwise requires the optional R.utils package for gzip files.
+    gzip_cmd <- sprintf("gzip -dc -- %s", shQuote(normalizePath(file_path, mustWork = TRUE)))
+    return(fread(cmd = gzip_cmd, ...))
+  }
+  fread(file_path, ...)
+}
+
 read_embedding_header <- function(file_path) {
-  fread(file_path, nrows = 0L, showProgress = FALSE)
+  fread_embedding(file_path, nrows = 0L, showProgress = FALSE)
 }
 
 embedding_feature_columns <- function(files, mode_name) {
@@ -74,7 +83,7 @@ select_top_variance_features <- function(files, feat_cols, top_n, mode_name) {
   names(counts) <- feat_cols
 
   for (fp in files) {
-    dt <- fread(fp, select = feat_cols, showProgress = FALSE)
+    dt <- fread_embedding(fp, select = feat_cols, showProgress = FALSE)
     mat <- as.matrix(dt)
     storage.mode(mat) <- "double"
     ok <- !is.na(mat)
@@ -126,7 +135,7 @@ load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
   )
   read_cols <- c("cell_id", feat_cols)
   dt <- rbindlist(
-    lapply(files, function(fp) fread(fp, select = read_cols, showProgress = FALSE)),
+    lapply(files, function(fp) fread_embedding(fp, select = read_cols, showProgress = FALSE)),
     fill = TRUE,
     use.names = TRUE
   )

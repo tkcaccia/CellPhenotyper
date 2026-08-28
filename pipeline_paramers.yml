@@ -20,11 +20,13 @@ host_arch: auto        # auto | amd64 | arm64
 enable_gpu_on_arm64: false   # set true only when an arm64-compatible GPU container is available
 enable_stardist_gpu_on_arm64: false   # optional override: run StarDist in GPU container on arm64
 runtime_image_mode: auto   # auto | manual
+docker_extra_run_options: ""  # optional site-specific bind mounts or Docker flags
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, grandqc, stardist, tma, tissue_mask, cell_assignment, cytoplasm, gigatime,
-# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, cluster_geojson
+# convert, grandqc, stardist, cell_consensus, tma, tissue_mask, cell_assignment, cytoplasm, gigatime,
+# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, cluster_geojson,
+# neoplastic_section, titan, pathofmpred
 
 # Runtime image selection
 # In `runtime_image_mode: auto`, singularity tries local .sif first, then ORAS-hosted
@@ -33,22 +35,22 @@ end_point: auto
 # `gpu_container_image` is explicitly provided.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
-container_cpu_tag: 2.4   # legacy generic fallback; use arch-specific tags below
-container_cpu_tag_amd64: 2.4-amd64
-container_cpu_tag_arm64: 2.4-arm64
-container_gpu_tag: 2.4-gpu
+container_cpu_tag: 2.6   # legacy generic fallback; use arch-specific tags below
+container_cpu_tag_amd64: 2.6-amd64
+container_cpu_tag_arm64: 2.6-arm64
+container_gpu_tag: 2.6-gpu
 singularity_image_source: auto   # auto | oras | release | docker
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
-singularity_cpu_oras_tag_amd64: 2.4-sif-amd64
-singularity_cpu_oras_tag_arm64: 2.4-sif-arm64
-singularity_gpu_oras_tag_amd64: 2.4-sif-gpu-amd64
-singularity_gpu_oras_tag_arm64: 2.4-sif-gpu-arm64
+singularity_cpu_oras_tag_amd64: 2.6-sif-amd64
+singularity_cpu_oras_tag_arm64: 2.6-sif-arm64
+singularity_gpu_oras_tag_amd64: 2.6-sif-gpu-amd64
+singularity_gpu_oras_tag_arm64: 2.6-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
-singularity_release_tag: v2.4
-singularity_cpu_asset_amd64: cellphenotyper-2.4-amd64.sif
-singularity_cpu_asset_arm64: cellphenotyper-2.4-arm64.sif
-singularity_gpu_asset_amd64: cellphenotyper-2.4-gpu-amd64.sif
-singularity_gpu_asset_arm64: cellphenotyper-2.4-gpu-arm64.sif
+singularity_release_tag: v2.6
+singularity_cpu_asset_amd64: cellphenotyper-2.6-amd64.sif
+singularity_cpu_asset_arm64: cellphenotyper-2.6-arm64.sif
+singularity_gpu_asset_amd64: cellphenotyper-2.6-gpu-amd64.sif
+singularity_gpu_asset_arm64: cellphenotyper-2.6-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
 cpu_container_image: ""     # optional explicit CPU container path/URI
@@ -74,6 +76,48 @@ stardist_big_threshold_mpix: 120.0
 write_full_labels: false
 full_format: zarr
 allow_huge_tif: false
+
+# Three-model nuclei segmentation and consensus. HoVer-Net MoNuSAC and
+# CellViT++ require the GPU image and run serially on the StarDist crop to cap VRAM.
+cell_consensus_enable: true
+hovernet_target_mpp: 0.25
+hovernet_default_mpp: 0.25
+hovernet_batch_size: 0   # 0 = auto-scale from detected GPU VRAM
+hovernet_postproc_workers: 0
+hovernet_prediction_cache: ''
+hovernet_chunk_shape: 10000
+hovernet_tile_shape: 2048
+cellvit_model: HIPT
+cellvit_taxonomy: pannuke
+cellvit_batch_size: 0    # 0 = auto-scale from detected GPU VRAM
+cellvit_ray_workers: 1   # must be >=1 with CellViT++ 1.0.9
+cellvit_ray_worker_cpus: 0  # 0 = divide task CPUs across Ray workers
+cellvit_amp: true
+cellvit_default_mpp: 0.25
+cell_consensus_min_support: 2
+cell_consensus_match_radius_um: 4.0
+cell_consensus_geometry_priority: cellvitpp,hovernet
+cell_consensus_tile_size: 512
+cell_consensus_preview_max_side: 3000
+
+# Optional post-clustering TITAN + PathoFMPred path. The cancer code is never
+# inferred from the filename because applying a cancer-specific model to the
+# wrong population is invalid. This breast benchmark uses BRCA.
+titan_enable: false
+titan_cache_dir: ../.cache/hf_titan
+titan_offline: true
+titan_target_mpp: 0.5
+titan_patch_size: 512
+titan_min_tissue_coverage: 0.2
+titan_batch_size: 0
+neoplastic_section_require_cells: true
+neoplastic_section_padding_um: 256.0
+pathofmpred_enable: false
+pathofmpred_rscript: /opt/micromamba/envs/kodama-r/bin/Rscript
+pathofmpred_cancer: ""
+pathofmpred_library_dir: ../.cache/pathofmpred/R_library
+pathofmpred_report_format: html
+pathofmpred_include_limited_evidence: false
 tissue_auto_no_downsample_max_side: 1024
 expand_full_labels: true
 expand_mode: auto
@@ -93,6 +137,7 @@ grandqc_default_source_mpp: 0.25
 grandqc_artifact_mpp_model: auto
 grandqc_tissue_mpp_model: 10.0
 grandqc_patch_size: 512
+grandqc_artifact_tile_size: 0
 grandqc_artifact_overlap_fraction: 0.5
 grandqc_overlay_factor: 10
 grandqc_preview_max_side: 4096
@@ -119,11 +164,20 @@ input_roi_mask_preview_threshold_mb: 100.0
 input_roi_mask_preview_alpha: 0.45
 gigatime_enable: true
 gigatime_target_mpp: 0.25
-gigatime_strict_target_mpp: false
+gigatime_strict_target_mpp: true
 gigatime_output_format: zarr
 gigatime_output_dtype: uint8
 gigatime_output_channels: DAPI,PD-1,CD3,CD8,PD-L1
-gigatime_output_pyramid: false
+gigatime_output_pyramid: true
+gigatime_export_ometiff: true
+gigatime_export_channels: ''
+gigatime_export_output_dtype: auto
+gigatime_export_compression: deflate
+gigatime_export_tile_size: 1024
+gigatime_export_cpus: 4
+gigatime_export_memory_gb: 16
+gigatime_export_time: 12h
+gigatime_integrated_quantification: true
 gigatime_blockwise: true
 gigatime_block_size: 2048
 gigatime_output_predictor: false
@@ -163,12 +217,17 @@ uni2_inner_square_fixed_px: 90
 
 # KODAMA embedding source:
 # tile | nuclei | cyto | inner_square | any comma-separated combination | all
+kodama_rscript: /opt/micromamba/envs/kodama-r/bin/Rscript
+kodama_r_library_dir: /opt/micromamba/envs/kodama-r/lib/R/library
 kodama_embedding_mode: tile,inner_square
 kodama_dims_to_run: 20
 kodama_spark_top_features: 100
 kodama_n_cores: 4
+kodama_backend: cpu
+kodama_gpu_device: 0
 
 # Clustering defaults (Louvain on KODAMA embedding)
+cluster_r_library_dir: /opt/micromamba/envs/stardist/lib/R/library
 cluster_kodama_dim: 20
 cluster_snn_k: 30
 cluster_resolution: auto

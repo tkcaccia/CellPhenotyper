@@ -104,7 +104,16 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--default-source-mpp", type=float, default=0.25, help="Fallback source MPP when TIFF metadata is missing")
     ap.add_argument("--artifact-mpp-model", default="auto", choices=["auto", "1.0", "1.5", "2.0"], help="GrandQC artifact model magnification surrogate in MPP; 'auto' selects based on source MPP")
     ap.add_argument("--tissue-mpp-model", type=float, default=10.0, help="GrandQC tissue detector working MPP")
-    ap.add_argument("--patch-size", type=int, default=512, help="Model patch size")
+    ap.add_argument("--patch-size", type=int, default=512, help="Official tissue-detector patch size")
+    ap.add_argument(
+        "--artifact-tile-size",
+        type=int,
+        default=0,
+        help=(
+            "Artifact-model context tile size. Zero selects 1024 on CUDA GPUs with at least "
+            "8 GiB VRAM and 512 otherwise. This is independent of the tissue patch size."
+        ),
+    )
     ap.add_argument("--artifact-overlap-fraction", type=float, default=0.5, help="Fractional overlap between artifact tiles, used with center-crop merge")
     ap.add_argument("--overlay-factor", type=int, default=10, help="Approximate reduction factor for saved overlay")
     ap.add_argument("--preview-max-side", type=int, default=4096, help="Maximum long side for preview PNG/JPG outputs")
@@ -603,6 +612,27 @@ def resolve_device(requested: str, torch_mod) -> str:
     if getattr(torch_mod.backends, "mps", None) and torch_mod.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def resolve_artifact_tile_size(requested: int, device: str, torch_mod) -> tuple[int, dict]:
+    requested = int(requested)
+    if requested < 0:
+        raise ValueError("artifact tile size must be zero (auto) or a positive integer")
+    if requested > 0:
+        if requested < 256 or requested % 32 != 0:
+            raise ValueError("artifact tile size must be at least 256 and divisible by 32")
+        return requested, {"mode": "explicit", "cuda_total_gib": None}
+
+    cuda_total_gib = None
+    if device == "cuda":
+        try:
+            cuda_total_gib = float(torch_mod.cuda.get_device_properties(0).total_memory) / float(1024 ** 3)
+        except Exception:
+            cuda_total_gib = None
+    # The artifact model is fully convolutional. Larger context removes the
+    # padding-position bias that otherwise appears as repeated tile bands.
+    tile_size = 1024 if cuda_total_gib is not None and cuda_total_gib >= 8.0 else 512
+    return tile_size, {"mode": "hardware_auto", "cuda_total_gib": cuda_total_gib}
 
 
 def torch_load_any(path: str, torch_mod, map_location: str):
@@ -1221,7 +1251,9 @@ def main() -> int:
             "input_image": str(Path(args.image).resolve()),
             "source_mpp": float(source_mpp),
             "artifact_mpp_model_requested": str(args.artifact_mpp_model),
+            "artifact_tile_size_requested": int(args.artifact_tile_size),
             "tissue_mpp_model": float(args.tissue_mpp_model),
+            "tissue_patch_size": int(args.patch_size),
             "device": args.device,
             "grandqc_license": "CC BY-NC-SA 4.0",
             "grandqc_citation_doi": "10.1038/s41467-024-54769-y",
@@ -1238,6 +1270,16 @@ def main() -> int:
         artifact_mpp_model = resolve_artifact_mpp_model(str(args.artifact_mpp_model), float(source_mpp))
         print(f"[INFO] GrandQC artifact model mpp={artifact_mpp_model:.1f} (requested={args.artifact_mpp_model})", flush=True)
         meta["artifact_mpp_model"] = float(artifact_mpp_model)
+        artifact_tile_size, artifact_tile_meta = resolve_artifact_tile_size(
+            args.artifact_tile_size, device, torch_mod
+        )
+        print(
+            f"[INFO] GrandQC artifact tile size={artifact_tile_size} "
+            f"(mode={artifact_tile_meta['mode']}, tissue_patch_size={args.patch_size})",
+            flush=True,
+        )
+        meta["artifact_tile_size"] = int(artifact_tile_size)
+        meta["artifact_tile_size_selection"] = artifact_tile_meta
 
         tissue_ckpt, artifact_ckpt = ensure_models(cache_dir, artifact_mpp_model, args.download_models)
         meta["device"] = device
@@ -1248,7 +1290,7 @@ def main() -> int:
         )
         print("[INFO] GrandQC running artifact detection", flush=True)
         full_mask, tissue_map_art, artifact_patch_span, artifact_meta = run_artifact_detection(
-            reader, source_mpp, artifact_mpp_model, tissue_mask_thumb, args.patch_size, args.artifact_overlap_fraction, device, artifact_ckpt, mods
+            reader, source_mpp, artifact_mpp_model, tissue_mask_thumb, artifact_tile_size, args.artifact_overlap_fraction, device, artifact_ckpt, mods
         )
         full_mask, small_fov_refine_meta = refine_small_fov_foreign_object_mask(
             full_mask, thumb_rgb, source_mpp, artifact_meta, Image, cv2_mod, np_mod

@@ -45,7 +45,10 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def resolvedBigTilesY = Math.max(1, params.stardist_big_tiles_y as int)
     if (stardistAutoHardware) {
       def minTiles = Math.max(1, params.stardist_min_auto_tiles as int)
-      def maxBlock = Math.max(resolvedBigBlockSize, params.stardist_max_auto_block_size as int)
+      def stageMaxBlock = Math.max(512, params.stardist_max_auto_block_size as int)
+      def globalMaxBlock = Math.max(512, params.hardware_max_auto_block_size as int)
+      def maxBlock = Math.min(stageMaxBlock, globalMaxBlock)
+      resolvedBigBlockSize = Math.min(resolvedBigBlockSize, maxBlock)
       if (hardwareProfile == 'aggressive' && memoryBudgetGb >= 32) {
         resolvedTilesX = Math.max(minTiles, Math.min(resolvedTilesX, 8))
         resolvedTilesY = Math.max(minTiles, Math.min(resolvedTilesY, 8))

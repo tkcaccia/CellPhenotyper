@@ -147,6 +147,8 @@ GigaTIME is enabled by default, so the pipeline also quantifies the crop-aligned
 - StarDist nuclei labels
 - expanded cytoplasm labels
 
+The source MPP is recovered from TIFF metadata or the StarDist coordinate metadata. With strict target-MPP mode enabled, CellPhenotyper resamples by the exact floating-point MPP ratio before tiling, including lazy pyvips upsampling when the source is coarser than the requested model resolution. The persisted Zarr and pyramidal OME-TIFF record the resulting physical pixel size and keep markers as separate channels.
+
 Outputs are written per sample to:
 
 - `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_quantification.csv`
@@ -435,8 +437,8 @@ Final output:
 
 - `results_example/15_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
 - `results_example/15_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
-- `results_example/05_gigatime/ROI_A/gigatime_ROI_A/gigatime_probs.ome.tif`
-- `results_example/05_gigatime/ROI_B/gigatime_ROI_B/gigatime_probs.ome.tif`
+- `results_example/05_gigatime/ROI_A/gigatime_ROI_A_ometiff/gigatime_probs.ome.tif`
+- `results_example/05_gigatime/ROI_B/gigatime_ROI_B_ometiff/gigatime_probs.ome.tif`
 - `results_example/06_roi/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
 - `results_example/06_roi/ROI_B/ROI_B_input_roi_mask.tif` if `ROI_B.geojson` was supplied
 - `results_example/06_roi/ROI_A/ROI_A_input_roi_mask_preview.png` if `ROI_A.geojson` was supplied
@@ -477,3 +479,33 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 docker push "${IMAGE}"
 ```
+Cell identification can combine three independent instance-segmentation procedures: StarDist, HoVer-Net with the MoNuSAC checkpoint, and CellViT++. The two additional GPU models run serially after StarDist on the same MPP-aware crop to avoid VRAM oversubscription. A 2-of-3 spatial consensus creates canonical cell IDs and becomes the nuclei mask/object table for all downstream analysis while retaining per-model provenance. CPU runs skip the two-model GPU extension and continue from StarDist instead of failing.
+
+Normalized HoVer-Net and CellViT++ outputs expose both the upstream numeric `type_id` and a readable `type` name. MoNuSAC names are `background`, `epithelial`, `lymphocyte`, `macrophage`, and `neutrophil`; CellViT++ PanNuke names are `neoplastic`, `inflammatory`, `connective`, `dead`, and `epithelial`.
+
+## Neoplastic Section to PathoFMPred
+
+When `--titan_enable true` is set, CellPhenotyper treats each connected polygon in the final tissue GeoJSON as a section, streams the consensus cell table through a spatial index, and counts named CellViT++ `neoplastic` cells in each polygon. It selects the section with the largest neoplastic count, with total cells, area, and stable section ID used only as deterministic ties. Stage 16 exports the selected full-resolution masked section, mask, original/crop GeoJSON, coordinate shift, count table, summary, and preview.
+
+Stage 17 samples the selected section at the physical equivalent of 512 pixels at 0.5 microns per pixel. It uses the official gated TITAN implementation and its CONCH v1.5 patch encoder, then writes one 768-dimensional section vector with columns `titan_000` through `titan_767`. The TITAN model/cache remains external to the run and work directories to avoid duplication.
+
+With `--pathofmpred_enable true --pathofmpred_cancer BRCA`, stage 18 passes the named TITAN vector to the protected PathoFMPred R package. The package is loaded from `pathofmpred_library_dir` and is not baked into the public runtime image. PathoFMPred scores are TCGA-derived research estimates without independent external clinical validation; binary outputs are not calibrated probabilities.
+
+Example GPU run using a checksum-verified local TITAN snapshot:
+
+```bash
+nextflow run main.nf -profile docker \
+  --image_input /data/breast.tif \
+  --roi_geojson /data/breast.geojson \
+  --outdir_base /results/breast \
+  --compute_device gpu \
+  --cell_consensus_enable true \
+  --titan_enable true \
+  --titan_model /models/titan/dac6773d \
+  --titan_offline true \
+  --pathofmpred_enable true \
+  --pathofmpred_cancer BRCA \
+  --pathofmpred_library_dir /models/pathofmpred/R_library
+```
+
+See `OUTPUT.md` for the complete stage 16-18 artifacts and `PARAMETERS.md` for restart points. A restart at `titan` reuses stage 16; a restart at `pathofmpred` reuses the existing TITAN CSV.

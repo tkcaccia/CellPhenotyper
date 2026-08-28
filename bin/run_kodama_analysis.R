@@ -1,13 +1,15 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly = TRUE)
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0L) y else x
 if (length(args) < 2) {
   stop(
     paste(
       "Usage: Rscript run_kodama_analysis.R",
       "<rawdata_rdata> <output_dir>",
       "[--embedding-mode tile|nuclei|cyto|inner_square|all|full|tile,inner_square,...]",
-      "[--dims-to-run N] [--spark-top N] [--landmarks N] [--kodama-ncomp N] [--n-cores N]"
+      "[--dims-to-run N] [--spark-top N] [--landmarks N] [--kodama-ncomp N] [--n-cores N]",
+      "[--backend cpu|cuda|metal] [--gpu-device N]"
     )
   )
 }
@@ -21,6 +23,8 @@ spark_top <- 100L
 landmarks <- 1000L
 kodama_ncomp <- 2L
 n_cores <- 4L
+backend <- "cpu"
+gpu_device <- 0L
 
 if (length(args) > 2) {
   i <- 3L
@@ -56,6 +60,16 @@ if (length(args) > 2) {
       i <- i + 2L
       next
     }
+    if (flag == "--backend" && i + 1L <= length(args)) {
+      backend <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--gpu-device" && i + 1L <= length(args)) {
+      gpu_device <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
     i <- i + 1L
   }
 }
@@ -74,6 +88,12 @@ if (!is.finite(kodama_ncomp) || kodama_ncomp < 1L) {
 }
 if (!is.finite(n_cores) || n_cores < 1L) {
   n_cores <- 1L
+}
+if (!backend %in% c("cpu", "cuda", "metal")) {
+  stop("--backend must be one of: cpu, cuda, metal")
+}
+if (!is.finite(gpu_device) || gpu_device < 0L) {
+  gpu_device <- 0L
 }
 
 normalize_modes <- function(mode_string) {
@@ -98,11 +118,16 @@ normalize_modes <- function(mode_string) {
 }
 
 library(KODAMA)
-library(KODAMAextra)
-library(SPARK)
 library(data.table)
-library(irlba)
-library(umap)
+
+kodama_description <- utils::packageDescription("KODAMA")
+kodama_revision <- kodama_description$RemoteSha %||% kodama_description$GithubSHA1 %||% "unknown"
+cat(sprintf(
+  "[INFO] KODAMA version=%s revision=%s backend=%s gpu_device=%d n_cores=%d\n",
+  as.character(utils::packageVersion("KODAMA")), kodama_revision, backend,
+  gpu_device, n_cores
+))
+print(KODAMA.diagnostics())
 
 plot_max_cells <- 200000L
 kodama_exact_max_cells <- 200000L
@@ -159,15 +184,19 @@ select_features <- function(mat, xy_coords, top_n, cores) {
     return(mat)
   }
 
-  idx <- tryCatch(
-    multi_SPARKX(
+  selection <- tryCatch(
+    KODAMA.spatial.features(
       mat,
       xy_coords,
-      as.factor(rep(1, nrow(mat))),
-      n.cores = cores
+      n.cores = cores,
+      require.nonzero.each.sample = FALSE
     ),
-    error = function(e) NULL
+    error = function(e) {
+      warning("KODAMA spatial feature selection failed; using variance ranking: ", conditionMessage(e))
+      NULL
+    }
   )
+  idx <- if (is.null(selection)) NULL else selection$ranking
 
   if (!is.null(idx)) {
     idx <- suppressWarnings(as.integer(idx))
@@ -176,6 +205,10 @@ select_features <- function(mat, xy_coords, top_n, cores) {
     idx <- unique(idx)
     if (length(idx) > 0L) {
       keep <- idx[seq_len(min(top_n, length(idx)))]
+      cat(sprintf(
+        "[INFO] KODAMA spatial feature selection retained=%d runtime_seconds=%.3f\n",
+        length(keep), as.numeric(selection$runtime.seconds %||% NA_real_)
+      ))
       return(mat[, keep, drop = FALSE])
     }
   }
@@ -314,22 +347,30 @@ if (!is.finite(max_nv) || max_nv < 2L) {
   )
 }
 
-data_center <- colMeans(data, na.rm = TRUE)
-data_scale <- apply(data, 2, sd, na.rm = TRUE)
-data_center[!is.finite(data_center)] <- 0
-data_scale[!is.finite(data_scale) | data_scale <= 0] <- 1
-
-pca_res <- irlba(A = data, nv = max_nv, center = data_center, scale = data_scale)
-pca <- pca_res$u %*% diag(pca_res$d)
+pca_res <- KODAMA.pca(
+  data,
+  ncomp = max_nv,
+  center = TRUE,
+  scale = TRUE,
+  backend = backend,
+  n.cores = as.integer(n_cores),
+  gpu.device = as.integer(gpu_device),
+  seed = 543210L
+)
+pca <- pca_res$scores
 rownames(pca) <- common_ids
-cat(sprintf("[INFO] PCA components computed=%d requested=%d\n", ncol(pca), requested_pca_components))
+cat(sprintf(
+  "[INFO] PCA components computed=%d requested=%d backend=%s runtime_seconds=%.3f\n",
+  ncol(pca), requested_pca_components, pca_res$backend %||% backend,
+  as.numeric(pca_res$runtime_seconds %||% NA_real_)
+))
 
 lab <- as.factor(ann[, "polygon_label"])
 
 rm(
   list = intersect(
     c(
-      "data", "data_parts", "mode_mats", "mats_selected", "data_center", "data_scale",
+      "data", "data_parts", "mode_mats", "mats_selected",
       "r_tile_selected", "r_nuclei_selected", "r_cyto_selected", "r_inner_selected",
       "embeddings_raw", "r_tile", "r_full", "r_nuclei", "r_cyto", "r_inner",
       "ann_full", "xy_full", "ann_ids", "mode_overlap_with_annotations"
@@ -354,7 +395,12 @@ pca_rdata <- file.path(output_dir, paste0("pca_full_", ncol(pca), ".RData"))
 save(pca, xy, file = pca_rdata)
 
 if (nrow(pca) <= plot_max_cells) {
-  u <- umap::umap(pca)$layout
+  u <- fastEmbedR::umap(
+    pca,
+    backend = "cpu",
+    n.cores = as.integer(n_cores),
+    seed = 543210L
+  )$layout
   rownames(u) <- common_ids
   umap_pdf <- file.path(output_dir, paste0("umap_full_", ncol(pca), ".pdf"))
   pdf(umap_pdf)
@@ -391,26 +437,32 @@ kodama_ncomp <- min(as.integer(kodama_ncomp), dims_use)
 cat(sprintf("[INFO] KODAMA landmarks=%d\n", kodama_landmarks))
 cat(sprintf("[INFO] KODAMA internal ncomp=%d\n", kodama_ncomp))
 
-config <- umap::umap.defaults
-config$n_threads <- as.integer(n_cores)
+visual_neighbors <- 30L
 
 if (nrow(pca) <= kodama_exact_max_cells) {
-  config$n_neighbors <- min(30L, nrow(pca) - 1L)
+  visual_neighbors <- min(30L, nrow(pca) - 1L)
   jj <- KODAMA.matrix(
     pca[, seq_len(dims_use), drop = FALSE],
     spatial = spatial_for_kodama,
     landmarks = kodama_landmarks,
     n.cores = as.integer(n_cores),
     seed = 543210,
-    ancestry = FALSE,
-    ncomp = kodama_ncomp
+    ncomp = kodama_ncomp,
+    backend = backend,
+    visual.init = TRUE,
+    return.graph = "handle"
   )
-  vis <- KODAMA.visualization(jj, config = config)
+  vis <- KODAMA.visualization(
+    jj,
+    method = "UMAP",
+    k = visual_neighbors,
+    backend = backend,
+    n.cores = as.integer(n_cores),
+    gpu.device = as.integer(gpu_device),
+    seed = 543210L
+  )
   rownames(vis) <- common_ids
 } else {
-  if (!requireNamespace("BiocNeighbors", quietly = TRUE)) {
-    stop("BiocNeighbors is required for landmark-projected KODAMA on large cell sets.")
-  }
   projection_cells <- min(
     nrow(pca),
     kodama_projection_max_cells,
@@ -430,33 +482,43 @@ if (nrow(pca) <= kodama_exact_max_cells) {
   spatial_kodama <- spatial_for_kodama[projection_idx, , drop = FALSE]
   rownames(pca_kodama) <- projection_ids
   rownames(spatial_kodama) <- projection_ids
-  config$n_neighbors <- min(30L, nrow(pca_kodama) - 1L)
+  visual_neighbors <- min(30L, nrow(pca_kodama) - 1L)
   jj <- KODAMA.matrix(
     pca_kodama,
     spatial = spatial_kodama,
     landmarks = min(kodama_landmarks, nrow(pca_kodama)),
     n.cores = as.integer(n_cores),
     seed = 543210,
-    ancestry = FALSE,
-    ncomp = kodama_ncomp
+    ncomp = kodama_ncomp,
+    backend = backend,
+    visual.init = TRUE,
+    return.graph = "handle"
   )
-  vis_kodama <- KODAMA.visualization(jj, config = config)
+  vis_kodama <- KODAMA.visualization(
+    jj,
+    method = "UMAP",
+    k = visual_neighbors,
+    backend = backend,
+    n.cores = as.integer(n_cores),
+    gpu.device = as.integer(gpu_device),
+    seed = 543210L
+  )
   rownames(vis_kodama) <- projection_ids
 
   nn_k <- min(kodama_projection_neighbors, nrow(pca_kodama))
-  nn <- BiocNeighbors::queryKNN(
-    X = pca_kodama,
+  nn <- fastEmbedR::precompute_query_knn(
+    reference = pca_kodama,
     query = pca[, seq_len(dims_use), drop = FALSE],
     k = nn_k,
-    BNPARAM = BiocNeighbors::KmknnParam(),
-    num.threads = as.integer(n_cores)
+    backend = "cpu",
+    n.cores = as.integer(n_cores)
   )
-  weights <- 1 / pmax(nn$distance, 1e-6)
+  weights <- 1 / pmax(nn$distances, 1e-6)
   weights <- weights / rowSums(weights)
 
   vis <- matrix(0, nrow = nrow(pca), ncol = ncol(vis_kodama))
   for (j in seq_len(nn_k)) {
-    vis <- vis + vis_kodama[nn$index[, j], , drop = FALSE] * weights[, j]
+    vis <- vis + vis_kodama[nn$indices[, j], , drop = FALSE] * weights[, j]
   }
   rownames(vis) <- common_ids
   colnames(vis) <- colnames(vis_kodama)
@@ -476,6 +538,12 @@ dev.off()
 
 kodama_rdata <- file.path(output_dir, paste0("kodama_full_", dims_use, ".RData"))
 save(vis, xy, common_ids, ann, lab, selected_modes, file = kodama_rdata)
+
+timing <- KODAMA.timing(jj)
+timing$backend <- backend
+timing$package_version <- as.character(utils::packageVersion("KODAMA"))
+timing$package_revision <- kodama_revision
+data.table::fwrite(timing, file.path(output_dir, "kodama_native_timing.csv"))
 
 cat(sprintf("[INFO] Shared cells=%d\n", length(common_ids)))
 cat(sprintf("[INFO] Selected modes=%s\n", paste(selected_modes, collapse = ",")))

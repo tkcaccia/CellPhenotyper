@@ -1,0 +1,45 @@
+ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.6-gpu
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG CONCH_REVISION=141cc09c
+ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
+
+RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -euo pipefail && \
+    micromamba run -n stardist pip install --no-cache-dir \
+      "transformers>=4.51,<5" einops-exts ftfy regex tokenizers && \
+    micromamba run -n stardist pip install --no-cache-dir --no-deps \
+      "git+https://github.com/MahmoodLab/CONCH.git@${CONCH_REVISION}" && \
+    micromamba run -n stardist python -c \
+      "import conch, einops_exts, torch, transformers; assert transformers.__version__.split('.')[0] == '4'; assert torch.cuda.is_available() or torch.backends.cuda.is_built(); print('TITAN runtime dependencies passed')"
+
+RUN set -euo pipefail && \
+    micromamba install -y -n kodama-r -c conda-forge libuv && \
+    micromamba run -n kodama-r Rscript -e \
+      'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=4L); stopifnot(getRversion() >= "4.6.0"); library(ggplot2); library(rmarkdown)'
+
+RUN set -euo pipefail && \
+    micromamba run -n kodama-r Rscript -e \
+      "remotes::install_github('tkcaccia/fastPLS@${FASTPLS_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e \
+      'stopifnot(getRversion() >= "4.6.0"); library(fastPLS); library(ggplot2); library(rmarkdown); cat("PathoFMPred runtime dependencies passed\n")' && \
+    micromamba clean -a -y
+
+RUN mkdir -p /opt/cellphenotyper/empty-r-library
+ENV R_LIBS_USER=/opt/cellphenotyper/empty-r-library
+ENV R_ENVIRON_USER=/dev/null
+ENV R_PROFILE_USER=/dev/null
+
+WORKDIR /opt/cellphenotyper
+COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md UPSTREAM_DIFFS.md /opt/cellphenotyper/
+COPY bin /opt/cellphenotyper/bin
+COPY modules /opt/cellphenotyper/modules
+COPY subworkflows /opt/cellphenotyper/subworkflows
+COPY docker /opt/cellphenotyper/docker
+COPY examples /opt/cellphenotyper/examples
+COPY singularity /opt/cellphenotyper/singularity
+
+CMD ["/bin/bash"]

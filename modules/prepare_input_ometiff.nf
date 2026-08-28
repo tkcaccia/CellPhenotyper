@@ -16,6 +16,7 @@ process PREPARE_INPUT_OMETIFF {
 
     script:
     def image_name = image_file.getName().toLowerCase()
+    def staged_image_name = image_file.getName()
     def is_ome = image_name.endsWith('.ome.tif') || image_name.endsWith('.ome.tiff')
     def is_btf = image_name.endsWith('.btf')
     def is_tiff_like = image_name.endsWith('.tif') || image_name.endsWith('.tiff')
@@ -58,14 +59,14 @@ PY
     fi
 
     if [[ "${is_ome}" == "true" ]]; then
-      [[ -s "${image_file}" ]] || { echo "Input OME-TIFF missing or empty: ${image_file}" >&2; exit 1; }
-      cp -f "${image_file}" "${sample_id}.ome.tif"
+      [[ -s "${staged_image_name}" ]] || { echo "Input OME-TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
+      cp -f "${staged_image_name}" "${sample_id}.ome.tif"
       exit 0
     fi
 
     if [[ "${is_btf}" == "true" ]]; then
       bash "${btf_converter_script}" \\
-        --in "${image_file}" \\
+        --in "${staged_image_name}" \\
         --out "${sample_id}.ome.tif" \\
         --compression "${params.convert_compression}" \\
         --downsample "${params.convert_downsample}" \\
@@ -78,13 +79,13 @@ PY
     fi
 
     if [[ "${is_tiff_like}" == "true" ]]; then
-      [[ -s "${image_file}" ]] || { echo "Input TIFF missing or empty: ${image_file}" >&2; exit 1; }
-      cp -f "${image_file}" "${sample_id}.ome.tif"
+      [[ -s "${staged_image_name}" ]] || { echo "Input TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
+      cp -f "${staged_image_name}" "${sample_id}.ome.tif"
       exit 0
     fi
 
     python "${generic_converter_script}" \
-      --input "${image_file}" \
+      --input "${staged_image_name}" \
       --output "${sample_id}.ome.tif" \
       --input-region "${input_region}" \
       --compression "${params.convert_compression}" \
@@ -93,7 +94,7 @@ PY
       --tile 512
     exit 0
 
-    echo "Unsupported input image format: ${image_file}" >&2
+    echo "Unsupported input image format: ${staged_image_name}" >&2
     echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .czi, .svs, .ndpi, .scn, .mrxs, .vms, .vmu, .tif, .tiff, .png, .jpg, .jpeg" >&2
     exit 2
     """

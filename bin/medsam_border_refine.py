@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import time
@@ -16,6 +17,8 @@ from grow_to_tissue_core import keep_seeded_components, to_float_rgb
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REMOVE_SMALL_HOLES_HAS_MAX_SIZE = "max_size" in inspect.signature(morphology.remove_small_holes).parameters
+_REMOVE_SMALL_OBJECTS_HAS_MAX_SIZE = "max_size" in inspect.signature(morphology.remove_small_objects).parameters
 DEFAULT_MEDSAM_REPO = Path(os.environ.get("MEDSAM_REPO_DIR", str(PROJECT_ROOT / "third_party" / "MedSAM")))
 DEFAULT_MEDSAM_CHECKPOINT = Path(
     os.environ.get(
@@ -483,8 +486,8 @@ def _smooth_union_border(mask: np.ndarray, seed_binary: np.ndarray, protected_co
     radius = max(0, int(radius) + 1)
     if radius > 0:
         selem = morphology.disk(radius)
-        out = morphology.binary_opening(out, selem)
-        out = morphology.binary_closing(out, selem)
+        out = morphology.opening(out, selem)
+        out = morphology.closing(out, selem)
         out = ndi.binary_fill_holes(out)
     out |= seed_binary.astype(bool)
     out |= protected_core.astype(bool)
@@ -496,7 +499,7 @@ def _prune_thin_structures(mask: np.ndarray, seed_binary: np.ndarray, protected_
     out = np.asarray(mask).astype(bool)
     radius = max(0, int(radius))
     if radius > 0:
-        opened = morphology.binary_opening(out, morphology.disk(radius))
+        opened = morphology.opening(out, morphology.disk(radius))
         opened |= seed_binary.astype(bool)
         opened |= protected_core.astype(bool)
         opened = ndi.binary_fill_holes(opened)
@@ -509,10 +512,19 @@ def _prune_thin_structures(mask: np.ndarray, seed_binary: np.ndarray, protected_
 def _conservative_cleanup(mask: np.ndarray, baseline: np.ndarray, seed_binary: np.ndarray, protected_core: np.ndarray, editable_band: np.ndarray, outer_envelope: np.ndarray, background_mask: np.ndarray, config: MedSAMConfig) -> np.ndarray:
     out = mask.astype(bool)
     if int(config.smooth_radius) > 0:
-        out = morphology.binary_closing(out, morphology.disk(int(config.smooth_radius)))
-    out = morphology.remove_small_holes(out, area_threshold=max(int(config.min_object_size), 256))
+        out = morphology.closing(out, morphology.disk(int(config.smooth_radius)))
+    hole_threshold = max(int(config.min_object_size), 256)
+    if _REMOVE_SMALL_HOLES_HAS_MAX_SIZE:
+        # New API removes holes <= max_size; threshold - 1 preserves the old < threshold behavior.
+        out = morphology.remove_small_holes(out, max_size=hole_threshold - 1)
+    else:
+        out = morphology.remove_small_holes(out, area_threshold=hole_threshold)
     if int(config.min_object_size) > 0:
-        out = morphology.remove_small_objects(out, min_size=int(config.min_object_size))
+        object_threshold = int(config.min_object_size)
+        if _REMOVE_SMALL_OBJECTS_HAS_MAX_SIZE:
+            out = morphology.remove_small_objects(out, max_size=object_threshold - 1)
+        else:
+            out = morphology.remove_small_objects(out, min_size=object_threshold)
     out &= outer_envelope
     out |= seed_binary
     if bool(config.force_core_preservation):

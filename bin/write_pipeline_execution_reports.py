@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 
@@ -15,6 +16,9 @@ STAGE_DEFS = [
     {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif"]},
     {"id": "grandqc", "folder": "02_grandqc", "title": "GrandQC Artifact QC", "expected": ["_grandqc_summary.json", "_grandqc_artifact_mask.tif", "_grandqc_clean_tissue_mask.tif"]},
     {"id": "stardist", "folder": "03_stardist", "title": "StarDist Segmentation", "expected": ["labels.tif", "objects.csv"]},
+    {"id": "hovernet_monusac", "folder": "03b_hovernet_monusac", "title": "HoVer-Net MoNuSAC", "expected": ["hovernet_cells.json"]},
+    {"id": "cellvitpp", "folder": "03c_cellvitpp", "title": "CellViT++", "expected": ["cellvit_cells.json"]},
+    {"id": "cell_consensus", "folder": "03d_cell_consensus", "title": "Consensus Cell Identification", "expected": ["labels.tif", "objects.csv", "alignment.csv", "consensus_cells.geojson", "consensus_summary.json", "consensus_preview.png"]},
     {"id": "tma", "folder": "04_TMA", "title": "TMA Detection and Cell-to-Spot Assignment", "expected": ["_tma_summary.json", "_tma_spots.geojson", "_objects_tma_assigned.csv"]},
     {"id": "tissue_mask", "folder": "04_tissue_mask", "title": "Tissue Mask", "expected": ["_tissue_mask.tif"]},
     {"id": "gigatime", "folder": "05_gigatime", "title": "GigaTIME Virtual mIF + Marker Quantification", "expected": ["gigatime_probs.ome.tif", "gigatime_probs.zarr", "_gigatime_quantification.csv", "_gigatime_mean_intensity.csv", "_gigatime_intensity_stats.csv", "_gigatime_intensity_summary.json"]},
@@ -28,6 +32,9 @@ STAGE_DEFS = [
     {"id": "grown_tissue", "folder": "13_grown_tissue", "title": "Grown Tissue", "expected": ["_grown_mask.ome.tif"]},
     {"id": "medsam_refine_tissue", "folder": "14_medsam_refine_tissue", "title": "MedSAM Refinement", "expected": ["_grown_mask_refined.ome.tif", "_medsam_editable_band.png", "_medsam_raw_vs_final_panel.png", "_medsam_kodama_membership.png"]},
     {"id": "cluster_geojson", "folder": "15_cluster_geojson", "title": "Cluster GeoJSON", "expected": [".geojson"]},
+    {"id": "neoplastic_section", "folder": "16_neoplastic_section", "title": "Neoplastic-Enriched Tissue Section", "expected": ["selected_section.ome.tif", "section_neoplastic_counts.csv", "selected_section_summary.json", "selected_section_preview.png"]},
+    {"id": "titan", "folder": "17_titan", "title": "TITAN Section Representation", "expected": ["titan_embedding.csv", "titan_patch_features.h5", "titan_metadata.json"]},
+    {"id": "pathofmpred", "folder": "18_pathofmpred", "title": "PathoFMPred Research Predictions", "expected": ["pathofmpred_predictions.csv", "pathofmpred_research_report.html", "pathofmpred_continuous_radar.png", "pathofmpred_binary_predictions.png"]},
     {"id": "execution", "folder": "00_execution", "title": "Execution Metadata", "expected": ["trace.tsv", "timeline.html", "dag.html"]},
 ]
 
@@ -223,10 +230,59 @@ def stage_summary(outdir: Path) -> list[dict]:
     return rows
 
 
-def make_output_id(run_name: str, stage_id: str, relative_path: str) -> str:
-    seed = f"{run_name}\t{stage_id}\t{relative_path}".encode("utf-8")
+def make_output_id(namespace: str, stage_id: str, relative_path: str) -> str:
+    seed = f"{namespace}\t{stage_id}\t{relative_path}".encode("utf-8")
     digest = hashlib.sha1(seed).hexdigest()[:16]
     return f"{stage_id}_{digest}"
+
+
+def safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "unnamed"
+
+
+def preserve_trace(
+    execution_dir: Path,
+    run_name: str,
+    success: bool,
+    start_point: str,
+    end_point: str,
+) -> tuple[Path, dict | None]:
+    """Snapshot each run trace and retain the latest successful full-pipeline trace."""
+    trace_path = execution_dir / "trace.tsv"
+    runs_dir = execution_dir / "run_traces"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_path = runs_dir / f"{safe_name(run_name)}_{safe_name(start_point)}_to_{safe_name(end_point)}.tsv"
+    if trace_path.exists():
+        shutil.copy2(trace_path, snapshot_path)
+
+    full_trace_path = execution_dir / "full_pipeline_trace.tsv"
+    full_meta_path = execution_dir / "full_pipeline_run.json"
+    final_stages = {"cluster_geojson", "neoplastic_section", "titan", "pathofmpred"}
+    is_full_run = success and start_point == "convert" and end_point in final_stages
+    if is_full_run and trace_path.exists():
+        shutil.copy2(trace_path, full_trace_path)
+        full_meta_path.write_text(
+            json.dumps(
+                {
+                    "run_name": run_name,
+                    "success": success,
+                    "start_point": start_point,
+                    "end_point": end_point,
+                    "trace_file": str(full_trace_path),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    full_meta = None
+    if full_trace_path.exists() and full_meta_path.exists():
+        try:
+            full_meta = json.loads(full_meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            full_meta = None
+    return (full_trace_path if full_trace_path.exists() else trace_path), full_meta
 
 
 def main() -> int:
@@ -244,15 +300,33 @@ def main() -> int:
     execution_dir = (outdir / "00_execution").resolve()
     execution_dir.mkdir(parents=True, exist_ok=True)
 
+    success = args.success.strip().lower() == "true"
+    trace_source, full_run_meta = preserve_trace(
+        execution_dir,
+        args.run_name,
+        success,
+        args.start_point,
+        args.end_point,
+    )
+
     stages = stage_summary(outdir)
-    trace_rows = summarize_trace(execution_dir / "trace.tsv")
+    trace_rows = summarize_trace(trace_source)
+    trace_history = []
+    for run_trace in sorted((execution_dir / "run_traces").glob("*.tsv")):
+        for row in summarize_trace(run_trace):
+            trace_history.append({"trace": run_trace.name, **row})
+    report_run_name = str(full_run_meta.get("run_name")) if full_run_meta else args.run_name
+    report_start = str(full_run_meta.get("start_point")) if full_run_meta else args.start_point
+    report_end = str(full_run_meta.get("end_point")) if full_run_meta else args.end_point
+    report_success = bool(full_run_meta.get("success")) if full_run_meta else success
 
     manifest_path = execution_dir / "outputs_manifest.txt"
     manifest_lines = [
         "CellPhenotyper Output Manifest",
-        f"Run name: {args.run_name}",
-        f"Success: {args.success}",
-        f"Stage window: {args.start_point} -> {args.end_point}",
+        f"Run name: {report_run_name}",
+        f"Success: {str(report_success).lower()}",
+        f"Stage window: {report_start} -> {report_end}",
+        f"Timing trace: {trace_source}",
         "",
         f"Stage folders under: {outdir}",
     ]
@@ -266,7 +340,7 @@ def main() -> int:
         for f in s["files"]:
             project_records.append(
                 {
-                    "output_id": make_output_id(args.run_name, s["id"], f["relative_path"]),
+                    "output_id": make_output_id(str(outdir), s["id"], f["relative_path"]),
                     "stage_id": s["id"],
                     "stage_title": s["title"],
                     "stage_folder": s["folder"],
@@ -277,10 +351,10 @@ def main() -> int:
     project_json_path = execution_dir / "project_outputs.json"
     project_tsv_path = execution_dir / "project_outputs.tsv"
     project_payload = {
-        "run_name": args.run_name,
-        "success": args.success,
+        "run_name": report_run_name,
+        "success": report_success,
         "output_root": str(outdir),
-        "stage_window": {"start": args.start_point, "end": args.end_point},
+        "stage_window": {"start": report_start, "end": report_end},
         "input_context": {
             "image_input": str(Path(args.image_input).resolve()) if args.image_input else None,
             "roi_geojson": str(Path(args.roi_geojson).resolve()) if args.roi_geojson else None,
@@ -301,9 +375,10 @@ def main() -> int:
     report_lines = [
         "# CellPhenotyper Final Report",
         "",
-        f"- Run name: `{args.run_name}`",
-        f"- Success: `{args.success}`",
-        f"- Stage window: `{args.start_point} -> {args.end_point}`",
+        f"- Run name: `{report_run_name}`",
+        f"- Success: `{str(report_success).lower()}`",
+        f"- Stage window: `{report_start} -> {report_end}`",
+        f"- Timing trace: `{trace_source}`",
         f"- Output root: `{outdir}`",
         f"- Project outputs JSON: `{project_json_path}`",
         f"- Project outputs TSV: `{project_tsv_path}`",
@@ -333,15 +408,28 @@ def main() -> int:
             )
     else:
         report_lines.append("Trace file not available.")
+    report_lines.extend(["", "## Run Timing History", ""])
+    if trace_history:
+        report_lines.extend([
+            "| Run trace | Process | Tasks | Total Realtime | Peak RSS | Failed Tasks |",
+            "|---|---|---:|---:|---:|---:|",
+        ])
+        for row in trace_history:
+            report_lines.append(
+                f"| `{row['trace']}` | `{row['process']}` | {row['tasks']} | {row['realtime_human']} | {row['peak_human']} | {row['failed']} |"
+            )
+    else:
+        report_lines.append("No preserved per-run traces are available.")
     report_md_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 
     final_report_json_path = execution_dir / "final_report.json"
     final_report_json_path.write_text(
         json.dumps(
             {
-                "run_name": args.run_name,
-                "success": args.success,
-                "stage_window": {"start": args.start_point, "end": args.end_point},
+                "run_name": report_run_name,
+                "success": report_success,
+                "stage_window": {"start": report_start, "end": report_end},
+                "timing_trace": str(trace_source),
                 "output_root": str(outdir),
                 "stages": [
                     {
@@ -356,6 +444,7 @@ def main() -> int:
                     for s in stages
                 ],
                 "process_trace_summary": trace_rows,
+                "run_trace_history": trace_history,
                 "project_outputs_json": str(project_json_path),
                 "project_outputs_tsv": str(project_tsv_path),
             },

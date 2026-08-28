@@ -14,15 +14,17 @@ From: ubuntu:22.04
     ca-certificates curl wget git build-essential pkg-config \
     libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev libicu-dev \
     libfontconfig1-dev libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
-    libharfbuzz-dev libfribidi-dev libglpk-dev \
+    libharfbuzz-dev libfribidi-dev libglpk-dev libuv1-dev \
     libopenslide0 \
     libvips42 \
     gfortran \
     openjdk-17-jre-headless \
+    pandoc \
     && rm -rf /var/lib/apt/lists/*
 
   mkdir -p /opt/cellphenotyper/third_party /opt/cellphenotyper/docker
   git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM
+  git clone --depth 1 https://github.com/vqdang/hover_net /opt/cellphenotyper/third_party/hover_net
   mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM
   wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1"
   mkdir -p /opt/cellphenotyper/third_party/grandqc/pydeps /opt/cellphenotyper/third_party/grandqc/models/td /opt/cellphenotyper/third_party/grandqc/models/qc
@@ -113,6 +115,34 @@ if not torch.version.cuda:
 print(f"[INFO] PyTorch CUDA arch list: {torch.cuda.get_arch_list()}")
 PY
 
+  # TITAN uses the official CONCH patch encoder returned by the gated model.
+  micromamba run -n stardist pip install --no-cache-dir ftfy regex tokenizers
+  micromamba run -n stardist pip install --no-cache-dir --no-deps \
+    git+https://github.com/Mahmoodlab/CONCH.git@141cc09c
+  micromamba run -n stardist python -c "import conch; from transformers import AutoModel; print('TITAN/CONCH runtime check passed')"
+
+  # Isolate CellViT++ from the StarDist/UNI-2 Python stack.
+  micromamba run -n stardist pip install --no-cache-dir \
+    "numpy<2" "opencv-python-headless<4.12" gdown docopt future psutil \
+    "scikit-learn<1.8" tensorboardX termcolor
+  micromamba run -n stardist pip install --no-cache-dir --no-deps imgaug==0.4.0
+  mkdir -p /opt/cellphenotyper/models/hovernet
+  micromamba run -n stardist gdown 13qkxDqv7CUqxN-l5CpeFVmc24mDw6CeV \
+    -O /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+  retry_cmd micromamba create -y -n cellvit python=3.11 pip
+  if [ "${MM_ARCH}" = "x86_64" ]; then
+    micromamba run -n cellvit pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cu128 torch torchvision
+  else
+    micromamba run -n cellvit pip install --no-cache-dir --pre \
+      --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision
+  fi
+  micromamba run -n cellvit pip install --no-cache-dir cellvit==1.0.9
+  mkdir -p /opt/cellphenotyper/models/cellvit
+  CELLVIT_CACHE=/opt/cellphenotyper/models/cellvit micromamba run -n cellvit python -c \
+    "from cellvit.utils.cache_models import cache_cellvit_256, cache_classifier; cache_cellvit_256(); cache_classifier()"
+  micromamba run -n cellvit cellvit-inference --help >/dev/null
+
   micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi
 
   # OME tools
@@ -130,10 +160,20 @@ PY
 
   # Bioconductor / GitHub packages
   micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")'
-  micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")'
-  micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")'
+  FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
+  KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
+  micromamba create -y -n kodama-r -c conda-forge -c bioconda --channel-priority strict \
+    'r-base>=4.6' zlib libuv
+  micromamba run -n kodama-r Rscript -e 'stopifnot(getRversion() >= "4.6.0"); install.packages(c("Rcpp", "withr", "generics", "data.table", "R.utils", "remotes", "Matrix", "float", "RcppArmadillo", "RcppEigen", "ggplot2", "rmarkdown"), repos="https://cloud.r-project.org", Ncpus=4L)'
+  micromamba run -n kodama-r Rscript -e "remotes::install_github('tkcaccia/fastPLS@dcf45cccee8a1cb1a3ae8b3353a410ab0902162f', dependencies=FALSE, upgrade='never')"
+  micromamba run -n kodama-r Rscript -e "remotes::install_github('Bioconductor/BiocGenerics@32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b', dependencies=FALSE, upgrade='never')"
+  micromamba run -n kodama-r Rscript -e "remotes::install_github('Bioconductor/S4Vectors@fc819a547a51d682f7788ae16a42c26840b1ed2f', dependencies=FALSE, upgrade='never')"
+  micromamba run -n kodama-r Rscript -e "remotes::install_github('tkcaccia/fastEmbedR@${FASTEMBEDR_REVISION}', dependencies=FALSE, upgrade='never')"
+  micromamba run -n kodama-r Rscript -e "remotes::install_github('tkcaccia/KODAMA@${KODAMA_REVISION}', dependencies=FALSE, upgrade='never')"
   micromamba run -n stardist Rscript -e 'install.packages("Rnanoflann", repos="https://cloud.r-project.org")'
-  micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); library(BiocNeighbors); library(RANN); library(Rnanoflann); library(RcppHNSW); library(RcppAnnoy); library(uwot); cat("R runtime package check passed\n")'
+  micromamba run -n kodama-r Rscript -e 'stopifnot(getRversion() >= "4.6.0", packageVersion("fastEmbedR") >= "0.99.5", packageVersion("KODAMA") == "0.99.7"); library(KODAMA); library(fastEmbedR); library(data.table); cat("KODAMA R 4.6 runtime check passed\n")'
+  micromamba run -n stardist Rscript -e 'library(SPARK); library(BiocNeighbors); library(RANN); library(Rnanoflann); library(RcppHNSW); library(RcppAnnoy); library(uwot); cat("General R runtime package check passed\n")'
+  micromamba run -n kodama-r Rscript -e 'stopifnot(getRversion() >= "4.6.0"); library(fastPLS); library(ggplot2); library(rmarkdown); cat("PathoFMPred R 4.6 dependency check passed\n")'
 
   micromamba run -n stardist python -m pip install --no-cache-dir --upgrade \
     --target /opt/cellphenotyper/third_party/grandqc/pydeps \
@@ -163,6 +203,7 @@ if missing:
 print("GrandQC bundled runtime check passed")
 PY
   chmod -R a+rX /opt/cellphenotyper/third_party/grandqc
+  mkdir -p /opt/cellphenotyper/empty-r-library
 
   micromamba clean -a -y
 
@@ -175,6 +216,12 @@ PY
   export GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
   export MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
   export MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
+  export HOVERNET_REPO_DIR=/opt/cellphenotyper/third_party/hover_net
+  export HOVERNET_MONUSAC_CHECKPOINT=/opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+  export CELLVIT_EXECUTABLE=/opt/micromamba/envs/cellvit/bin/cellvit-inference
+  export R_LIBS_USER=/opt/cellphenotyper/empty-r-library
+  export R_ENVIRON_USER=/dev/null
+  export R_PROFILE_USER=/dev/null
 
 %runscript
   exec "$@"

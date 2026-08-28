@@ -1,0 +1,20 @@
+ARG BASE_IMAGE=cellphenotyper-local:2.7-final-gpu-amd64
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN mkdir -p /opt/cellphenotyper/empty-r-library
+ENV R_LIBS_USER=/opt/cellphenotyper/empty-r-library
+ENV R_ENVIRON_USER=/dev/null
+ENV R_PROFILE_USER=/dev/null
+
+WORKDIR /opt/cellphenotyper
+COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md UPSTREAM_DIFFS.md /opt/cellphenotyper/
+COPY bin /opt/cellphenotyper/bin
+COPY modules /opt/cellphenotyper/modules
+COPY subworkflows /opt/cellphenotyper/subworkflows
+COPY docker /opt/cellphenotyper/docker
+COPY examples /opt/cellphenotyper/examples
+COPY singularity /opt/cellphenotyper/singularity
+
+CMD ["/bin/bash"]

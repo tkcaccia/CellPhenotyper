@@ -39,7 +39,7 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     export NUMEXPR_NUM_THREADS=1
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
-    echo "[INFO] GrandQC runtime tune: profile=${params.hardware_profile}, requested_device=${requestedGrandqcDevice}, resolved_device=${resolvedGrandqcDevice}, patch_size=${params.grandqc_patch_size}, overlap=${params.grandqc_artifact_overlap_fraction}"
+    echo "[INFO] GrandQC runtime tune: profile=${params.hardware_profile}, requested_device=${requestedGrandqcDevice}, resolved_device=${resolvedGrandqcDevice}, tissue_patch_size=${params.grandqc_patch_size}, artifact_tile_size=${params.grandqc_artifact_tile_size}, overlap=${params.grandqc_artifact_overlap_fraction}"
 
     python "${script_path}" \
       --image "${ome_tif}" \
@@ -51,6 +51,7 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
       --artifact-mpp-model ${params.grandqc_artifact_mpp_model} \
       --tissue-mpp-model ${params.grandqc_tissue_mpp_model} \
       --patch-size ${params.grandqc_patch_size} \
+      --artifact-tile-size ${params.grandqc_artifact_tile_size} \
       --artifact-overlap-fraction ${params.grandqc_artifact_overlap_fraction} \
       --overlay-factor ${params.grandqc_overlay_factor} \
       --preview-max-side ${params.grandqc_preview_max_side} \

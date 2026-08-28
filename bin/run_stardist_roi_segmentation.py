@@ -33,6 +33,7 @@ import math
 import io
 import contextlib
 import os
+import re
 import subprocess
 import shutil
 import sys
@@ -42,6 +43,70 @@ from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 import numpy as np
 import tifffile
+
+
+def _safe_float(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        num, den = value
+        try:
+            den = float(den)
+            if den == 0.0:
+                return None
+            return float(num) / den
+        except Exception:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def read_mpp_from_tiff(path: Path) -> float | None:
+    unit_to_um = {
+        2: 25_400.0,  # inch
+        3: 10_000.0,  # centimeter
+    }
+    try:
+        with tifffile.TiffFile(str(path)) as tf:
+            page = tf.pages[0]
+            desc = None
+            try:
+                desc = page.tags["ImageDescription"].value
+            except Exception:
+                desc = getattr(tf, "ome_metadata", None)
+            if isinstance(desc, str):
+                vals = []
+                for pattern in (
+                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
+                    r'PhysicalSizeY="([0-9]+(?:\.[0-9]+)?)"',
+                    r"MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
+                    r"aperio.MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
+                ):
+                    vals.extend(float(m.group(1)) for m in re.finditer(pattern, desc))
+                if vals:
+                    return float(sum(vals) / len(vals))
+
+            unit = None
+            try:
+                unit = int(page.tags["ResolutionUnit"].value)
+            except Exception:
+                unit = None
+            if unit in unit_to_um:
+                vals = []
+                for tag_name in ("XResolution", "YResolution"):
+                    try:
+                        res = _safe_float(page.tags[tag_name].value)
+                    except Exception:
+                        res = None
+                    if res and res > 0:
+                        vals.append(unit_to_um[unit] / res)
+                if vals:
+                    return float(sum(vals) / len(vals))
+    except Exception:
+        return None
+    return None
 
 def write_full_labels_tif(full_out: Path, labels_crop: np.ndarray, x0: int, y0: int, full_w: int, full_h: int) -> None:
     """Write a full-resolution label image (BigTIFF) without allocating the full array in RAM."""
@@ -1298,14 +1363,12 @@ def build_big_block_candidates(requested_block_size: int,
     candidates: List[int] = []
     for value in ladder:
         ivalue = int(max(512, value))
-        if ivalue > requested_block_size:
+        if ivalue > block:
             continue
         if ivalue in seen:
             continue
         seen.add(ivalue)
         candidates.append(ivalue)
-    if requested_block_size not in seen:
-        candidates.insert(0, int(max(512, requested_block_size)))
     return candidates
 
 
@@ -1494,6 +1557,7 @@ def main() -> None:
         die(f"ROI not found: {roi_path}")
 
     roi_geo = json.loads(roi_path.read_text())
+    source_mpp = read_mpp_from_tiff(in_path)
 
     # ---- 1) crop bbox from level0 ----
     with tifffile.TiffFile(in_path) as tf:
@@ -1606,6 +1670,9 @@ def main() -> None:
             "crop_size": {"width": int(crop_w), "height": int(crop_h)},
             "full_size": {"width": int(W0), "height": int(H0)},
         }
+        if source_mpp and source_mpp > 0:
+            shift_info["source_mpp"] = float(source_mpp)
+            shift_info["microns_per_pixel"] = float(source_mpp)
         (outdir / "shift.json").write_text(json.dumps(shift_info, indent=2))
         log(f"Wrote shift info: {outdir / 'shift.json'}")
 

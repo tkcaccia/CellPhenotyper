@@ -388,13 +388,12 @@ def choose_downsample_factor(
     bytes_per_sample: int,
     strict_target_mpp: bool,
     enable_max_side_fallback: bool = True,
-) -> tuple[int, dict]:
-    factor = 1
+) -> tuple[float, dict]:
+    factor = 1.0
     reason = "native"
 
     if source_mpp and source_mpp > 0 and target_mpp > 0:
-        requested_factor = float(target_mpp) / float(source_mpp)
-        factor = max(1, int(math.floor(requested_factor + 0.5)))
+        factor = float(target_mpp) / float(source_mpp)
         reason = "target_mpp"
     else:
         if strict_target_mpp and target_mpp > 0:
@@ -405,7 +404,7 @@ def choose_downsample_factor(
             )
         mpix = (orig_h * orig_w) / 1_000_000.0
         if enable_max_side_fallback and (mpix > float(auto_threshold_mpix) or max(orig_h, orig_w) > int(max_side)):
-            factor = max(1, int(math.ceil(max(orig_h, orig_w) / float(max_side))))
+            factor = float(max(1, int(math.ceil(max(orig_h, orig_w) / float(max_side)))))
             reason = "max_side_fallback"
 
     if not (strict_target_mpp and source_mpp and source_mpp > 0 and target_mpp > 0):
@@ -420,13 +419,13 @@ def choose_downsample_factor(
             )
             if est_gib <= float(max_output_gib):
                 break
-            factor += 1
+            factor = max(factor + 1.0, factor * math.sqrt(est_gib / float(max_output_gib)))
             reason = "disk_budget"
 
     final_h = int(math.ceil(orig_h / float(factor)))
     final_w = int(math.ceil(orig_w / float(factor)))
     meta = {
-        "selected_factor": int(factor),
+        "selected_factor": float(factor),
         "selected_shape_yx": [final_h, final_w],
         "estimated_prediction_gib": float(
             estimate_prediction_gib(
@@ -538,8 +537,11 @@ def inspect_crop_image(
     meta = {
         "original_shape_yx": [int(orig_h), int(orig_w)],
         "inference_shape_yx": [int(math.ceil(orig_h / float(factor))), int(math.ceil(orig_w / float(factor)))],
-        "downsample_factor": int(factor),
-        "downsample_applied": bool(factor > 1),
+        "downsample_factor": float(factor),
+        "resample_factor": float(factor),
+        "resample_applied": bool(not math.isclose(factor, 1.0, rel_tol=0.0, abs_tol=1.0e-9)),
+        "downsample_applied": bool(factor > 1.0 + 1.0e-9),
+        "upsample_applied": bool(factor < 1.0 - 1.0e-9),
         "target_mpp": float(target_mpp) if target_mpp > 0 else None,
         "max_output_gib": float(max_output_gib),
     }
@@ -552,9 +554,10 @@ def read_crop_image(
     page: int,
     plan: dict,
 ) -> np.ndarray:
-    factor = int(plan["downsample_factor"])
-    if factor > 1:
-        return _read_page_lazy_downsampled(path, page, factor)[0]
+    factor = float(plan["downsample_factor"])
+    if not math.isclose(factor, 1.0, rel_tol=0.0, abs_tol=1.0e-9):
+        with LazyCropReader(path, page, factor) as reader:
+            return reader.read_region(0, reader.final_h, 0, reader.final_w)
 
     with tifffile.TiffFile(path) as tf:
         arr = tf.pages[page].asarray()
@@ -562,11 +565,20 @@ def read_crop_image(
 
 
 class LazyCropReader:
-    def __init__(self, path: str, page: int, factor: int):
+    def __init__(self, path: str, page: int, factor: float):
         self.path = path
         self.page = int(page)
-        self.factor = max(1, int(factor))
+        self.factor = float(factor)
+        if not math.isfinite(self.factor) or self.factor <= 0:
+            raise ValueError(f"Invalid image resampling factor: {factor}")
+        rounded_factor = int(round(self.factor))
+        self.integer_factor = (
+            rounded_factor
+            if rounded_factor >= 1 and math.isclose(self.factor, rounded_factor, rel_tol=0.0, abs_tol=1.0e-9)
+            else None
+        )
         self.vips_image = None
+        self.resampled_vips_image = None
         use_pyvips = pyvips is not None
         if use_pyvips:
             try:
@@ -579,7 +591,11 @@ class LazyCropReader:
                         pixel_count = int(page_shape[1]) * int(page_shape[2])
                     else:
                         pixel_count = int(page_shape[0]) * int(page_shape[1])
-                    use_pyvips = pixel_count <= int(os.environ.get("GIGATIME_PYVIPS_MAX_PIXELS", "1000000000"))
+                    # pyvips performs true region reads on tiled TIFFs. The
+                    # tifffile/zarr fallback can massively amplify reads on
+                    # multi-gigapixel crops, so keep pyvips enabled by default
+                    # for WSI-scale GigaTIME inputs unless explicitly capped.
+                    use_pyvips = pixel_count <= int(os.environ.get("GIGATIME_PYVIPS_MAX_PIXELS", "10000000000"))
             except Exception:
                 use_pyvips = pyvips is not None
         if use_pyvips:
@@ -595,6 +611,21 @@ class LazyCropReader:
             self.layout = "YXC"
             self.final_h = int(math.ceil(self.orig_h / float(self.factor)))
             self.final_w = int(math.ceil(self.orig_w / float(self.factor)))
+            if self.integer_factor is None:
+                self.resampled_vips_image = self.vips_image.resize(
+                    self.final_w / float(self.orig_w),
+                    vscale=self.final_h / float(self.orig_h),
+                    kernel="linear",
+                )
+                if (
+                    int(self.resampled_vips_image.width) != self.final_w
+                    or int(self.resampled_vips_image.height) != self.final_h
+                ):
+                    raise RuntimeError(
+                        "pyvips produced an unexpected GigaTIME resampled shape: "
+                        f"{(self.resampled_vips_image.height, self.resampled_vips_image.width)} "
+                        f"!= {(self.final_h, self.final_w)}"
+                    )
             self.tf = None
             self.page_obj = None
             self.arr = None
@@ -624,6 +655,10 @@ class LazyCropReader:
 
         self.final_h = int(math.ceil(self.orig_h / float(self.factor)))
         self.final_w = int(math.ceil(self.orig_w / float(self.factor)))
+        if self.integer_factor is None:
+            raise RuntimeError(
+                "Non-integer GigaTIME physical resampling requires pyvips for lazy, globally aligned WSI reads"
+            )
 
     def close(self) -> None:
         try:
@@ -667,19 +702,41 @@ class LazyCropReader:
         ry1 = min(self.final_h, int(y1))
         rx1 = min(self.final_w, int(x1))
 
-        sy0 = ry0 * self.factor
-        sx0 = rx0 * self.factor
-        sy1 = min(self.orig_h, ry1 * self.factor)
-        sx1 = min(self.orig_w, rx1 * self.factor)
+        if self.resampled_vips_image is not None:
+            region = self.resampled_vips_image.crop(rx0, ry0, rx1 - rx0, ry1 - ry0)
+            sampled = np.ndarray(
+                buffer=region.write_to_memory(),
+                dtype=np.uint8,
+                shape=(int(region.height), int(region.width), int(region.bands)),
+            ).copy()
+            if sampled.shape[-1] == 1:
+                sampled = sampled[..., 0]
+            elif sampled.shape[-1] > 3:
+                sampled = sampled[..., :3]
+            block = normalize_to_uint8_rgb(sampled)
+            want_h = int(y1 - y0)
+            want_w = int(x1 - x0)
+            pad_h = want_h - block.shape[0]
+            pad_w = want_w - block.shape[1]
+            if pad_h > 0 or pad_w > 0:
+                mode = "reflect" if block.shape[0] > 1 and block.shape[1] > 1 else "edge"
+                block = np.pad(block, ((0, max(0, pad_h)), (0, max(0, pad_w)), (0, 0)), mode=mode)
+            return block[:want_h, :want_w, :]
+
+        sample_step = int(self.integer_factor or 1)
+        sy0 = ry0 * sample_step
+        sx0 = rx0 * sample_step
+        sy1 = min(self.orig_h, ry1 * sample_step)
+        sx1 = min(self.orig_w, rx1 * sample_step)
         native = self._read_native_region(sy0, sy1, sx0, sx1)
 
-        if self.factor > 1:
+        if sample_step > 1:
             if native.ndim == 2:
-                sampled = native[::self.factor, ::self.factor]
+                sampled = native[::sample_step, ::sample_step]
             elif native.ndim == 3 and self.layout == "YXC":
-                sampled = native[::self.factor, ::self.factor, ...]
+                sampled = native[::sample_step, ::sample_step, ...]
             elif native.ndim == 3 and self.layout == "CYX":
-                sampled = native[..., ::self.factor, ::self.factor]
+                sampled = native[..., ::sample_step, ::sample_step]
             else:
                 raise ValueError(f"Unsupported sampled block shape: {native.shape}")
         else:
@@ -1092,11 +1149,12 @@ def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> d
         }
 
     task_memory = float(args.task_memory_gb) if float(args.task_memory_gb or 0) > 0 else None
-    usable_mem = mem_available
-    if task_memory is not None:
-        usable_mem = min(usable_mem, task_memory) if usable_mem is not None else task_memory
-    if usable_mem is not None:
-        usable_mem = max(0.0, usable_mem - float(args.min_free_system_gb))
+    reserve = float(args.min_free_system_gb)
+    if mem_available is None:
+        usable_mem = max(0.0, task_memory - reserve) if task_memory is not None else None
+    else:
+        host_usable = max(0.0, mem_available - reserve)
+        usable_mem = min(host_usable, task_memory) if task_memory is not None else host_usable
 
     if usable_mem is not None and usable_mem < 4.0:
         raise RuntimeError(
@@ -1118,11 +1176,13 @@ def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> d
         mem_block, mem_budget = 512, 0.75
     elif usable_mem < 16.0:
         mem_block, mem_budget = 768, 1.25
+        mem_batch = 2
     elif usable_mem < 24.0:
         mem_block, mem_budget = 1024, 2.0
+        mem_batch = 4
     elif usable_mem < 48.0:
         mem_block, mem_budget = 1536, 4.0
-        mem_batch = 2
+        mem_batch = 6
     elif usable_mem < 96.0:
         mem_block, mem_budget = 2048, 8.0
         mem_batch = 4
@@ -1244,10 +1304,32 @@ def _zarr_root_attrs(metadata: dict, channel_names: list[str]) -> dict:
     return root_attrs
 
 
+def choose_zarr_chunks(
+    *,
+    num_channels: int,
+    chunk_y: int,
+    chunk_x: int,
+    dtype: np.dtype,
+    max_chunk_mib: float = 64.0,
+) -> tuple[int, int, int]:
+    """Chunk all marker channels together when the spatial chunk stays modest."""
+    dtype = np.dtype(dtype)
+    channel_chunk = max(1, int(num_channels))
+    raw_mib = (
+        channel_chunk
+        * max(1, int(chunk_y))
+        * max(1, int(chunk_x))
+        * max(1, int(dtype.itemsize))
+    ) / (1024.0 ** 2)
+    if raw_mib <= float(max_chunk_mib):
+        return (channel_chunk, int(chunk_y), int(chunk_x))
+    return (1, int(chunk_y), int(chunk_x))
+
+
 def build_background_skip_mask(
     source_path: str,
     page: int,
-    factor: int,
+    factor: float,
     final_h: int,
     final_w: int,
     *,
@@ -1650,7 +1732,7 @@ def blockwise_write_ometiff_outputs(
     patch_size: int,
     stride: int,
     batch_size: int,
-    factor: int,
+    factor: float,
     tile_size: int,
     output_dtype: str,
     compression: str,
@@ -1936,7 +2018,7 @@ def blockwise_write_zarr_outputs(
     patch_size: int,
     stride: int,
     batch_size: int,
-    factor: int,
+    factor: float,
     tile_size: int,
     output_dtype: str,
     metadata: dict,
@@ -1959,9 +2041,16 @@ def blockwise_write_zarr_outputs(
     final_h, final_w = (int(v) for v in metadata["inference_shape_yx"])
     chunk_y = min(int(tile_size), final_h)
     chunk_x = min(int(tile_size), final_w)
+    store_dtype = output_dtype_info(output_dtype)[0]
+    chunks = choose_zarr_chunks(
+        num_channels=len(output_channel_names),
+        chunk_y=chunk_y,
+        chunk_x=chunk_x,
+        dtype=store_dtype,
+    )
     print(
         f"[INFO] GigaTIME zarr init shape={(len(output_channel_names), final_h, final_w)} "
-        f"chunks={(1, chunk_y, chunk_x)}",
+        f"chunks={chunks}",
         flush=True,
     )
     zarr_path = outdir / "gigatime_probs.zarr"
@@ -1981,10 +2070,10 @@ def blockwise_write_zarr_outputs(
     compressor = _zarr_compressor()
     dataset_kwargs = {
         "shape": (len(output_channel_names), final_h, final_w),
-        "chunks": (1, chunk_y, chunk_x),
-        "dtype": output_dtype_info(output_dtype)[0],
+        "chunks": chunks,
+        "dtype": store_dtype,
         "overwrite": True,
-        "fill_value": output_dtype_info(output_dtype)[0].type(0),
+        "fill_value": store_dtype.type(0),
     }
     if compressor is not None:
         dataset_kwargs["compressor"] = compressor
@@ -2082,7 +2171,6 @@ def blockwise_write_zarr_outputs(
                 device=device,
                 patch_size=patch_size,
                 batch_size=batch_size,
-                channel_indices=output_channel_indices,
             )
             off_y = y0 - ry0
             off_x = x0 - rx0
@@ -2099,7 +2187,9 @@ def blockwise_write_zarr_outputs(
                 tile_probs_all_cyx=tile_probs,
                 jpg_channel_indices=jpg_channel_indices,
             )
-            arr[:, y0:y1, x0:x1] = encode_probability_cyx(tile_probs, output_dtype)
+            arr[:, y0:y1, x0:x1] = encode_probability_cyx(
+                tile_probs[output_channel_indices, :, :], output_dtype
+            )
             del region_rgb, local_positions, accum, counts, tile_probs
             if done % 10 == 0:
                 gc.collect()
@@ -2132,7 +2222,7 @@ def blockwise_process_without_store(
     patch_size: int,
     stride: int,
     batch_size: int,
-    factor: int,
+    factor: float,
     tile_size: int,
     metadata: dict,
     skip_background_blocks: bool,
@@ -2416,6 +2506,8 @@ def parse_args():
                     help="Maximum image side length used for inference after automatic downsampling (default: 4096).")
     ap.add_argument("--target-mpp", type=float, default=0.25,
                     help="Target physical resolution in microns-per-pixel for inference when source calibration is available.")
+    ap.add_argument("--resolution-contract", choices=["exact_mpp_v2"], default="exact_mpp_v2",
+                    help="Physical resampling contract recorded in output metadata.")
     ap.add_argument("--max-output-gib", type=float, default=32.0,
                     help="Maximum estimated uncompressed prediction stack size in GiB before extra downsampling is applied.")
     ap.add_argument("--disk-buffer-threshold-gib", type=float, default=4.0,
@@ -2522,9 +2614,15 @@ def main():
     image_meta["store_channels"] = list(output_channel_names) if args.output_format != "none" else []
     image_meta["jpg_markers"] = list(jpg_channel_names)
     image_meta["model_channels"] = list(CHANNEL_NAMES)
+    image_meta["quantification_channels"] = (
+        list(CHANNEL_NAMES)
+        if str(args.quant_dir or "").strip() and (str(args.nuclei_mask or "").strip() or str(args.cyto_mask or "").strip())
+        else []
+    )
     image_meta["output_format"] = args.output_format
     image_meta["output_dtype"] = effective_output_dtype
     image_meta["strict_target_mpp"] = bool(args.strict_target_mpp)
+    image_meta["resolution_contract"] = str(args.resolution_contract)
     image_meta["blockwise"] = bool(args.blockwise or effective_output_dtype != "float32" or args.output_format == "zarr")
     image_meta["block_size"] = int(args.block_size)
     image_meta["hardware_adaptation"] = hardware_meta
@@ -2541,6 +2639,13 @@ def main():
             "[INFO] GigaTIME downsampled large image "
             f"{tuple(image_meta['original_shape_yx'])} -> {tuple(image_meta['inference_shape_yx'])} "
             f"(factor={image_meta['downsample_factor']})",
+            flush=True,
+        )
+    elif image_meta["upsample_applied"]:
+        print(
+            "[INFO] GigaTIME upsampled image to model physical resolution "
+            f"{tuple(image_meta['original_shape_yx'])} -> {tuple(image_meta['inference_shape_yx'])} "
+            f"(source-pixels-per-model-pixel={image_meta['downsample_factor']:.6f})",
             flush=True,
         )
     if image_meta.get("source_mpp"):
@@ -2578,14 +2683,12 @@ def main():
         nuclei_mask_path=str(args.nuclei_mask or ""),
         cyto_mask_path=str(args.cyto_mask or ""),
         target_shape=target_shape,
-        channel_names=list(output_channel_names if args.output_format != "none" else jpg_channel_names),
+        channel_names=list(CHANNEL_NAMES),
         block_size=max(512, int(args.block_size)),
     )
     quant_dir = Path(args.quant_dir).resolve() if str(args.quant_dir or "").strip() else None
     jpg_exporter = None
     if jpg_channel_names:
-        selected_for_jpg = output_channel_indices if args.output_format != "none" else list(range(len(CHANNEL_NAMES)))
-        jpg_channel_positions = [selected_for_jpg.index(idx) for idx in jpg_channel_indices if idx in selected_for_jpg]
         jpg_exporter = JpegTileExporter(
             outdir=Path(args.outdir),
             full_shape_yx=target_shape,
@@ -2593,7 +2696,7 @@ def main():
             quality=int(args.jpg_quality),
             preview_max_side=int(args.jpg_preview_max_side),
             save_tiles=bool(args.jpg_save_tiles),
-            channel_indices=jpg_channel_positions,
+            channel_indices=jpg_channel_indices,
             channel_names=jpg_channel_names,
         )
     if image_meta["blockwise"]:
@@ -2608,7 +2711,7 @@ def main():
                 patch_size=args.patch_size,
                 stride=args.stride,
                 batch_size=args.batch_size,
-                factor=int(image_meta["downsample_factor"]),
+                factor=float(image_meta["downsample_factor"]),
                 tile_size=args.block_size,
                 output_dtype=args.output_dtype,
                 metadata=image_meta,
@@ -2638,7 +2741,7 @@ def main():
                 patch_size=args.patch_size,
                 stride=args.stride,
                 batch_size=args.batch_size,
-                factor=int(image_meta["downsample_factor"]),
+                factor=float(image_meta["downsample_factor"]),
                 tile_size=args.block_size,
                 output_dtype=effective_output_dtype,
                 compression=args.compression,
@@ -2673,7 +2776,7 @@ def main():
                 patch_size=args.patch_size,
                 stride=args.stride,
                 batch_size=args.batch_size,
-                factor=int(image_meta["downsample_factor"]),
+                factor=float(image_meta["downsample_factor"]),
                 tile_size=int(args.block_size),
                 metadata=image_meta,
                 skip_background_blocks=bool(args.skip_background_blocks),

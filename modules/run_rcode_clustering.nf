@@ -21,8 +21,12 @@ process RUN_RCODE_CLUSTERING {
 
     script:
     def cluster_script = "${projectDir}/${params.cluster_r_script}"
+    def clusterRLibrary = (params.cluster_r_library_dir ?: '/opt/micromamba/envs/stardist/lib/R/library').toString()
     """
     set -euo pipefail
+    export R_LIBS_USER="${clusterRLibrary}"
+    export R_ENVIRON_USER=/dev/null
+    export R_PROFILE_USER=/dev/null
 
     Rscript "${cluster_script}" \
       "${kodama_dir}" \

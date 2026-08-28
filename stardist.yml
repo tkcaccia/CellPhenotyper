@@ -18,6 +18,7 @@ dependencies:
   - tqdm
   - pillow
   - tifffile
+  - h5py
   - imagecodecs<2025
 
   # Geometry / geospatial
@@ -32,11 +33,12 @@ dependencies:
 
   # UNI-2 model loading
   - huggingface_hub
-  - transformers
+  - transformers>=4.51,<5
   - timm
   - accelerate
   - safetensors
   - einops
+  - einops-exts
 
   # StarDist stack installed through pip for ARM compatibility
   - pip:

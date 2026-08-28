@@ -17,13 +17,14 @@ process PREPARE_STARDIST_AUTO_ROI {
 
     script:
     def auto_roi_script = "${projectDir}/${params.stardist_auto_roi_script}"
+    def staged_image_name = image_path.getName()
     def keep_largest_flag = params.stardist_auto_roi_keep_largest ? '--keep-largest' : ''
     def fill_holes_flag = params.stardist_auto_roi_fill_holes ? '--fill-holes' : ''
     """
     set -euo pipefail
 
       python "${auto_roi_script}" \\
-      --image "${image_path}" \\
+      --image "${staged_image_name}" \\
       --out "${sample_id}.stardist_auto_roi.geojson" \\
       --preview "${sample_id}.stardist_auto_roi_preview.png" \\
       --downsample ${params.stardist_auto_roi_downsample} \\

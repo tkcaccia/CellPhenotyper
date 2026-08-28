@@ -20,13 +20,20 @@ process RUN_KODAMA_ANALYSIS {
     def r_loader_script = "${projectDir}/${params.r_data_loader_script}"
     def r_script = "${projectDir}/${params.r_script}"
     def nCores = Math.max(1, Math.min(task.cpus as int, params.kodama_n_cores as int))
+    def kodamaBackend = (params.kodama_backend ?: 'cpu').toString().toLowerCase()
+    def kodamaGpuDevice = Math.max(0, params.kodama_gpu_device as int)
+    def kodamaRscript = (params.kodama_rscript ?: 'Rscript').toString()
+    def kodamaRLibrary = (params.kodama_r_library_dir ?: '/opt/micromamba/envs/kodama-r/lib/R/library').toString()
     """
     set -euo pipefail
+    export R_LIBS_USER="${kodamaRLibrary}"
+    export R_ENVIRON_USER=/dev/null
+    export R_PROFILE_USER=/dev/null
 
     mkdir -p kodama_output
 
-    Rscript - <<'RS'
-required_pkgs <- c("KODAMA", "KODAMAextra", "SPARK", "data.table", "irlba", "umap", "bluster")
+    "${kodamaRscript}" - <<'RS'
+required_pkgs <- c("KODAMA", "fastEmbedR", "data.table")
 missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
 if (length(missing_pkgs) > 0L) {
   stop(sprintf("Container is missing required R packages: %s", paste(missing_pkgs, collapse = ", ")))
@@ -36,7 +43,7 @@ cat(sprintf("[INFO] R library paths: %s\n", paste(.libPaths(), collapse = " | ")
 RS
 
     {
-      Rscript "${r_loader_script}" \
+      "${kodamaRscript}" "${r_loader_script}" \
         "${tile_embeddings_dir}" \
         "${cyto_embeddings_dir}" \
         "${inner_square_embeddings_dir}" \
@@ -46,7 +53,7 @@ RS
         "${params.kodama_embedding_mode}" \
         "${params.kodama_spark_top_features}"
 
-      Rscript "${r_script}" \
+      "${kodamaRscript}" "${r_script}" \
         "kodama_output/rawdata.RData" \
         "kodama_output" \
         --embedding-mode "${params.kodama_embedding_mode}" \
@@ -54,7 +61,9 @@ RS
         --spark-top ${params.kodama_spark_top_features} \
         --landmarks ${params.kodama_landmarks} \
         --kodama-ncomp ${params.kodama_ncomp} \
-        --n-cores ${nCores}
+        --n-cores ${nCores} \
+        --backend "${kodamaBackend}" \
+        --gpu-device ${kodamaGpuDevice}
     } > "KODAMA_${sample_id}.Rout" 2>&1
     """
 

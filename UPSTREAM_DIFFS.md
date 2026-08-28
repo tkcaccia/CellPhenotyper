@@ -20,29 +20,38 @@ Upstream tools referenced here include:
 - UNI-2
 - KODAMA
 - MedSAM
+- HoVer-Net MoNuSAC
+- CellViT++
+- TITAN / CONCH v1.5
+- PathoFMPred
 
 ## Step-by-step summary
 
 | Stage | Pipeline step | Upstream/base tool | Main differences in CellPhenotyper |
 | --- | --- | --- | --- |
 | `01_input` | Input conversion | CellPhenotyper custom | Converts source images to pipeline-ready OME-TIFF, supports region-specific handling for CZI inputs, and standardizes downstream coordinates and sample naming. |
-| `01a_grandqc` | Artifact QC | GrandQC | Uses official GrandQC checkpoints, but wraps OME-TIFF reading, auto-selects artifact model magnification from image MPP, adapts tissue thumbnail size for small high-resolution fields, supports overlap-based artifact inference, suppresses low-confidence artifact calls, and applies a small-FOV foreign-object refinement step for zoomed-in images. |
-| `02_stardist` | Nuclei segmentation | StarDist | Uses StarDist segmentation with pipeline-specific ROI cropping, auto tissue ROI preparation, large-WSI blockwise execution, adaptive memory-aware fallback, chunked full-label export (`zarr`) instead of dense TIFF by default, and reduced-memory QC preview generation. |
-| `03_gigatime` | Virtual mIHC prediction | GigaTIME | Adds blockwise slide execution, selectable persisted output channels, direct pyramidal OME-TIFF export with JPEG compression, support for native-resolution execution on ROI crops, and output modes that avoid saving intermediate tile trees or zarr stores when not needed. |
+| `02_grandqc` | Artifact QC | GrandQC | Uses official GrandQC checkpoints, but wraps OME-TIFF reading, auto-selects artifact model magnification from image MPP, adapts tissue thumbnail size for small high-resolution fields, uses hardware-aware fully convolutional artifact context with smooth overlap blending, and keeps the official tissue-detector patch geometry separate. |
+| `03_stardist` | Primary nuclei segmentation | StarDist | Uses StarDist segmentation with pipeline-specific ROI cropping, auto tissue ROI preparation, large-WSI blockwise execution, adaptive memory-aware fallback, chunked full-label export (`zarr`) instead of dense TIFF by default, and reduced-memory QC preview generation. |
+| `03b_hovernet_monusac` | Typed nuclei detection | HoVer-Net MoNuSAC | Runs the official fast MoNuSAC model, normalizes its numeric classes to explicit names, and converts detections into the shared StarDist crop coordinate frame. |
+| `03c_cellvitpp` | Typed nuclei detection | CellViT++ | Runs the official inference package with explicit MPP and normalizes numeric classes to named `neoplastic`, `inflammatory`, `connective`, `dead`, and `epithelial` labels. |
+| `03d_cell_consensus` | Consensus cell identification | CellPhenotyper custom | Performs one-to-one physical-distance matching across StarDist, HoVer-Net, and CellViT++, requires configurable multi-model support, retains named detector classes, and emits canonical cells, geometry, provenance, and QC. |
+| `04_TMA` | TMA detection and spot assignment | CellPhenotyper custom | Detects whether the image is a tissue microarray; for TMA images, exports spot GeoJSON and associates detected cells with spot IDs. |
 | `04_tissue_mask` | Tissue mask build | CellPhenotyper custom | This is a CellPhenotyper stage, not a direct third-party wrapper. It builds the downstream tissue mask used by later assignment, growth, and refinement stages. |
-| `05_roi` | ROI preparation | CellPhenotyper custom | Accepts provided ROI GeoJSON, supports auto-generated ROI when no manual ROI exists, and keeps crop/original coordinate transforms explicit for registration. |
-| `06_roi_mask` | ROI rasterization | CellPhenotyper custom | Rasterizes ROI polygons into crop-aligned masks and preserves class labels when present in annotation metadata. |
-| `06_marker_quantification` | GigaTIME marker quantification | GigaTIME + CellPhenotyper custom quantification | Quantification is performed during tile generation rather than after reconstructing the full image, supports both nuclei and cytoplasm masks, and handles overlapping GigaTIME tiles during accumulation. |
+| `05_gigatime` | Virtual mIHC and marker quantification | GigaTIME + CellPhenotyper custom quantification | Adds exact MPP-aware blockwise inference, selectable persisted channels, all-marker integrated single-cell quantification, and direct multichannel pyramidal OME-TIFF export. |
+| `06_roi` | ROI preparation and rasterization | CellPhenotyper custom | Accepts provided or automatically generated ROI GeoJSON, keeps coordinate transforms explicit, and rasterizes polygons into crop-aligned labeled masks. |
 | `07_cell_assignments` | Object-to-ROI assignment | CellPhenotyper custom | Assigns segmented objects to ROI/tissue space for downstream embedding and clustering. |
 | `08_cytoplasm` | Cytoplasm expansion | CellPhenotyper custom | Expands nuclei labels into cytoplasm labels for paired nuclei/cytoplasm quantification and downstream per-cell views. |
-| `10_embeddings` | Morphology embeddings | UNI-2 | Uses the UNI-2 encoder but changes execution topology: defaults were narrowed to `tile` + `inner_square`, supports a shared extraction path that emits both outputs from one embedding task, and uses a shared Hugging Face cache to avoid per-run model duplication. |
-| `11_kodama` | Latent manifold analysis | KODAMA | KODAMA input loading is selective: CellPhenotyper now supports running on only the requested embedding families, and the current default is `tile,inner_square` rather than all available embedding views. |
-| `13_clustering` | Cluster assignment | CellPhenotyper custom + R clustering code | Produces both `standard` and `fine` clustering variants rather than a single downstream solution. |
-| `15_cluster_mask` | Cluster mask generation | CellPhenotyper custom | Propagates both clustering variants into mask outputs. |
-| `16_grown_tissue` | Cluster-guided tissue growth | CellPhenotyper custom | Grows cluster masks into tissue space, with both `standard` and `fine` variants propagated independently. |
-| `17_medsam_refined_tissue` | Tissue refinement | MedSAM + CellPhenotyper orchestration | Uses MedSAM as a refinement backend, but runs it on CellPhenotyper-generated masks and carries both clustering variants through to refined tissue outputs. |
-| `18_cluster_geojson` | Final polygon export | CellPhenotyper custom | Converts the final refined masks to GeoJSON, preserving the pipeline’s variant structure and sample-specific naming. |
-| `00_execution` | Execution report | CellPhenotyper custom | Adds a project-level output manifest, deterministic `output_id` values for every output, and per-process runtime summaries from the Nextflow trace. |
+| `09_embeddings` | Morphology embeddings | UNI-2 | Uses cell-centered `tile` and fixed 90-pixel `inner_square` views and a shared token-subset forward pass, with checkpointed buckets and a shared Hugging Face cache. |
+| `10_kodama` | Latent manifold analysis | KODAMA | Loads only selected embedding families, uses 20 PCA components and 1,000 KODAMA landmarks by default, and frees raw features after PCA to bound memory. |
+| `11_clustering` | Cluster assignment | CellPhenotyper custom + R clustering code | Uses inverse-neighbor-distance landmark sampling (`p=2`), Leiden clustering on landmarks, and nearest-neighbor assignment of remaining cells. |
+| `12_cluster_mask` | Cluster mask generation | CellPhenotyper custom | Converts per-cell cluster labels into a spatial mask. |
+| `13_grown_tissue` | Cluster-guided tissue growth | CellPhenotyper custom | Grows cell-supported clusters into tissue space while retaining class identity. |
+| `14_medsam_refine_tissue` | Tissue refinement | MedSAM + CellPhenotyper orchestration | Runs GPU MedSAM only in an editable border band around grown clusters and publishes full-resolution random-region QC plus raw-versus-final panels. |
+| `15_cluster_geojson` | Final polygon export | CellPhenotyper custom | Converts the final refined section masks to GeoJSON with sample and class metadata. |
+| `16_neoplastic_section` | Neoplastic-enriched section selection | CellPhenotyper custom | Splits final tissue polygons into connected sections, counts named neoplastic consensus cells, and deterministically exports the section with the largest count. |
+| `17_titan` | Section representation | TITAN / CONCH v1.5 | Applies the official TITAN slide aggregator to MPP-correct CONCH patch features from the selected section and emits a validated 768-feature vector with provenance. |
+| `18_pathofmpred` | Research endpoint prediction | PathoFMPred | Applies an explicit cancer-specific private registry to the TITAN vector and publishes predictions, QC plots, and a research report without clinical-calibration claims. |
+| `00_execution` | Execution report | CellPhenotyper custom | Adds a project-level output manifest, stable unique `output_id` values, preserved full-run and targeted traces, and per-process runtime/memory summaries. |
 
 ## Detailed notes by wrapped tool
 
@@ -60,10 +69,11 @@ Changes relative to upstream GrandQC:
 2. Auto-selects the artifact model (`1.0`, `1.5`, `2.0`) from image MPP instead of requiring manual shell-script edits.
 3. Uses adaptive tissue thumbnail sizing so small high-magnification fields do not collapse during tissue detection.
 4. Includes a heuristic fallback tissue mask if the learned tissue detector returns near-zero tissue on a clearly nonblank image.
-5. Uses overlap-based artifact inference with smooth blending for small-FOV cases instead of strict hard tile stitching.
-6. Suppresses low-confidence artifact calls after score blending.
-7. Applies a small-FOV foreign-object refinement stage that collapses broad false-positive artifact fields onto the dominant dark foreign-object structure when appropriate.
-8. Bundles model/cache handling and preview/summary generation into the pipeline stage.
+5. Separates the official 512-pixel tissue-detector patches from hardware-aware artifact context tiles; CUDA devices with at least 8 GiB VRAM use 1024-pixel fully convolutional context to suppress checkpoint padding-position bands without changing physical MPP.
+6. Uses overlap-based artifact inference with smooth probability blending instead of strict hard tile stitching.
+7. Suppresses low-confidence artifact calls after score blending.
+8. Applies a small-FOV foreign-object refinement stage that collapses broad false-positive artifact fields onto the dominant dark foreign-object structure when appropriate.
+9. Bundles model/cache handling and preview/summary generation into the pipeline stage.
 
 ### StarDist
 
@@ -93,7 +103,7 @@ Files:
 Changes relative to straightforward GigaTIME inference:
 
 1. Blockwise ROI/full-slide execution.
-2. Native-resolution enforcement on validated paths instead of coarse fallback.
+2. Exact MPP-aware floating-point resampling, including lazy pyvips upsampling when the source is coarser than the model target, instead of integer scale rounding or coarse fallback.
 3. Selectable persisted marker subsets.
 4. Direct pyramidal OME-TIFF export with JPEG compression.
 5. Optional no-tile/no-zarr final-output modes.
@@ -131,7 +141,7 @@ Changes relative to the previous pipeline behavior:
 3. The current default is `tile,inner_square`.
 4. Placeholder handling was added so missing unused embedding families do not block execution.
 5. For large WSI runs, KODAMA uses a memory-bounded landmark/projection path after PCA rather than constructing the full all-cell KODAMA network in RAM.
-6. The runtime image must include the R nearest-neighbor/projection packages `BiocNeighbors`, `RANN`, `RcppHNSW`, `RcppAnnoy`, and `uwot`; these are installed into the micromamba R library, not a user-home R library, because Singularity tasks run with `--no-home`.
+6. The runtime image includes the R nearest-neighbor/projection packages `BiocNeighbors`, `RANN`, `RcppHNSW`, `RcppAnnoy`, and `uwot` in micromamba libraries. Each R task explicitly disables host `.Renviron`/`.Rprofile` files and selects the corresponding bundled library so Singularity cannot load ABI-incompatible packages from `~/R`.
 7. The pipeline explicitly sets KODAMA's internal PLS component count with `kodama_ncomp = 2`. This is separate from `kodama_dims_to_run = 20`: KODAMA still receives 20 PCA dimensions, but the native stochastic PLS optimization avoids transient high-component class states that can emit `Mat::col(): index out of bounds` on Linux.
 
 ### MedSAM
@@ -151,15 +161,23 @@ Changes relative to direct standalone MedSAM use:
 These are primarily CellPhenotyper-specific orchestration or geometry stages:
 
 - `04_tissue_mask`
-- `05_roi`
-- `06_roi_mask`
+- `03d_cell_consensus`
+- `04_TMA`
+- `06_roi`
 - `07_cell_assignments`
 - `08_cytoplasm`
-- `13_clustering`
-- `15_cluster_mask`
-- `16_grown_tissue`
-- `18_cluster_geojson`
+- `11_clustering`
+- `12_cluster_mask`
+- `13_grown_tissue`
+- `15_cluster_geojson`
+- `16_neoplastic_section`
 - `00_execution`
+
+## Neoplastic-section selection, TITAN, and PathoFMPred
+
+- **Section selection:** Custom CellPhenotyper code splits the final Polygon/MultiPolygon output into connected sections and counts consensus cells by exact point-in-polygon membership. Neoplastic status comes from the normalized named CellViT++ class, not a hard-coded unexplained integer. Selection and tie-breaking are deterministic, and the full-resolution crop retains an explicit coordinate transform.
+- **TITAN:** CellPhenotyper does not reimplement the slide encoder. It loads the official gated `MahmoodLab/TITAN` code with `trust_remote_code=True`, obtains the official CONCH v1.5 image encoder through `return_conch()`, and calls `encode_slide_from_patch_features()`. Pipeline additions are MPP-aware WSI patch extraction, section masking, adaptive GPU batching, HDF5 provenance, strict 768-feature validation, and restartable external model caching.
+- **PathoFMPred:** The prediction model remains in the separate protected PathoFMPred package. CellPhenotyper validates the exact named TITAN feature contract, supplies an explicit cancer code, runs with R 4.6 and the package's pinned `fastPLS` dependency, and publishes predictions/QC reports. The pipeline adds no clinical-calibration claim and labels these outputs as TCGA-derived research estimates.
 
 For these, the relevant comparison is not “tool vs upstream,” but “current pipeline behavior vs earlier internal pipeline behavior.”
 
@@ -168,3 +186,8 @@ For these, the relevant comparison is not “tool vs upstream,” but “current
 - `README.md`
 - `PARAMETERS.md`
 - `OUTPUT.md`
+# Multi-Model Cell Consensus
+
+- **HoVer-Net:** The official PyTorch inference code and official fast MoNuSAC checkpoint are used for inference. CellPhenotyper adds MPP-aware input normalization, an Aperio-compatible pyramidal TIFF carrying `AppMag` and `MPP` because upstream requires objective-power metadata, the explicit MoNuSAC type map because upstream parses its empty default as a filename, cache cleanup, support for upstream's `nuc` JSON key, conversion of coordinates back into the StarDist crop frame, and runtime aliases for NumPy scalar names removed after the versions pinned by upstream. Post-processing workers are bounded by allocated RAM. For recovery after a post-processing-only failure, an isolated temporary copy of upstream `wsi.py` can be patched to reopen a validated completed `pred_map.npy` and skip raw inference; the installed upstream source and model are not modified.
+- **CellViT++:** The official `cellvit-inference` package is used unchanged and pinned to `cellvit==1.0.9`. CellPhenotyper adds pyramidal crop preparation, passes the source MPP explicitly, clamps batch size to the upstream-supported range `2..48`, supplies a nonzero Ray worker count to avoid the upstream zero-worker modulo failure, and normalizes output discovery into a stable `cellvit_cells.json` artifact.
+- **Consensus:** This is CellPhenotyper-specific code. It performs distance-gated, one-to-one matching between methods; prevents a consensus component from containing duplicate predictions from one method; retains cells supported by at least two methods; assigns a canonical sequential ID; records detector provenance; and writes a tiled label TIFF without holding three WSI masks in RAM.

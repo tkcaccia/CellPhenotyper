@@ -49,6 +49,10 @@ process RUN_GIGATIME_ON_CROP {
     def resolved_jpg_markers = clean_channel_spec.call(params.gigatime_jpg_markers)
     def output_channels_flag = resolved_output_channels ? "--output-channels \"${resolved_output_channels}\"" : ''
     def jpg_markers_flag = resolved_jpg_markers ? "--jpg-markers \"${resolved_jpg_markers}\"" : ''
+    def integrated_quant_flag = params.gigatime_integrated_quantification as boolean
+    def nuclei_mask_flag = integrated_quant_flag ? "--nuclei-mask \"${nuclei_mask_tif}\"" : ''
+    def cyto_mask_flag = integrated_quant_flag ? "--cyto-mask \"${cyto_mask_tif}\"" : ''
+    def quant_dir_flag = integrated_quant_flag ? "--quant-dir \"quantification_${sample_id}\"" : ''
     def memory_wait_seconds = Math.max(0, ((params.gigatime_memory_wait_minutes as int) * 60))
     def min_usable_memory_gb = Math.max(0.0, params.gigatime_min_usable_memory_gb as double)
     """
@@ -120,10 +124,12 @@ for line in Path("/proc/meminfo").read_text().splitlines():
         break
 task_memory = float("${task_mem_gb}")
 reserve = float("${resolved_min_free_system_gb}")
-usable = mem_available if mem_available is not None else task_memory
-if task_memory > 0 and usable is not None:
-    usable = min(usable, task_memory)
-usable = max(0.0, (usable or 0.0) - reserve)
+if mem_available is None:
+    usable = max(0.0, task_memory - reserve)
+else:
+    # Preserve the host reserve without subtracting it from the task cgroup too.
+    host_usable = max(0.0, mem_available - reserve)
+    usable = min(host_usable, task_memory) if task_memory > 0 else host_usable
 print(f"{usable:.3f}")
 PY
 )
@@ -153,9 +159,9 @@ PY
       --image "${crop_tif}" \\
       --shift-json "${shift_json}" \\
       --outdir "gigatime_${sample_id}" \\
-      --nuclei-mask "${nuclei_mask_tif}" \\
-      --cyto-mask "${cyto_mask_tif}" \\
-      --quant-dir "quantification_${sample_id}" \\
+      ${nuclei_mask_flag} \\
+      ${cyto_mask_flag} \\
+      ${quant_dir_flag} \\
       --repo-id "${params.gigatime_repo_id}" \\
       --page ${params.gigatime_page} \\
       --patch-size ${params.gigatime_patch_size} \\
@@ -172,6 +178,7 @@ PY
       --auto-threshold-mpix ${params.gigatime_auto_threshold_mpix} \\
       --max-side ${params.gigatime_max_side} \\
       --target-mpp ${params.gigatime_target_mpp} \\
+      --resolution-contract exact_mpp_v2 \\
       --output-format "${output_format}" \\
       --output-dtype "${params.gigatime_output_dtype}" \\
       ${output_channels_flag} \\

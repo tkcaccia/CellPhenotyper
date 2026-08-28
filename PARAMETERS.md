@@ -62,6 +62,7 @@ nextflow run main.nf -profile singularity \
 | `gpu_debug_diagnostics` | `false` | When true, GPU-capable processes print `nvidia-smi` and framework CUDA diagnostics. |
 | `max_cpus` | `4` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
+| `docker_extra_run_options` | empty | Optional site-specific Docker flags, such as bind mounts for shared model caches. |
 | `hf_home` | `${baseDir}/.hf_cache` | Hugging Face cache root for UNI-2 model files. |
 | `hf_hub_cache` | `${baseDir}/.hf_cache/hub` | Hugging Face Hub cache directory for UNI-2 model files. |
 | `hf_hub_offline` | `false` | If `true`, UNI-2 runs in strict offline mode (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`) and only uses local cache. |
@@ -82,7 +83,7 @@ GPU run notes:
 - On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v2.2` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
-`convert`, `grandqc`, `stardist`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
+`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
 
 ## Conversion (`.btf` -> `.ome.tif`)
 
@@ -95,6 +96,18 @@ GPU run notes:
 | `convert_cpus` | `8` | CPU allocation. |
 | `convert_memory_gb` | `16` | RAM allocation. |
 | `convert_time` | `6h` | Time allocation. |
+
+## GrandQC
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `grandqc_device` | `auto` | Use CUDA when the pipeline resolves a GPU run; otherwise use the available CPU/MPS backend. |
+| `grandqc_artifact_mpp_model` | `auto` | Select the official 1.0, 1.5, or 2.0 MPP artifact checkpoint from source-image MPP. |
+| `grandqc_tissue_mpp_model` | `10.0` | Physical scale requested by the tissue detector. |
+| `grandqc_patch_size` | `512` | Official tissue-detector patch size. It does not control artifact context tiling. |
+| `grandqc_artifact_tile_size` | `0` | Artifact context tile size. `0` selects 1024 on CUDA GPUs with at least 8 GiB VRAM and 512 otherwise. Larger fully convolutional context suppresses tile-position bands without changing model MPP. Explicit values must be divisible by 32. |
+| `grandqc_artifact_overlap_fraction` | `0.5` | Fractional artifact-tile overlap used for probability blending. |
+| `grandqc_preview_max_side` | `4096` | Maximum long side of GrandQC preview assets. |
 
 ## StarDist
 
@@ -153,10 +166,12 @@ GPU run notes:
 | `gigatime_patch_size` | `256` | Patch size for tiled GigaTIME inference. |
 | `gigatime_stride` | `128` | Patch stride for tiled GigaTIME inference. Lower than `gigatime_patch_size` by default so overlapping tiles and raised-cosine blending reduce visible seam artifacts. |
 | `gigatime_batch_size` | `4` | Batch size for GigaTIME inference. |
-| `gigatime_strict_target_mpp` | `false` | When `false`, GigaTIME uses the requested target MPP when feasible but may increase the effective MPP for very large WSI to respect `gigatime_max_output_gib`. This prevents full-slide native-resolution outputs from exhausting host RAM. |
+| `gigatime_strict_target_mpp` | `true` | Enforce the requested GigaTIME physical scale from image metadata with exact floating-point resampling. This includes upsampling when the source MPP is coarser than the model target; GigaTIME fails if MPP cannot be resolved and does not coarsen the image to satisfy the output-size budget. |
 | `gigatime_max_output_gib` | `8.0` | Maximum estimated uncompressed persisted GigaTIME image size before automatic extra downsampling is applied when strict target MPP is disabled. |
-| `gigatime_output_format` | `zarr` | Persist the GigaTIME marker image as chunked `gigatime_probs.zarr` by default. This is safer for WSI-scale slides than writing a pyramidal OME-TIFF during inference because it avoids a full level-0 staging image in host RAM/page cache. |
+| `gigatime_output_format` | `zarr` | Persist the GigaTIME marker image as chunked `gigatime_probs.zarr` by default. When `ome_tiff` is requested, the saved `gigatime_probs.ome.tif` is pyramidal by default for QuPath/WSI viewing. |
 | `gigatime_output_channels` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels persisted in the GigaTIME image store. Integrated single-cell quantification is still computed from all GigaTIME model channels. |
+| `gigatime_export_ometiff` | `true` | Export the GigaTIME store to a pyramidal multichannel `gigatime_probs.ome.tif` after prediction. This keeps inference reliable with Zarr while still producing a QuPath-ready OME-TIFF. |
+| `gigatime_integrated_quantification` | `true` | Quantify all 23 GigaTIME model markers over nuclei and cytoplasm during the same tiled inference pass. The persisted image may remain a smaller selected channel subset; full-marker quantification does not require storing a 23-channel WSI. |
 | `gigatime_jpg_markers` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels exported as lightweight JPEG previews for visual QC. |
 | `gigatime_output_compression` | `jpeg` | Compression for `gigatime_probs.ome.tif` when `--gigatime_output_format ome_tiff` is explicitly requested. |
 | `gigatime_cpus` | `8` | CPU allocation. |
@@ -181,7 +196,7 @@ GPU run notes:
 | `tissue_close_radius` | `12` | Morphological closing radius. |
 | `tissue_min_obj_area` | `30000` | Remove objects below this area. |
 | `tissue_hole_area` | `30000` | Fill holes below this area. |
-| `tissue_keep_largest` | `true` | Keep largest connected component only. |
+| `tissue_keep_largest` | `false` | Keep only the largest connected component when explicitly enabled. Leave disabled for TMA and other multi-fragment tissue. |
 | `tissue_tile` | `512` | Output tile size. |
 | `tissue_compression` | `deflate` | TIFF compression. |
 | `tissue_bigtiff` | `true` | Use BigTIFF output. |
@@ -242,6 +257,7 @@ UNI-2 behavior:
 - For a source image at `0.08706 µm/px`, the default 224-pixel UNI2 input is extracted from a 643-pixel source crop, giving an effective resolution of about `0.25 µm/px`.
 - `uni2_save_tiles=false` is the production default. KODAMA reads the embedding CSVs, not the per-cell PNG crops, so saving tiles is mainly for debugging/QC and can dominate disk I/O on large runs.
 - `uni2_reuse_existing=false` is the fresh-run default. Set `--uni2_reuse_existing true` for recovery runs where `09_embeddings/<sample>/embeddings_<sample>_*` already exists and should be consumed by KODAMA instead of scheduling UNI-2 again, even if the requested stage window includes `uni2`.
+- `kodama_r_library_dir` and `cluster_r_library_dir` isolate R package lookup to the bundled R 4.6 and StarDist R libraries, respectively. The pipeline also disables host `.Renviron` and `.Rprofile` files so Singularity cannot accidentally load ABI-incompatible packages from the user's home directory.
 
 MedSAM behavior:
 
@@ -260,9 +276,45 @@ Additional automatic outputs:
 
 - `04_TMA/<sample>/tma_<sample>/<sample>_tma_spots.geojson` contains TMA spot polygons when the image is detected as a tissue microarray.
 - `04_TMA/<sample>/tma_<sample>/<sample>_objects_tma_assigned.csv` contains StarDist objects with appended `tma_spot_*` assignment columns.
-- `05_gigatime/<sample>/gigatime_<sample>/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack.
+- `05_gigatime/<sample>/gigatime_<sample>_ometiff/gigatime_probs.ome.tif` contains the crop-aligned GigaTIME virtual mIF prediction stack. The sibling `gigatime_<sample>/gigatime_probs.zarr` remains the chunked inference store.
 - `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
 - `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
 - If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `06_roi/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `06_roi/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `06_roi/<sample>/<sample>_input_roi_mask_labels.json`.
 - `11_clustering/<sample>/` now contains both `standard` and `fine` clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG.
 - `14_medsam_refine_tissue/<sample>/` now contains the variant-specific KODAMA membership PNG copied next to the MedSAM-refined mask outputs for both clustering branches as `<sample>_<variant>_medsam_kodama_membership.png`.
+# Multi-Model Cell Identification
+
+`cell_consensus_enable` enables the GPU-only post-StarDist ensemble. On a resolved CPU run the pipeline logs a warning and retains StarDist outputs rather than launching unavailable GPU models. HoVer-Net MoNuSAC and CellViT++ run serially to cap peak VRAM, then `cell_consensus_min_support` controls how many methods must identify a cell (default `2`). `cell_consensus_match_radius_um` is the maximum centroid distance in physical units (default `4.0` microns); it is converted to pixels from `shift.json`. `cell_consensus_geometry_priority` deterministically selects the preferred available contour for each accepted component.
+
+HoVer-Net uses `hovernet_target_mpp=0.25`, the official `fast` MoNuSAC checkpoint, and the resource parameters prefixed by `hovernet_`. `hovernet_postproc_workers=0` selects a memory-aware worker count (one worker per 6 GB of allocated memory); an explicit value is still capped by that safety limit. `hovernet_prediction_cache` can resume post-processing from a completed upstream `pred_map.npy` after validating it against the regenerated slide geometry, avoiding repeated GPU inference after a post-processing-only failure. CellViT++ uses `cellvit_model` (`HIPT` by default), `cellvit_taxonomy`, mixed precision via `cellvit_amp`, and resource parameters prefixed by `cellvit_`. `cellvit_ray_workers` defaults to `1` because CellViT++ 1.0.9 fails with its upstream zero-worker default; `cellvit_ray_worker_cpus=0` divides the allocated task CPUs automatically. The HIPT weights and classifiers are baked once into `cellvit_cache_dir` inside the versioned GPU image, avoiding duplicate downloads across tasks and runs.
+
+The stage name is `cell_consensus`; aliases `hovernet`, `cellvit`, and `consensus` select the same aggregate stage because both inference branches are required to build the result.
+
+## Neoplastic Section, TITAN, and PathoFMPred
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `titan_enable` | `false` | Enable deterministic neoplastic-section selection followed by TITAN embedding. |
+| `neoplastic_section_names` | `neoplastic` | Comma-separated named CellViT++ classes counted as neoplastic. Matching is case-insensitive. |
+| `neoplastic_section_require_cells` | `true` | Fail if no connected final section contains a named neoplastic cell. |
+| `neoplastic_section_padding_um` | `128` | Physical padding around the selected section export. |
+| `neoplastic_section_default_mpp` | `0.5` | Fallback MPP only when image metadata are unavailable. |
+| `neoplastic_section_spatial_bin_size` | `1024` | Spatial-index bin size in level-0 pixels for streaming cell-to-section assignment. |
+| `neoplastic_section_tile_size` | `512` | Tile size for the selected-section mask and OME-TIFF writer. |
+| `titan_model` | `MahmoodLab/TITAN` | Official gated Hugging Face model ID or an authorized local snapshot directory. |
+| `titan_revision` | `main` | Model revision; production runs should use a pinned commit or a checksum-verified local snapshot. |
+| `titan_offline` | `false` | Restrict TITAN to local model files/cache. |
+| `titan_cache_dir` | `${baseDir}/../.cache/titan` | Shared external TITAN cache; keep model files outside output/work directories. |
+| `titan_target_mpp` | `0.5` | Physical resolution used for CONCH v1.5 patches. |
+| `titan_patch_size` | `512` | Patch size in the regularized 20x/0.5-MPP coordinate system. |
+| `titan_min_tissue_coverage` | `0.2` | Minimum selected-section mask coverage for a patch. |
+| `titan_batch_size` | `0` | CONCH batch size; `0` selects a GPU-memory-aware value. |
+| `titan_gpu` | `0` | CUDA device index. TITAN is GPU-only in this pipeline. |
+| `pathofmpred_enable` | `false` | Run PathoFMPred after TITAN. This also enables stages 16 and 17. |
+| `pathofmpred_cancer` | empty | Required TCGA cancer code, for example `BRCA`. No cancer type is inferred silently. |
+| `pathofmpred_library_dir` | `${baseDir}/../.cache/pathofmpred/R_library` | Protected external R library containing PathoFMPred and its private fitted registry. |
+| `pathofmpred_rscript` | `/opt/micromamba/envs/kodama-r/bin/Rscript` | R 4.6 executable used for PathoFMPred and the pinned `fastPLS` dependency. |
+| `pathofmpred_report_format` | `html` | Report output format. |
+| `pathofmpred_include_limited_evidence` | `false` | Include endpoints marked as limited evidence by the package. |
+
+TITAN uses the official model's `return_conch()` patch encoder and `encode_slide_from_patch_features()` aggregator. It writes exactly 768 named features (`titan_000` through `titan_767`) for PathoFMPred. PathoFMPred outputs are research estimates derived from TCGA discovery/internal models; they are not calibrated probabilities or clinical predictions.

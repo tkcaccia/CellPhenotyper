@@ -11,16 +11,31 @@ __pycache__/
 *.pyc
 *.pyo
 .hf_cache/
+.nextflow_host/
+.tmp_*
+main.nf.bak_*
+/1
+/=1350
 
 # local credentials
 tokens.env
 GHCRtoken.env
+*.key
 
 # large local inputs
 Data/*.ome.tif
 Data/*.btf
 !Data/ROI_A.ome.tif
 !Data/ROI_B.ome.tif
+
+# downloaded datasets and local result copies
+hf_datasets/
+local_copies/
+remote_previews/
+
+# manuscript working material; retain only the current revised artifact
+Manuscript/*
+!Manuscript/CellPhenotyper revised 280826 TITAN PathoFMPred.docx
 
 # local container artifacts
 singularity/*.sif

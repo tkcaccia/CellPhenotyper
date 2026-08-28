@@ -80,24 +80,23 @@ cat(sprintf("[INFO] mode=%s sample_cells=%d dims=%d landmarks=%d n_cores=%d seed
             mode, sample_cells, dims, landmarks, n_cores, seed, run_visualization))
 cat(sprintf("[INFO] output_dir=%s\n", normalizePath(outdir, mustWork = FALSE)))
 
-container_r_lib <- "/opt/micromamba/envs/stardist/lib/R/library"
+container_r_lib <- "/opt/micromamba/envs/kodama-r/lib/R/library"
 if (dir.exists(container_r_lib)) {
-  .libPaths(container_r_lib)
+  .libPaths(c(container_r_lib, .libPaths()))
 }
 cat(sprintf("[INFO] R library paths=%s\n", paste(.libPaths(), collapse = " | ")))
 
-required <- c("KODAMA", "KODAMAextra", "umap")
+required <- c("KODAMA", "fastEmbedR")
 missing <- required[!vapply(required, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
 if (length(missing) > 0L) stop(sprintf("Missing packages: %s", paste(missing, collapse = ", ")))
 
 suppressPackageStartupMessages({
   library(KODAMA)
-  library(KODAMAextra)
-  library(umap)
+  library(fastEmbedR)
 })
 
 cat(sprintf("[INFO] KODAMA package version=%s\n", as.character(utils::packageVersion("KODAMA"))))
-cat(sprintf("[INFO] KODAMAextra package version=%s\n", as.character(utils::packageVersion("KODAMAextra"))))
+cat(sprintf("[INFO] fastEmbedR package version=%s\n", as.character(utils::packageVersion("fastEmbedR"))))
 cat(sprintf("[INFO] R version=%s\n", R.version.string))
 
 validate_input <- function(feature_mat, spatial_mat) {
@@ -188,7 +187,9 @@ kodama_args <- list(
   landmarks = min(landmarks, nrow(feature_mat)),
   n.cores = as.integer(n_cores),
   seed = seed,
-  ancestry = FALSE
+  backend = "cpu",
+  visual.init = TRUE,
+  return.graph = "handle"
 )
 if (nzchar(ncomp_arg)) {
   kodama_args$ncomp <- as.integer(ncomp)
@@ -208,12 +209,17 @@ if (!inherits(result, "kodama_repro_error")) {
   if (run_visualization) {
     cat("[INFO] calling KODAMA.visualization()\n")
     flush.console()
-    config <- umap::umap.defaults
-    config$n_neighbors <- min(30L, nrow(feature_mat) - 1L)
-    config$n_threads <- as.integer(n_cores)
     t1 <- proc.time()[["elapsed"]]
     vis <- tryCatch(
-      KODAMA.visualization(result, config = config),
+      KODAMA.visualization(
+        result,
+        method = "UMAP",
+        k = min(30L, nrow(feature_mat) - 1L),
+        backend = "cpu",
+        n.cores = as.integer(n_cores),
+        gpu.device = 0L,
+        seed = seed
+      ),
       error = function(e) {
         cat(sprintf("[ERROR] KODAMA.visualization failed: %s\n", conditionMessage(e)))
         NULL

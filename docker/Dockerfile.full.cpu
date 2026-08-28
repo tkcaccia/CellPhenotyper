@@ -1,5 +1,10 @@
 FROM ubuntu:22.04
 
+ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
+ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
+ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
+ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
+
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG STARDIST_TF_VERSION=2.16.2
@@ -66,21 +71,35 @@ RUN set -euo pipefail && \
     printf '%s\n' 'CXX11STD=-std=gnu++14' 'CXX14STD=-std=gnu++14' > /root/.R/Makevars && \
     micromamba run -n stardist python -c "import importlib; mods=['tensorflow','stardist','csbdeep','torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide','aicsimageio','aicspylibczi']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
     micromamba run -n stardist Rscript -e 'devtools::install_github("xzhoulab/SPARK")' && \
-    micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMA")' && \
-    micromamba run -n stardist Rscript -e 'devtools::install_github("tkcaccia/KODAMAextra")' && \
+    micromamba create -y -n kodama-r -c conda-forge -c bioconda --channel-priority strict \
+      'r-base>=4.6' zlib && \
+    micromamba run -n kodama-r Rscript -e 'install.packages(c("Rcpp", "withr", "generics", "data.table", "R.utils", "remotes"), repos="https://cloud.r-project.org", Ncpus=4L)' && \
+    micromamba run -n kodama-r Rscript -e "remotes::install_github('Bioconductor/BiocGenerics@${BIOCGENERICS_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e "remotes::install_github('Bioconductor/S4Vectors@${S4VECTORS_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e "remotes::install_github('tkcaccia/fastEmbedR@${FASTEMBEDR_REVISION}', dependencies=FALSE, upgrade='never')" && \
+    micromamba run -n kodama-r Rscript -e "remotes::install_github('tkcaccia/KODAMA@${KODAMA_REVISION}', dependencies=FALSE, upgrade='never')" && \
     micromamba run -n stardist Rscript -e 'install.packages("Rnanoflann", repos="https://cloud.r-project.org")' && \
-    micromamba run -n stardist Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); library(BiocNeighbors); library(RANN); library(Rnanoflann); library(RcppHNSW); library(RcppAnnoy); library(uwot); cat("R runtime package check passed\n")' && \
+    micromamba run -n kodama-r Rscript -e 'stopifnot(getRversion() >= "4.6.0", packageVersion("fastEmbedR") >= "0.99.5", packageVersion("KODAMA") == "0.99.7"); library(KODAMA); library(fastEmbedR); library(data.table); cat("KODAMA R 4.6 runtime check passed\n")' && \
+    micromamba run -n stardist Rscript -e 'library(SPARK); library(BiocNeighbors); library(RANN); library(Rnanoflann); library(RcppHNSW); library(RcppAnnoy); library(uwot); cat("General R runtime package check passed\n")' && \
     micromamba clean -a -y
 
 WORKDIR /opt/cellphenotyper
 COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md /opt/cellphenotyper/
 COPY bin /opt/cellphenotyper/bin
 COPY modules /opt/cellphenotyper/modules
+COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
 RUN mkdir -p /opt/cellphenotyper/third_party && \
     git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM && \
+    git clone --depth 1 https://github.com/vqdang/hover_net /opt/cellphenotyper/third_party/hover_net && \
+    mkdir -p /opt/cellphenotyper/models/hovernet && \
+    micromamba run -n stardist pip install --no-cache-dir "numpy<2" "opencv-python-headless<4.12" \
+      gdown docopt future psutil "scikit-learn<1.8" tensorboardX termcolor && \
+    micromamba run -n stardist pip install --no-cache-dir --no-deps imgaug==0.4.0 && \
+    micromamba run -n stardist gdown 13qkxDqv7CUqxN-l5CpeFVmc24mDw6CeV \
+      -O /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar && \
     mkdir -p /opt/cellphenotyper/third_party/grandqc/pydeps /opt/cellphenotyper/third_party/grandqc/models/td /opt/cellphenotyper/third_party/grandqc/models/qc && \
     mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM && \
     wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1" && \
@@ -99,6 +118,8 @@ RUN mkdir -p /opt/cellphenotyper/third_party && \
     chmod -R a+rX /opt/cellphenotyper/third_party/grandqc && \
     chmod -R a+rX /opt/cellphenotyper/third_party/MedSAM
 
+RUN mkdir -p /opt/cellphenotyper/empty-r-library
+
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
@@ -107,5 +128,10 @@ ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
 ENV GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
 ENV MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
 ENV MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
+ENV HOVERNET_REPO_DIR=/opt/cellphenotyper/third_party/hover_net
+ENV HOVERNET_MONUSAC_CHECKPOINT=/opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+ENV R_LIBS_USER=/opt/cellphenotyper/empty-r-library
+ENV R_ENVIRON_USER=/dev/null
+ENV R_PROFILE_USER=/dev/null
 
 CMD ["/bin/bash"]
