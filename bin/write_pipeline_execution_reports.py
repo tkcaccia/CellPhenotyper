@@ -188,14 +188,16 @@ def list_files(stage_dir: Path) -> list[dict]:
                 continue
             try:
                 size = f.stat().st_size
-                resolved = str(f.resolve())
+                published = str(f.absolute())
+                resolved_target = str(f.resolve())
                 rel = f.relative_to(stage_dir).as_posix()
             except OSError:
                 continue
             files.append(
                 {
                     "relative_path": rel,
-                    "absolute_path": resolved,
+                    "absolute_path": published,
+                    "resolved_target_path": resolved_target,
                     "size_bytes": size,
                 }
             )
@@ -365,7 +367,10 @@ def main() -> int:
     with project_tsv_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(
             fh,
-            fieldnames=["output_id", "stage_id", "stage_title", "stage_folder", "relative_path", "absolute_path", "size_bytes"],
+            fieldnames=[
+                "output_id", "stage_id", "stage_title", "stage_folder", "relative_path",
+                "absolute_path", "resolved_target_path", "size_bytes",
+            ],
             delimiter="\t",
         )
         writer.writeheader()

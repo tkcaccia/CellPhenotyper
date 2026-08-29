@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "bin"))
 
-from write_pipeline_execution_reports import preserve_trace, summarize_trace  # noqa: E402
+from write_pipeline_execution_reports import list_files, preserve_trace, stage_summary, summarize_trace  # noqa: E402
 
 
 def write_trace(path: Path, process: str, realtime: str) -> None:
@@ -40,3 +40,24 @@ def test_targeted_run_does_not_replace_full_pipeline_trace(tmp_path: Path) -> No
     stored = json.loads((execution_dir / "full_pipeline_run.json").read_text())
     assert stored["start_point"] == "convert"
     assert len(list((execution_dir / "run_traces").glob("*.tsv"))) == 2
+
+
+def test_project_paths_remain_in_published_tree_for_relative_links(tmp_path: Path) -> None:
+    outdir = tmp_path / "results"
+    target = tmp_path / "work" / "task" / "consensus_sample"
+    target.mkdir(parents=True)
+    (target / "objects.csv").write_text("label,x,y\n1,1,1\n")
+    published_parent = outdir / "03d_cell_consensus" / "sample"
+    published_parent.mkdir(parents=True)
+    published_dir = published_parent / "consensus_sample"
+    published_dir.symlink_to(target, target_is_directory=True)
+
+    records = list_files(outdir / "03d_cell_consensus")
+    assert len(records) == 1
+    record = records[0]
+    assert record["absolute_path"] == str(published_dir / "objects.csv")
+    assert record["resolved_target_path"] == str(target / "objects.csv")
+    assert record["absolute_path"].startswith(str(outdir))
+
+    consensus = next(row for row in stage_summary(outdir) if row["id"] == "cell_consensus")
+    assert consensus["key_files"] == [str(published_dir / "objects.csv")]
