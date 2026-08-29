@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).parents[1] / "bin" / "run_gigatime_on_crop.py"
-SPEC = importlib.util.spec_from_file_location("run_gigatime_on_crop", MODULE_PATH)
+MODULE_PATH = Path(__file__).parents[1] / "bin" / "gigatime_resolution.py"
+SPEC = importlib.util.spec_from_file_location("gigatime_resolution", MODULE_PATH)
 gigatime = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = gigatime

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from huggingface_hub import snapshot_download
 from PIL import Image
 import tifffile
 import torch
@@ -20,6 +19,8 @@ import zarr
 from skimage.color import rgb2lab
 from skimage.filters import threshold_otsu
 from skimage.morphology import binary_closing, disk, remove_small_holes, remove_small_objects
+
+from gigatime_resolution import choose_downsample_factor, estimate_prediction_gib
 
 try:
     import pyvips
@@ -336,19 +337,6 @@ def infer_source_mpp(crop_path: str, shift_json: str | None = None) -> float | N
     return None
 
 
-def estimate_prediction_gib(
-    height: int,
-    width: int,
-    num_channels: int = len(CHANNEL_NAMES),
-    *,
-    bytes_per_sample: int | None = None,
-) -> float:
-    if bytes_per_sample is None:
-        bytes_per_sample = np.dtype(np.float32).itemsize
-    bytes_total = int(num_channels) * int(height) * int(width) * int(bytes_per_sample)
-    return float(bytes_total) / float(1024 ** 3)
-
-
 def resolve_output_channels(spec: str | None, *, default_all: bool = True) -> tuple[list[int], list[str]]:
     if not spec or not str(spec).strip():
         if not default_all:
@@ -373,77 +361,6 @@ def resolve_output_channels(spec: str | None, *, default_all: bool = True) -> tu
     if not names:
         raise ValueError("No valid GigaTIME output channels were selected")
     return [CHANNEL_INDEX_BY_NAME[name] for name in names], names
-
-
-def choose_downsample_factor(
-    orig_h: int,
-    orig_w: int,
-    source_mpp: float | None,
-    target_mpp: float,
-    auto_threshold_mpix: float,
-    max_side: int,
-    max_output_gib: float,
-    *,
-    num_channels: int,
-    bytes_per_sample: int,
-    strict_target_mpp: bool,
-    enable_max_side_fallback: bool = True,
-) -> tuple[float, dict]:
-    factor = 1.0
-    reason = "native"
-
-    if source_mpp and source_mpp > 0 and target_mpp > 0:
-        factor = float(target_mpp) / float(source_mpp)
-        reason = "target_mpp"
-    else:
-        if strict_target_mpp and target_mpp > 0:
-            raise ValueError(
-                "GigaTIME --strict-target-mpp was requested, but source MPP could not be resolved. "
-                "Provide TIFF physical pixel-size metadata or stage/pass the StarDist shift.json so the "
-                "original calibrated image can be found."
-            )
-        mpix = (orig_h * orig_w) / 1_000_000.0
-        if enable_max_side_fallback and (mpix > float(auto_threshold_mpix) or max(orig_h, orig_w) > int(max_side)):
-            factor = float(max(1, int(math.ceil(max(orig_h, orig_w) / float(max_side)))))
-            reason = "max_side_fallback"
-
-    if not (strict_target_mpp and source_mpp and source_mpp > 0 and target_mpp > 0):
-        while True:
-            h = int(math.ceil(orig_h / float(factor)))
-            w = int(math.ceil(orig_w / float(factor)))
-            est_gib = estimate_prediction_gib(
-                h,
-                w,
-                num_channels=num_channels,
-                bytes_per_sample=bytes_per_sample,
-            )
-            if est_gib <= float(max_output_gib):
-                break
-            factor = max(factor + 1.0, factor * math.sqrt(est_gib / float(max_output_gib)))
-            reason = "disk_budget"
-
-    final_h = int(math.ceil(orig_h / float(factor)))
-    final_w = int(math.ceil(orig_w / float(factor)))
-    meta = {
-        "selected_factor": float(factor),
-        "selected_shape_yx": [final_h, final_w],
-        "estimated_prediction_gib": float(
-            estimate_prediction_gib(
-                final_h,
-                final_w,
-                num_channels=num_channels,
-                bytes_per_sample=bytes_per_sample,
-            )
-        ),
-        "selection_reason": reason,
-    }
-    if source_mpp and source_mpp > 0:
-        meta["source_mpp"] = float(source_mpp)
-        meta["effective_mpp"] = float(source_mpp * factor)
-        if target_mpp > 0:
-            meta["requested_downsample_factor"] = float(target_mpp) / float(source_mpp)
-            meta["mpp_error_fraction"] = float((source_mpp * factor - target_mpp) / target_mpp)
-    return factor, meta
 
 
 def _read_page_lazy_downsampled(path: str, page: int, factor: int) -> tuple[np.ndarray, tuple[int, int], int]:
@@ -1626,6 +1543,8 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def load_model(repo_id: str, token: str | None, device: torch.device, offline: bool) -> GigaTIMEModel:
+    from huggingface_hub import snapshot_download
+
     local_dir = snapshot_download(repo_id=repo_id, token=token, local_files_only=offline)
     weights_path = Path(local_dir) / "model.pth"
     if not weights_path.exists():
