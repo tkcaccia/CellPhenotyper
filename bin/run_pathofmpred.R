@@ -48,15 +48,55 @@ binary <- plot_titan_binary(predictions)
 ggsave(file.path(outdir, "pathofmpred_binary_predictions.png"), binary,
        width = 11, height = 9, units = "in", dpi = 200, bg = "white")
 
-titan_sample_report(
-  cancer = cancer,
-  features = x,
-  patient_id = patient_id,
-  output_file = file.path(outdir, "pathofmpred_research_report"),
-  format = report_format,
-  include_limited_evidence = include_limited,
-  quiet = TRUE
+# rmarkdown writes intermediate files beside its input document. Render from a
+# writable copy because the protected package library is mounted read-only.
+template_root <- system.file(
+  "rmarkdown", "templates", "titan-report", package = "PathoFMPred"
 )
+if (!nzchar(template_root)) stop("PathoFMPred report template is unavailable")
+render_parent <- tempfile("pathofmpred_report_")
+dir.create(render_parent, recursive = TRUE)
+template_copy_root <- file.path(render_parent, "titan-report")
+dir.create(template_copy_root, recursive = TRUE)
+template_entries <- list.files(
+  template_root, recursive = TRUE, full.names = TRUE, all.files = TRUE,
+  include.dirs = TRUE, no.. = TRUE
+)
+relative_entries <- substring(template_entries, nchar(template_root) + 2L)
+directory_entries <- dir.exists(template_entries)
+for (relative_dir in relative_entries[directory_entries]) {
+  dir.create(file.path(template_copy_root, relative_dir), recursive = TRUE)
+}
+source_files <- template_entries[!directory_entries]
+destination_files <- file.path(template_copy_root, relative_entries[!directory_entries])
+copy_ok <- file.copy(source_files, destination_files, overwrite = TRUE)
+if (!length(copy_ok) || !all(copy_ok)) {
+  stop("Could not copy the PathoFMPred report template to a writable directory")
+}
+template <- file.path(template_copy_root, "skeleton", "skeleton.Rmd")
+if (!file.exists(template)) stop("Writable PathoFMPred report template is missing")
+
+report_formats <- if (report_format == "both") c("html", "pdf") else report_format
+if (!all(report_formats %in% c("html", "pdf"))) {
+  stop("--report-format must be html, pdf, or both")
+}
+outdir_abs <- normalizePath(outdir, mustWork = TRUE)
+for (extension in report_formats) {
+  rmarkdown::render(
+    template,
+    output_format = if (extension == "html") "html_document" else "pdf_document",
+    output_file = paste0("pathofmpred_research_report.", extension),
+    output_dir = outdir_abs,
+    params = list(
+      predictions = predictions,
+      sample_id = patient_id,
+      cancer = cancer,
+      clinical_context = NULL
+    ),
+    envir = new.env(parent = globalenv()),
+    quiet = TRUE
+  )
+}
 
 writeLines(c(
   paste0("PathoFMPred_version=", as.character(packageVersion("PathoFMPred"))),
