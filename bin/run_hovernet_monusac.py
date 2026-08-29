@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -66,13 +67,22 @@ def resolve_runtime_paths(image: str, shift: str, repo: str, checkpoint: str, ou
     return tuple(Path(value).resolve() for value in (image, shift, repo, checkpoint, outdir))
 
 
-def prepare_cache_resume_runtime(repo: Path, outdir: Path, cache_dir: Path, prediction_cache: Path) -> Path:
-    """Patch an isolated upstream copy to reuse a completed prediction mmap."""
+def prepare_runtime_repo(repo: Path, outdir: Path) -> Path:
+    """Copy the upstream runtime to a task-writable directory."""
+    runtime_repo = outdir / "hovernet_runtime"
+    shutil.rmtree(runtime_repo, ignore_errors=True)
+    shutil.copytree(repo, runtime_repo)
+    for path in (runtime_repo, *runtime_repo.rglob("*")):
+        mode = path.stat().st_mode
+        path.chmod(mode | stat.S_IWUSR | (stat.S_IXUSR if path.is_dir() else 0))
+    return runtime_repo
+
+
+def enable_cache_resume_runtime(runtime_repo: Path, cache_dir: Path, prediction_cache: Path) -> None:
+    """Patch an isolated runtime copy to reuse a completed prediction mmap."""
     pred_map = prediction_cache / "pred_map.npy"
     if not pred_map.is_file():
         raise FileNotFoundError(f"HoVer-Net prediction cache is missing: {pred_map}")
-    runtime_repo = outdir / "hovernet_resume_runtime"
-    shutil.copytree(repo, runtime_repo)
     wsi_path = runtime_repo / "infer" / "wsi.py"
     source = wsi_path.read_text()
     allocation = '''        self.wsi_pred_map = np.lib.format.open_memmap(
@@ -107,6 +117,12 @@ def prepare_cache_resume_runtime(repo: Path, outdir: Path, cache_dir: Path, pred
         raise RuntimeError("Unsupported HoVer-Net wsi.py layout for prediction-cache resume")
     wsi_path.write_text(source.replace(allocation, resumed_allocation).replace(inference, resumed_inference))
     (cache_dir / "pred_map.npy").symlink_to(pred_map.resolve())
+
+
+def prepare_cache_resume_runtime(repo: Path, outdir: Path, cache_dir: Path, prediction_cache: Path) -> Path:
+    """Create and patch an isolated upstream copy for prediction-cache resume."""
+    runtime_repo = prepare_runtime_repo(repo, outdir)
+    enable_cache_resume_runtime(runtime_repo, cache_dir, prediction_cache)
     return runtime_repo
 
 
@@ -199,10 +215,12 @@ def main() -> None:
     scale = source_mpp / args.target_mpp
     normalized_slide = input_dir / "hovernet_input.tif"
     width, height = make_pyramidal_input(image, normalized_slide, scale, args.target_mpp)
-    runtime_repo = repo
+    # Upstream initializes debug.log in its current directory. The bundled
+    # repository is read-only in Singularity, so always run an isolated copy.
+    runtime_repo = prepare_runtime_repo(repo, outdir)
     if args.prediction_cache:
         prediction_cache = Path(args.prediction_cache).resolve()
-        runtime_repo = prepare_cache_resume_runtime(repo, outdir, cache_dir, prediction_cache)
+        enable_cache_resume_runtime(runtime_repo, cache_dir, prediction_cache)
     type_info_path = outdir / "monusac_type_info.json"
     type_info_path.write_text(json.dumps(MONUSAC_TYPE_INFO, indent=2))
     compatibility_launcher = (

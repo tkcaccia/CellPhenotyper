@@ -73,6 +73,25 @@ class MonusacTypeInfoTest(unittest.TestCase):
             self.assertTrue((cache / "pred_map.npy").is_symlink())
             self.assertEqual((cache / "pred_map.npy").resolve(), (prediction_cache / "pred_map.npy").resolve())
 
+    def test_normal_runtime_is_copied_to_writable_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "read_only_repo"
+            outdir = root / "output"
+            repo.mkdir()
+            outdir.mkdir()
+            (repo / "run_infer.py").write_text("print('ok')\n")
+            repo.chmod(0o555)
+            try:
+                runtime = hovernet.prepare_runtime_repo(repo, outdir)
+                (runtime / "debug.log").write_text("writable\n")
+            finally:
+                repo.chmod(0o755)
+
+            self.assertEqual(runtime, outdir / "hovernet_runtime")
+            self.assertEqual((runtime / "run_infer.py").read_text(), "print('ok')\n")
+            self.assertEqual((runtime / "debug.log").read_text(), "writable\n")
+
     def test_normalizes_current_upstream_nuc_key_and_coordinates(self):
         payload = {
             "mag": 40,
