@@ -47,6 +47,21 @@ class CellVitBatchTest(unittest.TestCase):
             },
         )
 
+    def test_model_names_resolve_to_the_official_cached_checkpoints(self):
+        cache = Path("/models")
+        self.assertEqual(cellvit.required_model_path(cache, "HIPT"), cache / "CellViT-256-x40-AMP.pth")
+        self.assertEqual(cellvit.required_model_path(cache, "SAM"), cache / "CellViT-SAM-H-x40-AMP.pth")
+
+    def test_runtime_environment_keeps_ray_and_caches_in_task_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outdir = Path(directory) / "output"
+            env, runtime_dir = cellvit.prepare_runtime_env(outdir)
+            self.assertEqual(Path(env["RAY_TMPDIR"]), runtime_dir / "tmp")
+            self.assertEqual(Path(env["TMPDIR"]), runtime_dir / "tmp")
+            self.assertEqual(Path(env["XDG_CACHE_HOME"]), runtime_dir / "cache")
+            self.assertEqual(Path(env["MPLCONFIGDIR"]), runtime_dir / "matplotlib")
+            self.assertTrue((runtime_dir / "tmp").is_dir())
+
     def test_normalization_preserves_id_and_emits_name(self):
         payload = {
             "type_map": {"1": "Neoplastic", "3": "Connective"},

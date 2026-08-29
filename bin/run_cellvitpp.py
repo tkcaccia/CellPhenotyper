@@ -54,6 +54,30 @@ def resolve_runtime_paths(image: str, shift: str, outdir: str) -> tuple[Path, Pa
     return tuple(Path(value).resolve() for value in (image, shift, outdir))
 
 
+def required_model_path(cache_dir: Path, model: str) -> Path:
+    filename = "CellViT-256-x40-AMP.pth" if model == "HIPT" else "CellViT-SAM-H-x40-AMP.pth"
+    return cache_dir / filename
+
+
+def require_readable_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    if not os.access(path, os.R_OK):
+        raise PermissionError(f"{label} is not readable by uid {os.geteuid()}: {path}")
+
+
+def prepare_runtime_env(outdir: Path) -> tuple[dict[str, str], Path]:
+    runtime_dir = outdir / "runtime"
+    for child in (runtime_dir / "tmp", runtime_dir / "cache", runtime_dir / "matplotlib"):
+        child.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TMPDIR"] = str(runtime_dir / "tmp")
+    env["RAY_TMPDIR"] = str(runtime_dir / "tmp")
+    env["XDG_CACHE_HOME"] = str(runtime_dir / "cache")
+    env["MPLCONFIGDIR"] = str(runtime_dir / "matplotlib")
+    return env, runtime_dir
+
+
 def make_pyramid(src: Path, dst: Path) -> None:
     import pyvips
 
@@ -123,13 +147,15 @@ def main() -> None:
 
     image, shift, outdir = resolve_runtime_paths(args.image, args.shift, args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    executable = shutil.which(args.executable) if "/" not in args.executable else args.executable
+    if not executable or not Path(executable).exists():
+        raise FileNotFoundError(f"CellViT++ executable not found: {args.executable}")
+    cache_dir = Path(os.environ.get("CELLVIT_CACHE", str(Path.home() / ".cache" / "cellvit")))
+    require_readable_file(required_model_path(cache_dir, args.model), f"CellViT++ {args.model} checkpoint")
     prepared = outdir / "cellvit_input.tif"
     make_pyramid(image, prepared)
     mpp = source_mpp(shift, args.default_mpp)
     batch_size = auto_batch_size(args.batch_size, args.gpu)
-    executable = shutil.which(args.executable) if "/" not in args.executable else args.executable
-    if not executable or not Path(executable).exists():
-        raise FileNotFoundError(f"CellViT++ executable not found: {args.executable}")
     raw_dir = outdir / "raw"
     ray_workers = max(1, args.ray_workers)
     ray_worker_cpus = max(1, args.ray_worker_cpus or (args.cpus // ray_workers))
@@ -142,7 +168,8 @@ def main() -> None:
     if args.amp:
         cmd.append("--enforce_amp")
     cmd += ["process_wsi", "--wsi_path", str(prepared), "--wsi_mpp", str(mpp)]
-    subprocess.run(cmd, check=True)
+    env, runtime_dir = prepare_runtime_env(outdir)
+    subprocess.run(cmd, check=True, env=env)
     candidates = sorted(raw_dir.rglob("cells.json"))
     if not candidates:
         raise RuntimeError(f"CellViT++ produced no cells.json under {raw_dir}")
@@ -154,6 +181,7 @@ def main() -> None:
     normalize_output(candidates[0], outdir / "cellvit_cells.json", args.taxonomy, metadata)
     (outdir / "cellvit_metadata.json").write_text(json.dumps(metadata, indent=2))
     prepared.unlink(missing_ok=True)
+    shutil.rmtree(runtime_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
