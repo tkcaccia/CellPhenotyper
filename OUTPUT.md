@@ -49,6 +49,8 @@ Each `09_embeddings/<sample>/embeddings_<sample>_<mode>/` directory contains a h
 
 `00_execution/project_outputs.json` and `project_outputs.tsv` assign a stable `output_id` to every published artifact. `absolute_path` always points into the durable output tree; when relative-link publishing is used, `resolved_target_path` separately records the underlying Nextflow cache target for provenance.
 
+The default `publish_dir_mode: copy` makes published files independent of the Nextflow work cache, so `work/` can be removed after a successful run. Selecting `rellink` reduces temporary storage and publication I/O, but its published links break when the corresponding work cache is deleted.
+
 ## Neoplastic Section
 
 For each connected polygon from `15_cluster_geojson`, stage 16 writes:

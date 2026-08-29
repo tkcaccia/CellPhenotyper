@@ -141,7 +141,9 @@ expand_auto_threshold_mpix: 25.0
 expand_preview_factor: 10
 expand_preview_threshold_mb: 100.0
 expand_preview_alpha: 0.45
-publish_dir_mode: rellink
+# `copy` keeps results valid after deleting the Nextflow work directory.
+# Use `rellink` only when retaining the matching work cache is intentional.
+publish_dir_mode: copy
 grandqc_enable: true
 grandqc_device: auto
 grandqc_bootstrap_deps: false

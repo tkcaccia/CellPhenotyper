@@ -61,6 +61,7 @@ nextflow run main.nf -profile singularity \
 | `gpu_container_image` | `''` | Optional explicit GPU container URI/path. |
 | `singularity_image` | `''` | Manual container URI/path for `-profile singularity` (`runtime_image_mode: manual`). |
 | `docker_image` | `''` | Manual image for `-profile docker` (`runtime_image_mode: manual`). |
+| `publish_dir_mode` | `copy` | Nextflow `publishDir` mode. The durable default keeps `results/` independent of `work/`; use `rellink` only when the work cache will be retained. |
 | `gpu_debug_diagnostics` | `false` | When true, GPU-capable processes print `nvidia-smi` and framework CUDA diagnostics. |
 | `max_cpus` | `4` | Global CPU cap. |
 | `max_memory_gb` | `8` | Global RAM cap in GB. |
