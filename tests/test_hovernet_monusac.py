@@ -92,6 +92,17 @@ class MonusacTypeInfoTest(unittest.TestCase):
             self.assertEqual((runtime / "run_infer.py").read_text(), "print('ok')\n")
             self.assertEqual((runtime / "debug.log").read_text(), "writable\n")
 
+    def test_unreadable_checkpoint_fails_before_expensive_preprocessing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "model.tar"
+            checkpoint.write_bytes(b"model")
+            checkpoint.chmod(0)
+            try:
+                with self.assertRaisesRegex(PermissionError, "not readable"):
+                    hovernet.require_readable_file(checkpoint, "MoNuSAC checkpoint")
+            finally:
+                checkpoint.chmod(0o600)
+
     def test_normalizes_current_upstream_nuc_key_and_coordinates(self):
         payload = {
             "mag": 40,

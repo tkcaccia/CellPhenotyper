@@ -3,6 +3,8 @@ FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+
 RUN mkdir -p /opt/cellphenotyper/empty-r-library
 ENV R_LIBS_USER=/opt/cellphenotyper/empty-r-library
 ENV R_ENVIRON_USER=/dev/null

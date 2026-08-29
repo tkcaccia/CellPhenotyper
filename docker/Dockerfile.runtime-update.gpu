@@ -9,6 +9,8 @@ ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
 ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 
+RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+
 RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
     rm -rf /var/lib/apt/lists/*
 

@@ -134,6 +134,7 @@ RUN mkdir -p /opt/cellphenotyper/third_party && \
     micromamba run -n stardist pip install --no-cache-dir --no-deps imgaug==0.4.0 && \
     micromamba run -n stardist gdown 13qkxDqv7CUqxN-l5CpeFVmc24mDw6CeV \
       -O /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar && \
+    chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar && \
     micromamba create -y -n cellvit python=3.11 pip && \
     CELLVIT_ARCH="$(uname -m)" && \
     if [ "${CELLVIT_ARCH}" = "x86_64" ]; then \

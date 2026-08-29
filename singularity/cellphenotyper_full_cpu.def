@@ -98,6 +98,7 @@ PY
   mkdir -p /opt/cellphenotyper/models/hovernet
   micromamba run -n stardist gdown 13qkxDqv7CUqxN-l5CpeFVmc24mDw6CeV \
     -O /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
+  chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
 
   micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi
 

@@ -100,6 +100,7 @@ RUN mkdir -p /opt/cellphenotyper/third_party && \
     micromamba run -n stardist pip install --no-cache-dir --no-deps imgaug==0.4.0 && \
     micromamba run -n stardist gdown 13qkxDqv7CUqxN-l5CpeFVmc24mDw6CeV \
       -O /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar && \
+    chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar && \
     mkdir -p /opt/cellphenotyper/third_party/grandqc/pydeps /opt/cellphenotyper/third_party/grandqc/models/td /opt/cellphenotyper/third_party/grandqc/models/qc && \
     mkdir -p /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM && \
     wget -q -O /opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth "https://zenodo.org/records/10689643/files/medsam_vit_b.pth?download=1" && \

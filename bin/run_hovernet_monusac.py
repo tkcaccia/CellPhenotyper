@@ -67,6 +67,13 @@ def resolve_runtime_paths(image: str, shift: str, repo: str, checkpoint: str, ou
     return tuple(Path(value).resolve() for value in (image, shift, repo, checkpoint, outdir))
 
 
+def require_readable_file(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    if not os.access(path, os.R_OK):
+        raise PermissionError(f"{label} is not readable by uid {os.geteuid()}: {path}")
+
+
 def prepare_runtime_repo(repo: Path, outdir: Path) -> Path:
     """Copy the upstream runtime to a task-writable directory."""
     runtime_repo = outdir / "hovernet_runtime"
@@ -200,10 +207,8 @@ def main() -> None:
     image, shift, repo, checkpoint, outdir = resolve_runtime_paths(
         args.image, args.shift, args.repo, args.checkpoint, args.outdir,
     )
-    if not (repo / "run_infer.py").is_file():
-        raise FileNotFoundError(f"Official HoVer-Net runtime not found: {repo / 'run_infer.py'}")
-    if not checkpoint.is_file():
-        raise FileNotFoundError(f"MoNuSAC checkpoint not found: {checkpoint}")
+    require_readable_file(repo / "run_infer.py", "Official HoVer-Net runtime")
+    require_readable_file(checkpoint, "MoNuSAC checkpoint")
     outdir.mkdir(parents=True, exist_ok=True)
     input_dir, raw_dir, cache_dir = outdir / "input", outdir / "raw", outdir / "cache"
     input_dir.mkdir(exist_ok=True)
@@ -240,6 +245,10 @@ def main() -> None:
         "--proc_mag=40", f"--chunk_shape={args.chunk_shape}", f"--tile_shape={args.tile_shape}",
     ]
     env = os.environ.copy()
+    runtime_cache_dir = outdir / "runtime_cache"
+    (runtime_cache_dir / "matplotlib").mkdir(parents=True, exist_ok=True)
+    env["MPLCONFIGDIR"] = str(runtime_cache_dir / "matplotlib")
+    env["XDG_CACHE_HOME"] = str(runtime_cache_dir)
     if args.prediction_cache:
         env["HOVERNET_RESUME_PRED_MAP"] = "1"
     subprocess.run(cmd, cwd=runtime_repo, env=env, check=True)
@@ -256,6 +265,7 @@ def main() -> None:
     (outdir / "hovernet_metadata.json").write_text(json.dumps(metadata, indent=2))
     shutil.rmtree(cache_dir, ignore_errors=True)
     shutil.rmtree(input_dir, ignore_errors=True)
+    shutil.rmtree(runtime_cache_dir, ignore_errors=True)
     if runtime_repo != repo:
         shutil.rmtree(runtime_repo, ignore_errors=True)
 
