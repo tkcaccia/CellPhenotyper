@@ -37,7 +37,8 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def stardist_script = "${projectDir}/${params.stardist_script}"
     def memoryBudgetGb = Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))
     def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
-    def stardistAutoHardware = (params.hardware_auto as boolean) && (params.stardist_auto_hardware as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu'
+    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def stardistAutoHardware = (params.hardware_auto as boolean) && (params.stardist_auto_hardware as boolean) && resolvedComputeDevice == 'gpu'
     def resolvedTilesX = Math.max(1, params.stardist_tiles_x as int)
     def resolvedTilesY = Math.max(1, params.stardist_tiles_y as int)
     def resolvedBigBlockSize = Math.max(512, params.stardist_big_block_size as int)

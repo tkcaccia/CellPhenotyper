@@ -180,6 +180,10 @@ def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper
 if (!container_repo) {
 container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
 }
+def container_gpu_repo = (paramOr('container_gpu_repo', 'ghcr.io/tkcaccia/cellphenotyper-runtime') ?: 'ghcr.io/tkcaccia/cellphenotyper-runtime').toString().trim()
+if (!container_gpu_repo) {
+container_gpu_repo = 'ghcr.io/tkcaccia/cellphenotyper-runtime'
+}
 def default_cpu_tag_generic = detected_arch == 'amd64' ? '0.2.0-amd64' : '0.2.0'
 def container_cpu_tag = (paramOr('container_cpu_tag', default_cpu_tag_generic) ?: default_cpu_tag_generic).toString().trim()
 if (!container_cpu_tag) {
@@ -200,7 +204,7 @@ container_gpu_tag = '0.2.0-gpu'
 
 def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
 def auto_cpu_docker_image = "${container_repo}:${selected_cpu_tag}"
-def auto_gpu_docker_image = "${container_repo}:${container_gpu_tag}"
+def auto_gpu_docker_image = "${container_gpu_repo}:${container_gpu_tag}"
 def auto_docker_image = resolved_compute_device == 'gpu'
 ? (detected_arch == 'amd64' ? auto_gpu_docker_image : auto_cpu_docker_image)
 : auto_cpu_docker_image

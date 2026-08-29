@@ -30,12 +30,11 @@ nextflow run main.nf -profile singularity \
 | `start_point` | `convert` | Stage where execution starts. |
 | `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_mask`). |
 | `tissue_mask_from_input` | `false` | Build tissue mask from input image directly. |
-| `compute_device` | `cpu` | `cpu`, `gpu`, or `auto`. |
+| `compute_device` | `auto` | `auto` selects GPU consistently for all GPU-capable stages when NVIDIA visibility is detected, otherwise CPU; `gpu` and `cpu` force an explicit policy. |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
 | `enable_gpu_on_arm64` | `false` | Allow GPU selection on arm64 hosts when a compatible GPU container exists. |
 | `enable_stardist_gpu_on_arm64` | `false` | On arm64, keep StarDist on CPU container by default; set `true` to force StarDist into GPU container. |
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
-| `uni2_device_auto` | `cpu` | UNI-2 device when `compute_device=auto`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
 | `container_gpu_repo` | `ghcr.io/tkcaccia/cellphenotyper-runtime` | GHCR repository used for the current amd64 GPU runtime. |
 | `container_cpu_tag` | `2.6` | Legacy generic fallback; multi-arch CPU manifest tag. Architecture-specific CPU tags below remain authoritative. |
@@ -282,7 +281,7 @@ UNI-2 behavior:
 MedSAM behavior:
 
 - MedSAM refinement runs per cluster label. For large WSI crops, each cluster border is split into overlapping tiles controlled by `medsam_cluster_tile_size` and `medsam_cluster_tile_overlap`, so a tile may legitimately contain only one cluster.
-- Large masks use downsampled morphology for protected-core and editable-band construction, and full-resolution work is limited to the cluster-border tile passed to MedSAM. CUDA is still required when `medsam_device=cuda`.
+- Large masks use downsampled morphology for protected-core and editable-band construction, and full-resolution work is limited to the cluster-border tile passed to MedSAM. The default `medsam_device=auto` follows the pipeline-wide resolved compute device; forcing `medsam_device=cuda` still requires CUDA.
 
 Dual clustering behavior:
 

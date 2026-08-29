@@ -15,7 +15,7 @@ outdir_base: results_full
 # Pipeline mode
 run_full_pipeline: true
 tissue_mask_from_input: false
-compute_device: cpu    # cpu | gpu | auto
+compute_device: auto   # cpu | gpu | auto
 host_arch: auto        # auto | amd64 | arm64
 enable_gpu_on_arm64: false   # set true only when an arm64-compatible GPU container is available
 enable_stardist_gpu_on_arm64: false   # optional override: run StarDist in GPU container on arm64
@@ -259,5 +259,6 @@ cluster_mask_preview_alpha: 0.45
 grow_preview_factor: 10
 grow_preview_threshold_mb: 100.0
 grow_preview_alpha: 0.45
+medsam_device: auto
 medsam_cluster_tile_size: 4096
 medsam_cluster_tile_overlap: 512

@@ -26,8 +26,9 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     def download_flag = params.grandqc_download_models ? '--download-models' : ''
     def geojson_flag = params.grandqc_create_geojson ? '--create-geojson' : ''
     def requestedGrandqcDevice = (params.grandqc_device ?: 'auto').toString()
+    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
     def resolvedGrandqcDevice = requestedGrandqcDevice
-    if (requestedGrandqcDevice == 'auto' && (params.hardware_auto as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu') {
+    if (requestedGrandqcDevice == 'auto' && (params.hardware_auto as boolean) && resolvedComputeDevice == 'gpu') {
       resolvedGrandqcDevice = 'cuda'
     }
     """

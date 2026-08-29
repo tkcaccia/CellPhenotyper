@@ -1,5 +1,6 @@
 process REFINE_GROWN_TISSUE_MEDSAM {
     tag "${sample_id}:${cluster_variant}"
+    label 'compute_heavy'
     label 'gpu_capable'
     maxForks 1
 
@@ -26,7 +27,10 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def keep_tmp_flag = (params.grow_keep_tmp as boolean) ? '--keep-tmp' : ''
     def legacy_flag = (params.grow_legacy as boolean) ? '--legacy' : ''
     def medsamCheckpoint = params.medsam_checkpoint ? "--medsam-checkpoint \"${params.medsam_checkpoint}\"" : ''
-    def medsamDevice = "--medsam-device ${(params.medsam_device ?: (params.compute_device == 'gpu' ? 'cuda' : 'cpu')).toString()}"
+    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def requestedMedsamDevice = (params.medsam_device ?: 'auto').toString().trim().toLowerCase()
+    def resolvedMedsamDevice = requestedMedsamDevice == 'auto' ? (resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu') : requestedMedsamDevice
+    def medsamDevice = "--medsam-device ${resolvedMedsamDevice}"
     def medsamBBoxMargin = "--medsam-bbox-margin ${params.medsam_bbox_margin}"
     def medsamComponentMinArea = "--medsam-component-min-area ${params.medsam_component_min_area}"
     def medsamComponentMergeDistance = "--medsam-component-merge-distance ${params.medsam_component_merge_distance}"
@@ -52,7 +56,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def tail_flags = [overwrite_flag, keep_tmp_flag, legacy_flag].findAll { it?.trim() }.join(' ')
     def memoryBudgetGb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
     def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
-    def medsamAutoHardware = (params.hardware_auto as boolean) && (params.medsam_refine_auto_hardware as boolean) && (params.compute_device ?: 'cpu').toString().toLowerCase() == 'gpu'
+    def medsamAutoHardware = (params.hardware_auto as boolean) && (params.medsam_refine_auto_hardware as boolean) && resolvedComputeDevice == 'gpu'
     def resolvedMaxWorkers = Math.max(1, Math.min(task.cpus as int, params.medsam_refine_max_workers as int))
     if (medsamAutoHardware) {
       def autoWorkerCap = Math.max(resolvedMaxWorkers, params.medsam_refine_max_auto_workers as int)

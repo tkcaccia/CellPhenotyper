@@ -25,7 +25,8 @@ process RUN_GIGATIME_ON_CROP {
       codeDigest.update(new File(it).bytes)
     }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
-    def device_value = params.compute_device == 'gpu' ? 'cuda' : 'cpu'
+    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
     def pyramid_flag = params.gigatime_output_pyramid ? '--pyramid' : ''

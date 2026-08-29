@@ -8,7 +8,7 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
 
     cpus {
       def requested = Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int))
-      def compute = (params.compute_device ?: 'cpu').toString().toLowerCase()
+      def compute = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
       def maxMemGb = params.max_memory_gb as int
       if (compute != 'gpu' && maxMemGb <= 3) return 1
       return requested
@@ -27,7 +27,8 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
     def force_full_flag = params.uni2_force_full_image ? '--force-full-image' : ''
     def save_tiles_flag = params.uni2_save_tiles ? '--save-tiles' : ''
     def tiles_root_path = "embeddings_${sample_id}_tile/${params.uni2_tiles_root}"
-    def device_value = params.compute_device == 'gpu' ? 'cuda' : (params.compute_device == 'auto' ? params.uni2_device_auto : 'cpu')
+    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
     def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
     def requested_batch = Math.max(1, params.uni2_batch as int)
     def initial_batch = requested_batch
