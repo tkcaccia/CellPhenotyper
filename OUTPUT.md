@@ -43,7 +43,9 @@ With `--outdir_base results_full`, CellPhenotyper writes the following stage dir
 - `4`: `dead`
 - `5`: `epithelial`
 
-`03d_cell_consensus/<sample>/consensus_<sample>/objects.csv` retains each detector's named class and numeric ID in separate columns. `alignment.csv` includes accepted and rejected predictions, while `consensus_summary.json`, `consensus_cells.geojson`, and `consensus_preview.png` provide QC and provenance.
+`03d_cell_consensus/<sample>/consensus_<sample>/objects.csv` retains each detector's named class and numeric ID in separate columns. `mask_seed_x` and `mask_seed_y` record the unique raster seed that guarantees every canonical ID survives overlapping detector contours. `alignment.csv` includes accepted and rejected predictions, while `consensus_summary.json`, `consensus_cells.geojson`, and `consensus_preview.png` provide QC, mask-coverage validation, and provenance.
+
+Each `09_embeddings/<sample>/embeddings_<sample>_<mode>/` directory contains a hidden `.*_embedding_complete.json` manifest. It records expected and written cells and is emitted only after every non-empty grid has valid, complete shards; KODAMA is not allowed to receive a partially resumed UNI2 result.
 
 ## Neoplastic Section
 

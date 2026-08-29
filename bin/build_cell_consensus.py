@@ -121,7 +121,47 @@ def choose_geometry(group: list[Cell], priority: list[str]) -> Cell | None:
     )
 
 
-def write_mask(records: list[dict], width: int, height: int, output: Path, tile_size: int, compression: str) -> None:
+def allocate_unique_seed_pixels(records: list[dict], width: int, height: int) -> dict[int, tuple[int, int]]:
+    """Reserve one unique mask pixel near every consensus centroid.
+
+    Detector contours can overlap completely. Rasterizing them by priority can
+    therefore erase an otherwise valid consensus cell. Reserved seed pixels are
+    applied after polygon rasterization so every canonical cell ID survives.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid mask dimensions: width={width}, height={height}")
+
+    occupied: set[tuple[int, int]] = set()
+    seeds: dict[int, tuple[int, int]] = {}
+    for record in records:
+        center_x = min(width - 1, max(0, int(round(float(record["x"])))))
+        center_y = min(height - 1, max(0, int(round(float(record["y"])))))
+        selected = None
+        radius = 0
+        while selected is None:
+            if radius == 0:
+                candidates = [(center_x, center_y)]
+            else:
+                candidates = []
+                for dx in range(-radius, radius + 1):
+                    candidates.append((center_x + dx, center_y - radius))
+                    candidates.append((center_x + dx, center_y + radius))
+                for dy in range(-radius + 1, radius):
+                    candidates.append((center_x - radius, center_y + dy))
+                    candidates.append((center_x + radius, center_y + dy))
+            for x, y in candidates:
+                if 0 <= x < width and 0 <= y < height and (x, y) not in occupied:
+                    selected = (x, y)
+                    break
+            radius += 1
+            if radius > max(width, height):
+                raise RuntimeError("Could not reserve a unique consensus seed pixel")
+        occupied.add(selected)
+        seeds[int(record["label"])] = selected
+    return seeds
+
+
+def write_mask(records: list[dict], width: int, height: int, output: Path, tile_size: int, compression: str) -> dict:
     import rasterio
     from rasterio.features import rasterize
     from rasterio.windows import Window
@@ -134,6 +174,14 @@ def write_mask(records: list[dict], width: int, height: int, output: Path, tile_
         for ty in range(max(0, int(ymin) // tile_size), min((height - 1) // tile_size, int(ymax) // tile_size) + 1):
             for tx in range(max(0, int(xmin) // tile_size), min((width - 1) // tile_size, int(xmax) // tile_size) + 1):
                 bins[(ty, tx)].append(record)
+    seed_pixels = allocate_unique_seed_pixels(records, width, height)
+    seed_bins: dict[tuple[int, int], list[tuple[int, int, int]]] = defaultdict(list)
+    for label, (x, y) in seed_pixels.items():
+        seed_bins[(y // tile_size, x // tile_size)].append((label, x, y))
+    for record in records:
+        seed_x, seed_y = seed_pixels[int(record["label"])]
+        record["mask_seed_x"] = seed_x
+        record["mask_seed_y"] = seed_y
     profile = {
         "driver": "GTiff", "width": width, "height": height, "count": 1, "dtype": "uint32",
         "tiled": True, "blockxsize": tile_size, "blockysize": tile_size, "compress": compression,
@@ -146,7 +194,49 @@ def write_mask(records: list[dict], width: int, height: int, output: Path, tile_
                 relevant = sorted(bins.get((y0 // tile_size, x0 // tile_size), []), key=lambda r: r["support"])
                 shapes = [(mapping(r["polygon"]), int(r["label"])) for r in relevant]
                 tile = rasterize(shapes, out_shape=(h, w), transform=rasterio.Affine.translation(x0, y0), fill=0, dtype="uint32") if shapes else np.zeros((h, w), dtype=np.uint32)
+                for label, seed_x, seed_y in seed_bins.get((y0 // tile_size, x0 // tile_size), []):
+                    tile[seed_y - y0, seed_x - x0] = label
                 dst.write(tile, 1, window=Window(x0, y0, w, h))
+    return {
+        "reserved_seed_count": len(seed_pixels),
+        "relocated_seed_count": sum(
+            (x, y) != (
+                min(width - 1, max(0, int(round(float(record["x"]))))),
+                min(height - 1, max(0, int(round(float(record["y"]))))),
+            )
+            for record in records
+            for x, y in [seed_pixels[int(record["label"])]]
+        ),
+    }
+
+
+def validate_mask_label_coverage(path: Path, expected_count: int) -> dict:
+    import rasterio
+
+    seen = np.zeros(expected_count + 1, dtype=bool)
+    invalid_labels: set[int] = set()
+    with rasterio.open(path) as src:
+        for _, window in src.block_windows(1):
+            values = src.read(1, window=window)
+            block_max = int(values.max(initial=0))
+            if block_max > expected_count:
+                invalid_labels.update(int(v) for v in np.unique(values[values > expected_count]))
+            else:
+                seen[values.reshape(-1).astype(np.int64, copy=False)] = True
+    seen[0] = True
+    missing = np.flatnonzero(~seen)
+    if invalid_labels or missing.size:
+        raise RuntimeError(
+            "Consensus mask label coverage failed: "
+            f"expected={expected_count}, present={int(seen[1:].sum())}, "
+            f"missing={missing[:20].tolist()}, invalid={sorted(invalid_labels)[:20]}"
+        )
+    return {
+        "expected_label_count": int(expected_count),
+        "present_label_count": int(seen[1:].sum()),
+        "missing_label_count": 0,
+        "invalid_label_count": 0,
+    }
 
 
 def write_preview(image_path: Path, records: list[dict], output: Path, max_side: int) -> None:
@@ -235,8 +325,10 @@ def main() -> None:
 
     import pyvips
     image = pyvips.Image.new_from_file(args.image, access="sequential")
-    write_mask(records, image.width, image.height, outdir / "labels.tif", args.tile_size, args.compression)
-    columns = ["label", "area", "y", "x", "xmin", "ymin", "xmax", "ymax", "consensus_support", "consensus_methods"]
+    mask_path = outdir / "labels.tif"
+    mask_seed_summary = write_mask(records, image.width, image.height, mask_path, args.tile_size, args.compression)
+    mask_coverage = validate_mask_label_coverage(mask_path, len(records))
+    columns = ["label", "area", "y", "x", "xmin", "ymin", "xmax", "ymax", "mask_seed_x", "mask_seed_y", "consensus_support", "consensus_methods"]
     for source in ("stardist", "hovernet", "cellvitpp"):
         columns += [
             f"{source}_id", f"{source}_type_id", f"{source}_type",
@@ -250,6 +342,8 @@ def main() -> None:
             row = {
                 "label": record["label"], "area": record["polygon"].area, "y": record["y"], "x": record["x"],
                 "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+                "mask_seed_x": record["mask_seed_x"],
+                "mask_seed_y": record["mask_seed_y"],
                 "consensus_support": record["support"], "consensus_methods": ";".join(sorted(record["members"])),
             }
             for source, cell in record["members"].items():
@@ -295,6 +389,8 @@ def main() -> None:
         "match_radius_um": args.match_radius_um, "match_radius_px": radius_px,
         "source_mpp": mpp, "rejected_no_geometry": rejected_no_geometry,
         "support_counts": {str(level): sum(r["support"] == level for r in records) for level in (2, 3)},
+        "mask_seed_summary": mask_seed_summary,
+        "mask_label_coverage": mask_coverage,
     }
     (outdir / "consensus_summary.json").write_text(json.dumps(summary, indent=2))
     write_preview(Path(args.image), records, outdir / "consensus_preview.png", args.preview_max_side)

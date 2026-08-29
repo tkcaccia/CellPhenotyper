@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -57,6 +58,41 @@ class ConsensusMatchingTest(unittest.TestCase):
         cellvit = cell("cellvitpp", "c1", 0, 0)
         selected = consensus.choose_geometry([hover, cellvit], ["cellvitpp", "hovernet"])
         self.assertIs(selected, hover)
+
+    def test_seed_pixels_are_unique_when_centroids_round_to_same_pixel(self):
+        records = [
+            {"label": 1, "x": 4.1, "y": 5.1},
+            {"label": 2, "x": 4.2, "y": 5.2},
+            {"label": 3, "x": 4.3, "y": 5.3},
+        ]
+        seeds = consensus.allocate_unique_seed_pixels(records, width=10, height=10)
+        self.assertEqual(len(set(seeds.values())), 3)
+        self.assertEqual(seeds[1], (4, 5))
+        self.assertTrue(all(0 <= x < 10 and 0 <= y < 10 for x, y in seeds.values()))
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("rasterio") and importlib.util.find_spec("shapely"),
+        "rasterio and shapely are supplied by the pipeline runtime",
+    )
+    def test_overlapping_polygons_cannot_erase_consensus_labels(self):
+        from shapely.geometry import Polygon
+
+        records = [
+            {
+                "label": 1, "x": 10.0, "y": 10.0, "support": 2,
+                "polygon": Polygon([(5, 5), (15, 5), (15, 15), (5, 15)]),
+            },
+            {
+                "label": 2, "x": 10.0, "y": 10.0, "support": 3,
+                "polygon": Polygon([(4, 4), (16, 4), (16, 16), (4, 16)]),
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "labels.tif"
+            consensus.write_mask(records, 32, 32, output, tile_size=16, compression="deflate")
+            coverage = consensus.validate_mask_label_coverage(output, expected_count=2)
+        self.assertEqual(coverage["present_label_count"], 2)
+        self.assertEqual(coverage["missing_label_count"], 0)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,8 @@ import torch
 import tifffile
 import torchvision.transforms as T
 
+from uni2_grid import assign_rounded_centers_to_grid
+
 
 # --------------------------
 # Encoder utilities (kept compatible with your current script)
@@ -1260,15 +1262,22 @@ def main():
     N = labels.shape[0]
     print(f"[INFO] cells after filter: {N}")
 
-    # Assign each cell to a grid tile based on centroid
-    tile_w = int(math.ceil(W / GC))
-    tile_h = int(math.ceil(H / GR))
-    grid_r = np.clip((cy // tile_h).astype(np.int64), 0, GR - 1)
-    grid_c = np.clip((cx // tile_w).astype(np.int64), 0, GC - 1)
-    tile_id = grid_r * GC + grid_c
+    # Assign and process cells from the same rounded integer centroid. Mixing a
+    # floating-point grid assignment with a rounded extraction center can move a
+    # cell across an exact grid boundary and silently skip it.
+    center_x, center_y, grid_r, grid_c, tile_id, tile_w, tile_h = assign_rounded_centers_to_grid(
+        cx,
+        cy,
+        height=H,
+        width=W,
+        grid_rows=GR,
+        grid_cols=GC,
+    )
 
     order = np.argsort(tile_id)
-    labels, cx, cy, area, tile_id = labels[order], cx[order], cy[order], area[order], tile_id[order]
+    labels = labels[order]
+    cx, cy, area, tile_id = cx[order], cy[order], area[order], tile_id[order]
+    center_x, center_y = center_x[order], center_y[order]
 
     tile_starts = np.searchsorted(tile_id, np.arange(GR * GC), side="left")
     tile_ends   = np.searchsorted(tile_id, np.arange(GR * GC), side="right")
@@ -1310,26 +1319,29 @@ def main():
     def grid_marker_path(tile_out: Path) -> Path:
         return tile_out / f".{tag}_grid_complete.json"
 
-    def grid_marker_matches_current_mode(marker_path: Path) -> bool:
+    def read_valid_grid_marker(marker_path: Path) -> Optional[Dict[str, Any]]:
         try:
             marker = json.loads(marker_path.read_text())
         except Exception:
-            return False
-        return str(marker.get("paired_inner_square_mode", "")) == paired_mode
+            return None
+        if str(marker.get("paired_inner_square_mode", "")) != paired_mode:
+            return None
+        expected_rows = int(marker.get("index_end", -1)) - int(marker.get("index_start", -1))
+        if expected_rows < 0 or int(marker.get("rows_written", -1)) != expected_rows:
+            return None
+        if int(marker.get("shards", 0)) < 1:
+            return None
+        return marker
 
     def grid_is_complete(tile_out: Path, secondary_tile_out: Optional[Path]) -> bool:
         primary_marker = grid_marker_path(tile_out)
-        if not primary_marker.exists():
-            return False
-        if secondary_tile_out is not None and not grid_marker_matches_current_mode(primary_marker):
+        if not primary_marker.exists() or read_valid_grid_marker(primary_marker) is None:
             return False
         if not any(tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
             return False
         if secondary_tile_out is not None:
             secondary_marker = grid_marker_path(secondary_tile_out)
-            if not secondary_marker.exists():
-                return False
-            if not grid_marker_matches_current_mode(secondary_marker):
+            if not secondary_marker.exists() or read_valid_grid_marker(secondary_marker) is None:
                 return False
             if not any(secondary_tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
                 return False
@@ -1476,12 +1488,16 @@ def main():
 
             for i in tqdm(range(s, e), desc=f"grid {tr:02d},{tc:02d}", leave=False):
                 lab = int(labels[i])
-                x = int(round(float(cx[i])))
-                y = int(round(float(cy[i])))
+                x = int(center_x[i])
+                y = int(center_y[i])
                 a = int(area[i])
 
                 if not (x0_core <= x < x1_core and y0_core <= y < y1_core):
-                    continue
+                    raise RuntimeError(
+                        "UNI2 grid assignment invariant failed: "
+                        f"cell_id={lab} center=({x},{y}) grid=({tr},{tc}) "
+                        f"bounds=x[{x0_core},{x1_core}) y[{y0_core},{y1_core})"
+                    )
 
                 x0 = x - half
                 y0 = y - half
@@ -1622,6 +1638,53 @@ def main():
             write_grid_marker(primary_state, tr, tc, s, e)
             if secondary_state is not None:
                 write_grid_marker(secondary_state, tr, tc, s, e)
+
+    def validate_complete_output(root: Path, mode_name: str) -> Dict[str, Any]:
+        total_written = 0
+        completed_grids = 0
+        for tid in range(GR * GC):
+            s, e = int(tile_starts[tid]), int(tile_ends[tid])
+            if s == e:
+                continue
+            tr, tc = divmod(tid, GC)
+            marker_path = grid_marker_path(tile_folder(root, tr, tc))
+            marker = read_valid_grid_marker(marker_path)
+            if marker is None:
+                raise RuntimeError(
+                    f"UNI2 {mode_name} output is incomplete or inconsistent for grid {tr:02d},{tc:02d}"
+                )
+            if int(marker["index_start"]) != s or int(marker["index_end"]) != e:
+                raise RuntimeError(
+                    f"UNI2 {mode_name} grid index mismatch for {tr:02d},{tc:02d}: "
+                    f"marker=[{marker['index_start']},{marker['index_end']}) expected=[{s},{e})"
+                )
+            total_written += int(marker["rows_written"])
+            completed_grids += 1
+        if total_written != int(N):
+            raise RuntimeError(
+                f"UNI2 {mode_name} cell coverage failed: expected={int(N)} written={total_written}"
+            )
+        summary = {
+            "encoder": str(args.encoder),
+            "tag": str(tag),
+            "embedding_mode": str(mode_name),
+            "paired_inner_square_mode": str(paired_mode),
+            "expected_cells": int(N),
+            "rows_written": int(total_written),
+            "missing_cells": 0,
+            "completed_grids": int(completed_grids),
+            "completed_at_unix": time.time(),
+        }
+        (root / f".{tag}_embedding_complete.json").write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n"
+        )
+        return summary
+
+    primary_summary = validate_complete_output(outdir, "tile")
+    print(f"[INFO] UNI2 tile coverage validated: {primary_summary['rows_written']}/{N}", flush=True)
+    if secondary_outdir is not None:
+        secondary_summary = validate_complete_output(secondary_outdir, "inner_square")
+        print(f"[INFO] UNI2 inner_square coverage validated: {secondary_summary['rows_written']}/{N}", flush=True)
 
     print("🎉 Done.")
 

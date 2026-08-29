@@ -21,6 +21,7 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import binary_closing, disk, remove_small_holes, remove_small_objects
 
 from gigatime_resolution import choose_downsample_factor, estimate_prediction_gib
+from gigatime_hardware import choose_gigatime_hardware_settings
 
 try:
     import pyvips
@@ -66,6 +67,9 @@ CHANNEL_INDEX_BY_NAME = {name: idx for idx, name in enumerate(CHANNEL_NAMES)}
 
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+_RUNTIME_BATCH_CAP = 0
+_RUNTIME_OOM_REDUCTIONS = 0
 
 
 class VGGBlock(nn.Module):
@@ -794,6 +798,12 @@ class TileQuantifier:
     def close(self) -> None:
         self.mask_reader.close()
 
+    def has_positive_labels(self, y0: int, y1: int, x0: int, x1: int) -> bool:
+        if not self.enabled:
+            return False
+        block = self.mask_reader.read_block(y0, y1, x0, x1, self.target_shape)
+        return bool(np.any(block > 0))
+
     def accumulate_tile(self, y0: int, y1: int, x0: int, x1: int, tile_probs_cyx: np.ndarray) -> None:
         if not self.enabled:
             return
@@ -1045,141 +1055,27 @@ def _cuda_mem_free_gib(device: torch.device) -> tuple[float | None, float | None
 def adapt_gigatime_hardware(args: argparse.Namespace, device: torch.device) -> dict:
     mem_available = _system_mem_available_gib()
     cuda_free, cuda_total = _cuda_mem_free_gib(device)
-    requested = {
-        "batch_size": int(args.batch_size),
-        "block_size": int(args.block_size),
-        "max_output_gib": float(args.max_output_gib),
-    }
-    profile = str(getattr(args, "hardware_profile", "balanced") or "balanced").strip().lower()
-    if profile not in {"conservative", "balanced", "aggressive"}:
-        profile = "balanced"
-
-    if not bool(args.auto_hardware):
-        return {
-            "enabled": False,
-            "profile": profile,
-            "requested": requested,
-            "effective": dict(requested),
-            "system_mem_available_gib": mem_available,
-            "cuda_mem_free_gib": cuda_free,
-            "cuda_mem_total_gib": cuda_total,
-        }
-
     task_memory = float(args.task_memory_gb) if float(args.task_memory_gb or 0) > 0 else None
-    reserve = float(args.min_free_system_gb)
-    if mem_available is None:
-        usable_mem = max(0.0, task_memory - reserve) if task_memory is not None else None
-    else:
-        host_usable = max(0.0, mem_available - reserve)
-        usable_mem = min(host_usable, task_memory) if task_memory is not None else host_usable
-
-    if usable_mem is not None and usable_mem < 4.0:
-        raise RuntimeError(
-            "GigaTIME cannot run safely: estimated usable system memory after reserve is "
-            f"{usable_mem:.2f} GiB. Increase RAM/swap or lower concurrent workload before running."
-        )
-
-    # Start from a hardware-derived target, not from the conservative defaults.
-    batch_cap = max(1, int(args.max_auto_batch))
-    block_cap = max(256, int(args.max_auto_block_size))
-    budget_cap = max(0.25, float(args.max_auto_output_gib))
-
-    mem_batch = 1
-    mem_block = 512
-    mem_budget = 0.75
-    if usable_mem is None:
-        mem_block, mem_budget = 1024, 2.0
-    elif usable_mem < 8.0:
-        mem_block, mem_budget = 512, 0.75
-    elif usable_mem < 16.0:
-        mem_block, mem_budget = 768, 1.25
-        mem_batch = 2
-    elif usable_mem < 24.0:
-        mem_block, mem_budget = 1024, 2.0
-        mem_batch = 4
-    elif usable_mem < 48.0:
-        mem_block, mem_budget = 1536, 4.0
-        mem_batch = 6
-    elif usable_mem < 96.0:
-        mem_block, mem_budget = 2048, 8.0
-        mem_batch = 4
-    else:
-        mem_block, mem_budget = 3072, 16.0
-        mem_batch = 8
-
-    gpu_batch = batch_cap
-    gpu_block = block_cap
-    if cuda_free is not None:
-        if cuda_free < 4.0:
-            gpu_batch, gpu_block = 1, 512
-        elif cuda_free < 8.0:
-            gpu_batch, gpu_block = 1, 1024
-        elif cuda_free < 12.0:
-            gpu_batch, gpu_block = 2, 1024
-        elif cuda_free < 20.0:
-            gpu_batch, gpu_block = 4, 1536
-        elif cuda_free < 32.0:
-            gpu_batch, gpu_block = 8, 2048
-        elif cuda_free < 48.0:
-            gpu_batch, gpu_block = 12, 2048
-        else:
-            gpu_batch, gpu_block = 16, 3072
-
-    profile_scale = {
-        "conservative": {"batch": 0.5, "block": 0.75, "budget": 0.5},
-        "balanced": {"batch": 1.0, "block": 1.0, "budget": 1.0},
-        "aggressive": {"batch": 1.5, "block": 1.25, "budget": 1.5},
-    }[profile]
-
-    auto_batch = max(1, int(math.floor(min(mem_batch, gpu_batch) * profile_scale["batch"])))
-    auto_block = max(256, int(math.floor(min(mem_block, gpu_block) * profile_scale["block"])))
-    auto_budget = max(0.25, float(min(mem_budget, budget_cap) * profile_scale["budget"]))
-
-    # User-requested values are respected as lower bounds when safe; explicit max-auto values are hard caps.
-    effective_batch = min(batch_cap, max(max(1, int(args.batch_size)), auto_batch))
-    effective_block = min(block_cap, max(max(256, int(args.block_size)), auto_block))
-    effective_budget = min(budget_cap, max(max(0.25, float(args.max_output_gib)), auto_budget))
-
-    # If the live hardware is smaller than the requested values, safety wins.
-    effective_batch = min(effective_batch, max(1, int(min(mem_batch, gpu_batch))))
-    effective_block = min(effective_block, max(256, int(min(mem_block, gpu_block))))
-    effective_budget = min(effective_budget, max(0.25, float(mem_budget)))
-
-    # TIFF/JPEG encoders are happiest with multiples of 16; Zarr also benefits from regular chunks.
-    effective_block = max(256, int(effective_block))
-    effective_block = max(256, (effective_block // 16) * 16)
-    args.batch_size = int(effective_batch)
-    args.block_size = int(effective_block)
-    args.max_output_gib = float(effective_budget)
-
-    return {
-        "enabled": True,
-        "profile": profile,
-        "requested": requested,
-        "effective": {
-            "batch_size": int(args.batch_size),
-            "block_size": int(args.block_size),
-            "max_output_gib": float(args.max_output_gib),
-        },
-        "limits": {
-            "max_auto_batch": int(batch_cap),
-            "max_auto_block_size": int(block_cap),
-            "max_auto_output_gib": float(budget_cap),
-        },
-        "derived_caps": {
-            "memory_batch": int(mem_batch),
-            "memory_block_size": int(mem_block),
-            "memory_output_gib": float(mem_budget),
-            "gpu_batch": int(gpu_batch),
-            "gpu_block_size": int(gpu_block),
-        },
-        "system_mem_available_gib": mem_available,
-        "task_memory_gb": task_memory,
-        "min_free_system_gb": float(args.min_free_system_gb),
-        "usable_system_mem_gib": usable_mem,
-        "cuda_mem_free_gib": cuda_free,
-        "cuda_mem_total_gib": cuda_total,
-    }
+    metadata = choose_gigatime_hardware_settings(
+        enabled=bool(args.auto_hardware),
+        profile=str(getattr(args, "hardware_profile", "balanced") or "balanced"),
+        requested_batch=int(args.batch_size),
+        requested_block=int(args.block_size),
+        requested_output_gib=float(args.max_output_gib),
+        max_auto_batch=int(args.max_auto_batch),
+        max_auto_block=int(args.max_auto_block_size),
+        max_auto_output_gib=float(args.max_auto_output_gib),
+        task_memory_gib=task_memory,
+        min_free_system_gib=float(args.min_free_system_gb),
+        system_mem_available_gib=mem_available,
+        cuda_mem_free_gib=cuda_free,
+        cuda_mem_total_gib=cuda_total,
+        use_cuda=device.type == "cuda",
+    )
+    args.batch_size = int(metadata["effective"]["batch_size"])
+    args.block_size = int(metadata["effective"]["block_size"])
+    args.max_output_gib = float(metadata["effective"]["max_output_gib"])
+    return metadata
 
 
 def _zarr_directory_store(path: Path):
@@ -1410,6 +1306,8 @@ def run_region_inference(
     batch_size: int,
     channel_indices: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    global _RUNTIME_BATCH_CAP, _RUNTIME_OOM_REDUCTIONS
+
     h, w = image_rgb.shape[:2]
     selected_channels = list(channel_indices) if channel_indices is not None else list(range(len(CHANNEL_NAMES)))
     accum = np.zeros((len(selected_channels), h, w), dtype=np.float32)
@@ -1417,31 +1315,65 @@ def run_region_inference(
     blend_window = make_blend_window(patch_size)[None, :, :]
     use_autocast = device.type == "cuda"
 
+    if _RUNTIME_BATCH_CAP <= 0:
+        _RUNTIME_BATCH_CAP = max(1, int(batch_size))
+    runtime_batch = min(max(1, int(batch_size)), int(_RUNTIME_BATCH_CAP))
+    cursor = 0
     with torch.no_grad():
-        for batch_positions in batched(positions, batch_size):
-            patch_batch = np.stack(
-                [image_rgb[y:y + patch_size, x:x + patch_size, :] for y, x in batch_positions],
-                axis=0,
-            )
-            tensor = normalize_patch_batch(patch_batch).to(device, non_blocking=device.type == "cuda")
-            autocast_ctx = (
-                torch.autocast(device_type="cuda", dtype=torch.float16)
-                if use_autocast
-                else contextlib.nullcontext()
-            )
-            with autocast_ctx:
-                logits = model(tensor)
-                probs = torch.sigmoid(logits).float().cpu().numpy()
-                if selected_channels != list(range(len(CHANNEL_NAMES))):
-                    probs = probs[:, selected_channels, :, :]
+        while cursor < len(positions):
+            batch_positions = positions[cursor:cursor + runtime_batch]
+            patch_batch = tensor = logits = probs = None
+            try:
+                patch_batch = np.stack(
+                    [image_rgb[y:y + patch_size, x:x + patch_size, :] for y, x in batch_positions],
+                    axis=0,
+                )
+                tensor = normalize_patch_batch(patch_batch).to(device, non_blocking=device.type == "cuda")
+                autocast_ctx = (
+                    torch.autocast(device_type="cuda", dtype=torch.float16)
+                    if use_autocast
+                    else contextlib.nullcontext()
+                )
+                with autocast_ctx:
+                    logits = model(tensor)
+                    probs = torch.sigmoid(logits).float().cpu().numpy()
+                    if selected_channels != list(range(len(CHANNEL_NAMES))):
+                        probs = probs[:, selected_channels, :, :]
+            except RuntimeError as exc:
+                is_cuda_oom = device.type == "cuda" and (
+                    isinstance(exc, torch.cuda.OutOfMemoryError)
+                    or "out of memory" in str(exc).lower()
+                    or "cuda error: memory allocation" in str(exc).lower()
+                )
+                if not is_cuda_oom or runtime_batch <= 1:
+                    raise
+                runtime_batch = max(1, runtime_batch // 2)
+                _RUNTIME_BATCH_CAP = runtime_batch
+                _RUNTIME_OOM_REDUCTIONS += 1
+                del tensor, logits, probs, patch_batch
+                gc.collect()
+                torch.cuda.empty_cache()
+                print(
+                    f"[WARN] GigaTIME CUDA OOM; retrying current region with batch_size={runtime_batch}",
+                    flush=True,
+                )
+                continue
 
             for pred, (y, x) in zip(probs, batch_positions):
                 weighted = pred * blend_window
                 accum[:, y:y + patch_size, x:x + patch_size] += weighted
                 counts[:, y:y + patch_size, x:x + patch_size] += blend_window
+            cursor += len(batch_positions)
 
     np.maximum(counts, 1.0, out=counts)
     return accum, counts
+
+
+def record_runtime_batch_metadata(metadata: dict, requested_batch: int) -> None:
+    hardware = metadata.setdefault("hardware_adaptation", {})
+    hardware["requested_inference_batch_size"] = int(requested_batch)
+    hardware["final_runtime_batch_size"] = int(_RUNTIME_BATCH_CAP or max(1, requested_batch))
+    hardware["cuda_oom_batch_reductions"] = int(_RUNTIME_OOM_REDUCTIONS)
 
 
 def encode_probability_tile(tile_cyx: np.ndarray, output_dtype: str) -> np.ndarray:
@@ -1719,6 +1651,7 @@ def blockwise_write_ometiff_outputs(
         print(f"[INFO] Reusing preserved level-0 buffer: {tmp_level0_path}", flush=True)
     else:
         skipped_tiles = 0
+        label_protected_tiles = 0
         skip_mask_small = None
         skip_meta = {"enabled": False}
         if skip_background_blocks:
@@ -1776,7 +1709,12 @@ def blockwise_write_ometiff_outputs(
                         )
                     if skip_mask_small is not None:
                         frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                        if frac < float(skip_background_min_fraction):
+                        protect_labels = frac < float(skip_background_min_fraction) and any(
+                            quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
+                        )
+                        if protect_labels:
+                            label_protected_tiles += 1
+                        if frac < float(skip_background_min_fraction) and not protect_labels:
                             skipped_tiles += 1
                             done += 1
                             if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -1829,8 +1767,10 @@ def blockwise_write_ometiff_outputs(
             finally:
                 del level0
         metadata["background_skip"]["skipped_tiles"] = int(skipped_tiles)
+        metadata["background_skip"]["label_protected_tiles"] = int(label_protected_tiles)
         metadata["background_skip"]["processed_tiles"] = int(total_tiles - skipped_tiles)
         metadata["background_skip"]["total_tiles"] = int(total_tiles)
+        record_runtime_batch_metadata(metadata, batch_size)
 
         # Persist integrated marker quantification before the potentially long
         # TIFF pyramid write, so a writer failure does not discard all-marker
@@ -2009,6 +1949,7 @@ def blockwise_write_zarr_outputs(
     n_tiles_x = int(math.ceil(final_w / float(tile_size)))
     total_tiles = int(n_tiles_y * n_tiles_x)
     skipped_tiles = 0
+    label_protected_tiles = 0
     skip_mask_small = None
     skip_meta = {"enabled": False}
 
@@ -2065,7 +2006,12 @@ def blockwise_write_zarr_outputs(
                 )
             if skip_mask_small is not None:
                 frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                if frac < float(skip_background_min_fraction):
+                protect_labels = frac < float(skip_background_min_fraction) and any(
+                    quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
+                )
+                if protect_labels:
+                    label_protected_tiles += 1
+                if frac < float(skip_background_min_fraction) and not protect_labels:
                     skipped_tiles += 1
                     done += 1
                     if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -2117,8 +2063,10 @@ def blockwise_write_zarr_outputs(
                 print(f"[INFO] GigaTIME blockwise tile {done}/{total_tiles}", flush=True)
 
     metadata["background_skip"]["skipped_tiles"] = int(skipped_tiles)
+    metadata["background_skip"]["label_protected_tiles"] = int(label_protected_tiles)
     metadata["background_skip"]["processed_tiles"] = int(total_tiles - skipped_tiles)
     metadata["background_skip"]["total_tiles"] = int(total_tiles)
+    record_runtime_batch_metadata(metadata, batch_size)
 
     (outdir / "gigatime_channels.json").write_text(json.dumps(output_channel_names, indent=2), encoding="utf-8")
     (outdir / "gigatime_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -2163,6 +2111,7 @@ def blockwise_process_without_store(
     n_tiles_x = int(math.ceil(final_w / float(tile_size)))
     total_tiles = int(n_tiles_y * n_tiles_x)
     skipped_tiles = 0
+    label_protected_tiles = 0
     skip_mask_small = None
     skip_meta = {"enabled": False}
 
@@ -2219,7 +2168,12 @@ def blockwise_process_without_store(
                 )
             if skip_mask_small is not None:
                 frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                if frac < float(skip_background_min_fraction):
+                protect_labels = frac < float(skip_background_min_fraction) and any(
+                    quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
+                )
+                if protect_labels:
+                    label_protected_tiles += 1
+                if frac < float(skip_background_min_fraction) and not protect_labels:
                     skipped_tiles += 1
                     done += 1
                     if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -2268,8 +2222,10 @@ def blockwise_process_without_store(
                 print(f"[INFO] GigaTIME blockwise tile {done}/{total_tiles}", flush=True)
 
     metadata["background_skip"]["skipped_tiles"] = int(skipped_tiles)
+    metadata["background_skip"]["label_protected_tiles"] = int(label_protected_tiles)
     metadata["background_skip"]["processed_tiles"] = int(total_tiles - skipped_tiles)
     metadata["background_skip"]["total_tiles"] = int(total_tiles)
+    record_runtime_batch_metadata(metadata, batch_size)
     (outdir / "gigatime_metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     (outdir / "gigatime_channels.json").write_text(json.dumps(CHANNEL_NAMES, indent=2), encoding="utf-8")
     finalize_aux_outputs(

@@ -110,6 +110,8 @@ Changes relative to straightforward GigaTIME inference:
 6. Single-cell quantification performed during tile generation.
 7. Quantification over both nuclei and cytoplasm masks.
 8. Overlap-aware accumulation during tile-time quantification.
+9. GPU-first automatic batch sizing from live free VRAM, with host-RAM-bounded block buffers and in-process CUDA OOM batch reduction.
+10. Coarse background-block skipping that is vetoed whenever a nucleus or cytoplasm label is present, preserving complete single-cell quantification.
 
 ### UNI-2
 
@@ -121,10 +123,12 @@ Files:
 
 Changes relative to naïve UNI-2 usage:
 
-1. Tiles are cell-centered on StarDist labels rather than generic image tiles.
+1. Tiles are cell-centered on canonical cell labels rather than generic image tiles.
 2. Default embedding families were reduced to `tile` and `inner_square`.
-3. A shared extraction path can emit both `tile` and `inner_square` outputs from one stage.
-4. The pipeline uses a shared Hugging Face cache path to avoid duplicate model downloads across runs/repos.
+3. Rounded extraction coordinates and grid assignment use the same coordinates, eliminating boundary-cell omissions.
+4. Per-grid and whole-stage manifests enforce exact one-row-per-mask-label coverage and reject incomplete resume shards.
+5. A shared extraction path can emit both `tile` and `inner_square` outputs from one stage.
+6. The pipeline uses a shared Hugging Face cache path to avoid duplicate model downloads across runs/repos.
 
 ### KODAMA
 
@@ -190,4 +194,4 @@ For these, the relevant comparison is not “tool vs upstream,” but “current
 
 - **HoVer-Net:** The official PyTorch inference code and official fast MoNuSAC checkpoint are used for inference. CellPhenotyper adds MPP-aware input normalization, an Aperio-compatible pyramidal TIFF carrying `AppMag` and `MPP` because upstream requires objective-power metadata, the explicit MoNuSAC type map because upstream parses its empty default as a filename, cache cleanup, support for upstream's `nuc` JSON key, conversion of coordinates back into the StarDist crop frame, and runtime aliases for NumPy scalar names removed after the versions pinned by upstream. Post-processing workers are bounded by allocated RAM. The unmodified upstream repository is copied into a task-local writable runtime because upstream creates `debug.log` in its current directory and a Singularity image is immutable. The build recipes make the bundled checkpoint world-readable and the wrapper verifies readability before expensive WSI normalization. For recovery after a post-processing-only failure, the isolated copy of upstream `wsi.py` can be patched to reopen a validated completed `pred_map.npy` and skip raw inference; the installed upstream source and model are not modified.
 - **CellViT++:** The official `cellvit-inference` package is used unchanged and pinned to `cellvit==1.0.9`. CellPhenotyper adds pyramidal crop preparation, passes the source MPP explicitly, clamps batch size to the upstream-supported range `2..48`, supplies a nonzero Ray worker count to avoid the upstream zero-worker modulo failure, and normalizes output discovery into a stable `cellvit_cells.json` artifact. Before creating the WSI pyramid, the wrapper verifies that the selected bundled checkpoint is readable. Ray temporary files, Matplotlib state, and runtime caches are redirected into task-local scratch so large runs do not fill the host root filesystem or write into the immutable image.
-- **Consensus:** This is CellPhenotyper-specific code. It performs distance-gated, one-to-one matching between methods; prevents a consensus component from containing duplicate predictions from one method; retains cells supported by at least two methods; assigns a canonical sequential ID; records detector provenance; and writes a tiled label TIFF without holding three WSI masks in RAM.
+- **Consensus:** This is CellPhenotyper-specific code. It performs distance-gated, one-to-one matching between methods; prevents a consensus component from containing duplicate predictions from one method; retains cells supported by at least two methods; assigns a canonical sequential ID; records detector provenance; and writes a tiled label TIFF without holding three WSI masks in RAM. The writer reserves a unique centroid-near seed pixel for every canonical ID so overlapping contours cannot erase a cell, then streams a full label-coverage validation before publication.

@@ -47,9 +47,13 @@ process EXTRACT_UNI2_EMBEDDINGS_SHARED {
     }
     def paired_inner_square_mode = (params.uni2_paired_inner_square_mode ?: 'token_subset').toString()
     def uni2_script = "${projectDir}/${params.uni2_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    [uni2_script, "${projectDir}/bin/uni2_grid.py"].each { codeDigest.update(new File(it).bytes) }
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     """
     set -euo pipefail
+    echo "[INFO] UNI2 shared code fingerprint: ${codeFingerprint}"
 
     TOKEN_ENV_FILE="${token_env_file}"
     TOKEN_VAR_NAME="${params.hf_token_env_var_name ?: 'HF_TOKEN'}"

@@ -20,6 +20,11 @@ process RUN_GIGATIME_ON_CROP {
 
     script:
     def gigatime_script = "${projectDir}/${params.gigatime_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py"].each {
+      codeDigest.update(new File(it).bytes)
+    }
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def device_value = params.compute_device == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
@@ -57,6 +62,7 @@ process RUN_GIGATIME_ON_CROP {
     def min_usable_memory_gb = Math.max(0.0, params.gigatime_min_usable_memory_gb as double)
     """
     set -euo pipefail
+    echo "[INFO] GigaTIME code fingerprint: ${codeFingerprint}"
 
     TOKEN_ENV_FILE="${token_env_file}"
     TOKEN_VAR_NAME="${params.gigatime_hf_token_env_var_name ?: 'HF_GIGATIME'}"

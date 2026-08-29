@@ -20,8 +20,12 @@ process BUILD_CELL_CONSENSUS {
 
     script:
     def scriptPath = "${projectDir}/${params.cell_consensus_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    codeDigest.update(new File(scriptPath).bytes)
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     """
     set -euo pipefail
+    echo "[INFO] Cell consensus code fingerprint: ${codeFingerprint}"
     python "${scriptPath}" \
       --stardist-objects "${stardist_objects}" --hovernet-cells "${hovernet_cells}" \
       --cellvit-cells "${cellvit_cells}" --image "${crop_tif}" --shift "${shift_json}" \
