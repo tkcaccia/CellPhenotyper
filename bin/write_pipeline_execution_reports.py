@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 STAGE_DEFS = [
-    {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif"]},
+    {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif", ".source_resolution.json", ".converted_resolution.json"]},
     {"id": "grandqc", "folder": "02_grandqc", "title": "GrandQC Artifact QC", "expected": ["_grandqc_summary.json", "_grandqc_artifact_mask.tif", "_grandqc_clean_tissue_mask.tif"]},
     {"id": "stardist", "folder": "03_stardist", "title": "StarDist Segmentation", "expected": ["labels.tif", "objects.csv"]},
     {"id": "hovernet_monusac", "folder": "03b_hovernet_monusac", "title": "HoVer-Net MoNuSAC", "expected": ["hovernet_cells.json"]},

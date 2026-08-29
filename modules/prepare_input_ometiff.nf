@@ -13,6 +13,8 @@ process PREPARE_INPUT_OMETIFF {
 
     output:
     tuple val(sample_id), path("${sample_id}.ome.tif"), emit: ome_tif
+    tuple val(sample_id), path("${sample_id}.source_resolution.json"), emit: source_resolution_report
+    tuple val(sample_id), path("${sample_id}.converted_resolution.json"), emit: converted_resolution_report
 
     script:
     def image_name = image_file.getName().toLowerCase()
@@ -24,6 +26,8 @@ process PREPARE_INPUT_OMETIFF {
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
     def btf_converter_script = "${projectDir}/${params.btf_converter_script}"
     def generic_converter_script = "${projectDir}/bin/convert_image_to_tiff.py"
+    def resolution_validator_script = "${projectDir}/${params.input_resolution_validator_script}"
+    def resolution_strict_flag = params.input_resolution_strict ? '--strict' : ''
     """
     set -euo pipefail
 
@@ -53,54 +57,75 @@ PY
       export PYTHONPATH="\$CONVERT_PYDEPS:\${PYTHONPATH:-}"
     fi
 
+    if [[ "${params.input_resolution_check}" == "true" ]]; then
+      python "${resolution_validator_script}" \
+        --image "${staged_image_name}" \
+        --report "${sample_id}.source_resolution.json" \
+        --min-mpp ${params.input_resolution_min_mpp} \
+        --max-mpp ${params.input_resolution_max_mpp} \
+        --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
+        --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
+        --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_strict_flag}
+    else
+      printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
+        "${staged_image_name}" > "${sample_id}.source_resolution.json"
+    fi
+
     if [[ -s "${sample_id}.ome.tif" ]]; then
       echo "[SKIP] Existing non-empty output: ${sample_id}.ome.tif"
-      exit 0
-    fi
-
-    if [[ "${is_ome}" == "true" ]]; then
+    elif [[ "${is_ome}" == "true" ]]; then
       [[ -s "${staged_image_name}" ]] || { echo "Input OME-TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
       cp -f "${staged_image_name}" "${sample_id}.ome.tif"
-      exit 0
-    fi
-
-    if [[ "${is_btf}" == "true" ]]; then
-      bash "${btf_converter_script}" \\
-        --in "${staged_image_name}" \\
-        --out "${sample_id}.ome.tif" \\
-        --compression "${params.convert_compression}" \\
-        --downsample "${params.convert_downsample}" \\
-        --max-workers ${task.cpus} \\
-        ${rgb_flag} \\
+    elif [[ "${is_btf}" == "true" ]]; then
+      bash "${btf_converter_script}" \
+        --in "${staged_image_name}" \
+        --out "${sample_id}.ome.tif" \
+        --compression "${params.convert_compression}" \
+        --downsample "${params.convert_downsample}" \
+        --max-workers ${task.cpus} \
+        ${rgb_flag} \
         ${overwrite_flag}
-
       rm -rf "${sample_id}.ome.tif.rawdir"
-      exit 0
-    fi
-
-    if [[ "${is_tiff_like}" == "true" ]]; then
+    elif [[ "${is_tiff_like}" == "true" ]]; then
       [[ -s "${staged_image_name}" ]] || { echo "Input TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
       cp -f "${staged_image_name}" "${sample_id}.ome.tif"
-      exit 0
+    else
+      python "${generic_converter_script}" \
+        --input "${staged_image_name}" \
+        --output "${sample_id}.ome.tif" \
+        --input-region "${input_region}" \
+        --compression "${params.convert_compression}" \
+        --quality ${params.convert_jpeg_quality} \
+        ${params.convert_pyramid ? '--pyramid' : ''} \
+        --tile 512
     fi
 
-    python "${generic_converter_script}" \
-      --input "${staged_image_name}" \
-      --output "${sample_id}.ome.tif" \
-      --input-region "${input_region}" \
-      --compression "${params.convert_compression}" \
-      --quality ${params.convert_jpeg_quality} \
-      ${params.convert_pyramid ? '--pyramid' : ''} \
-      --tile 512
-    exit 0
+    [[ -s "${sample_id}.ome.tif" ]] || { echo "Converted OME-TIFF missing or empty: ${sample_id}.ome.tif" >&2; exit 1; }
 
-    echo "Unsupported input image format: ${staged_image_name}" >&2
-    echo "Supported extensions: .ome.tif, .ome.tiff, .btf, .czi, .svs, .ndpi, .scn, .mrxs, .vms, .vmu, .tif, .tiff, .png, .jpg, .jpeg" >&2
-    exit 2
+    if [[ "${params.input_resolution_check}" == "true" ]]; then
+      python "${resolution_validator_script}" \
+        --image "${sample_id}.ome.tif" \
+        --report "${sample_id}.converted_resolution.json" \
+        --reference-report "${sample_id}.source_resolution.json" \
+        --min-mpp ${params.input_resolution_min_mpp} \
+        --max-mpp ${params.input_resolution_max_mpp} \
+        --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
+        --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
+        --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_strict_flag}
+    else
+      printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
+        "${sample_id}.ome.tif" > "${sample_id}.converted_resolution.json"
+    fi
     """
 
     stub:
     """
     touch "${sample_id}.ome.tif"
+    printf '{"status":"stub"}\n' > "${sample_id}.source_resolution.json"
+    printf '{"status":"stub"}\n' > "${sample_id}.converted_resolution.json"
     """
 }

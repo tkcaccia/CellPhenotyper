@@ -87,6 +87,21 @@ GPU run notes:
 `start_point` / `end_point` allowed values:
 `convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
 
+## Input Resolution
+
+The `convert` stage validates physical pixel size before doing expensive conversion and validates it again on the generated OME-TIFF. Source and converted reports are published in `01_input/<sample>/`. Upsampling is still permitted within the accepted range, but the report states explicitly that resampling cannot create additional spatial detail.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `input_resolution_check` | `true` | Run source and post-conversion MPP validation. |
+| `input_resolution_strict` | `true` | Stop before cell analysis when resolution metadata is missing or outside the configured contract. |
+| `input_resolution_min_mpp` | `0.05` | Lower metadata sanity bound in µm/px. |
+| `input_resolution_max_mpp` | `0.50` | Coarsest accepted native resolution in µm/px. This limits linear upsampling to 2× for 0.25-µm cell models. |
+| `input_resolution_cell_target_mpp` | `0.25` | Reference cell-model MPP used to report the required upsampling factor. |
+| `input_resolution_max_anisotropy_fraction` | `0.05` | Maximum relative difference between X and Y MPP. |
+| `input_resolution_max_conversion_drift_fraction` | `0.02` | Maximum MPP change permitted during conversion. |
+| `input_resolution_override_mpp` | `0.0` | Explicit isotropic source MPP override; `0` disables the override. Use only for independently verified metadata errors. |
+
 ## Conversion (`.btf` -> `.ome.tif`)
 
 | Parameter | Default | Meaning |

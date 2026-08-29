@@ -64,6 +64,19 @@ gpu_debug_diagnostics: false
 # Global resource caps
 max_cpus: 4
 max_memory_gb: 8
+
+# Input-resolution contract. The strict default rejects missing/invalid MPP,
+# anisotropic pixels, and source images coarser than 0.50 µm/px before conversion.
+input_resolution_check: true
+input_resolution_strict: true
+input_resolution_validator_script: bin/validate_input_resolution.py
+input_resolution_min_mpp: 0.05
+input_resolution_max_mpp: 0.50
+input_resolution_cell_target_mpp: 0.25
+input_resolution_max_anisotropy_fraction: 0.05
+input_resolution_max_conversion_drift_fraction: 0.02
+input_resolution_override_mpp: 0.0
+
 medsam_refine_memory_gb: 30
 medsam_refine_max_workers: 2
 stardist_pythonpath: ""
