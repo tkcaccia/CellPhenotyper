@@ -7,6 +7,7 @@ process RUN_HOVERNET_MONUSAC {
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.hovernet_cpus as int)) }
     memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.hovernet_memory_gb as int))} GB" }
     time { params.hovernet_time as String }
+    containerOptions { (System.getenv('CELLPHENOTYPER_HOVERNET_CONTAINER_OPTIONS') ?: '').trim() }
     maxForks 1
 
     input:
