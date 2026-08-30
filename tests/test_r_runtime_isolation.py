@@ -15,6 +15,9 @@ def test_r_processes_do_not_inherit_host_user_libraries() -> None:
         assert "R_LIBS_USER" in source, module
         assert "R_ENVIRON_USER=/dev/null" in source, module
         assert "R_PROFILE_USER=/dev/null" in source, module
+        assert 'HOME="\\$PWD/.runtime_home"' in source, module
+        assert 'XDG_CACHE_HOME="\\$PWD/.runtime_cache"' in source, module
+        assert 'XDG_CACHE_HOME/fontconfig' in source, module
 
 
 def test_container_recipes_default_to_an_empty_r_user_library() -> None:

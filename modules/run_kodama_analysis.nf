@@ -29,6 +29,10 @@ process RUN_KODAMA_ANALYSIS {
     export R_LIBS_USER="${kodamaRLibrary}"
     export R_ENVIRON_USER=/dev/null
     export R_PROFILE_USER=/dev/null
+    export HOME="\$PWD/.runtime_home"
+    export XDG_CACHE_HOME="\$PWD/.runtime_cache"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
+    mkdir -p "\$HOME" "\$XDG_CACHE_HOME/fontconfig" "\$MPLCONFIGDIR"
 
     mkdir -p kodama_output
 

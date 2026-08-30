@@ -27,6 +27,10 @@ process RUN_RCODE_CLUSTERING {
     export R_LIBS_USER="${clusterRLibrary}"
     export R_ENVIRON_USER=/dev/null
     export R_PROFILE_USER=/dev/null
+    export HOME="\$PWD/.runtime_home"
+    export XDG_CACHE_HOME="\$PWD/.runtime_cache"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
+    mkdir -p "\$HOME" "\$XDG_CACHE_HOME/fontconfig" "\$MPLCONFIGDIR"
 
     Rscript "${cluster_script}" \
       "${kodama_dir}" \

@@ -24,6 +24,10 @@ process RUN_PATHOFMPRED {
     export R_LIBS_USER="${params.pathofmpred_library_dir}"
     export R_ENVIRON_USER=/dev/null
     export R_PROFILE_USER=/dev/null
+    export HOME="\$PWD/.runtime_home"
+    export XDG_CACHE_HOME="\$PWD/.runtime_cache"
+    export MPLCONFIGDIR="\$XDG_CACHE_HOME/matplotlib"
+    mkdir -p "\$HOME" "\$XDG_CACHE_HOME/fontconfig" "\$MPLCONFIGDIR"
     "${rscriptPath}" "${scriptPath}" \
       --features "${titan_embedding}" --cancer "${params.pathofmpred_cancer}" \
       --patient-id "${sample_id}" --outdir "pathofmpred_${sample_id}_${cluster_variant}" \
