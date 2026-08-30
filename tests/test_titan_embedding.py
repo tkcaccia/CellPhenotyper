@@ -64,6 +64,18 @@ class TitanEmbeddingContractTest(unittest.TestCase):
         finally:
             huggingface_hub.hf_hub_download = original
 
+    def test_missing_absolute_snapshot_is_rejected_before_hub_lookup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing-titan-snapshot"
+            with self.assertRaisesRegex(FileNotFoundError, "not accessible"):
+                titan.install_local_titan_file_resolver(str(missing))
+
+    def test_singularity_binds_absolute_titan_model(self):
+        config = (Path(__file__).parents[1] / "nextflow.config").read_text()
+        self.assertIn("new File(configured_titan_model).isAbsolute()", config)
+        bind_block = config.split("def singularity_bind_targets = [", 1)[1].split("]", 1)[0]
+        self.assertIn("titan_model_bind_target", bind_block)
+
 
 if __name__ == "__main__":
     unittest.main()

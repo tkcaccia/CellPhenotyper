@@ -26,8 +26,13 @@ def feature_columns(dimension: int = 768) -> list[str]:
 
 def install_local_titan_file_resolver(model_ref: str) -> Path | None:
     """Keep official TITAN helper lookups inside a complete local snapshot."""
-    model_dir = Path(model_ref).expanduser().resolve()
+    model_path = Path(model_ref).expanduser()
+    model_dir = model_path.resolve()
     if not model_dir.is_dir():
+        if model_path.is_absolute() or model_ref.startswith(("./", "../", "~")):
+            raise FileNotFoundError(
+                f"TITAN local model directory is not accessible: {model_ref}"
+            )
         return None
 
     import huggingface_hub
@@ -210,8 +215,9 @@ def main() -> None:
     batch_size = auto_batch_size(args.batch_size, args.gpu)
     local_model_dir = install_local_titan_file_resolver(args.model)
 
+    model_source = str(local_model_dir) if local_model_dir else args.model
     model = AutoModel.from_pretrained(
-        args.model, revision=args.revision, trust_remote_code=True,
+        model_source, revision=args.revision, trust_remote_code=True,
         local_files_only=args.offline,
     ).eval().to(device)
     conch, transform = model.return_conch()
@@ -267,6 +273,7 @@ def main() -> None:
         "sample_id": args.sample_id,
         "section_id": section_id,
         "model": args.model,
+        "resolved_model_source": model_source,
         "revision": args.revision,
         "patch_encoder": "CONCH v1.5",
         "patch_count": len(candidates),
