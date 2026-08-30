@@ -10,13 +10,14 @@ With `--outdir_base results_full`, CellPhenotyper writes the following stage dir
 - `03c_cellvitpp/`: official CellViT++ PanNuke inference normalized to the StarDist crop frame.
 - `03d_cell_consensus/`: aligned two-of-three StarDist, HoVer-Net, and CellViT++ consensus.
 - `04_TMA/`: TMA decision, core polygons, and cells assigned to cores when applicable.
+- `04_tissue_mask/`: internal tissue mask used to constrain cluster growth.
 - `05_gigatime/`: GigaTIME virtual mIHC image plus nucleus/cytoplasm marker quantification.
 - `06_roi/`: crop-aligned ROI GeoJSON, labeled mask, class map, and preview.
 - `07_cell_assignments/`: cells assigned to ROI polygons.
 - `08_cytoplasm/`: expanded cytoplasm labels.
 - `09_embeddings/`: cell-centered UNI2-h tile and inner-square embeddings.
 - `10_kodama/`: KODAMA coordinates, plots, and logs.
-- `11_clustering/`: standard/fine cluster assignments, plots, and logs.
+- `11_clustering/`: assignments, plots, and logs for the standard and any configured secondary clustering variant.
 - `12_cluster_mask/`: raster cluster masks.
 - `13_grown_tissue/`: cluster labels grown to tissue.
 - `14_medsam_refine_tissue/`: GPU MedSAM border refinement and full-resolution QC crops.

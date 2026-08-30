@@ -1,228 +1,144 @@
 # Release
 
-## Latest state
+## Published runtimes
 
-Track official releases here:
+Track source releases on [GitHub Releases](https://github.com/tkcaccia/CellPhenotyper/releases). Runtime images and SIF artifacts are published through GHCR.
 
-- [GitHub Releases](https://github.com/tkcaccia/CellPhenotyper/releases)
+The pipeline defaults point only to tags verified to exist:
 
-Current default branch:
+| Runtime | Published image or artifact |
+| --- | --- |
+| CPU amd64 | `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` |
+| CPU arm64 | `ghcr.io/tkcaccia/cellphenotyper:0.2.0` |
+| GPU amd64 | `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64` |
+| CPU SIF amd64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64` |
+| CPU SIF arm64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64` |
+| GPU SIF amd64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64` |
+| GPU SIF arm64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64` |
 
-- `main`
+Do not document or configure a tag until its registry manifest has been checked. In particular, the former `2.3` and `2.6` examples were unpublished build targets, not pullable releases.
 
-Verified current GPU runtime:
+The GPU amd64 update is produced by `.github/workflows/publish-runtime-release.yml`. A tag such as `runtime-v2.7-buildN` publishes `2.7-gpu-amd64` to `cellphenotyper-runtime` and validates the bundled R, Python, model, and pipeline test stacks.
 
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
-- Initial validated publication digest: `sha256:25b774075104f41b11633f88c188cbc809aa27d01384aa6a0554aef5ac67d075`
-- Published and validated by `.github/workflows/publish-runtime-release.yml` run `33208931247`.
+## Runtime requirements
 
-Legacy `v2.3` runtime references:
+- Official images include slide conversion, virtual mIF, UNI-2, StarDist, MedSAM, TITAN/CONCH, KODAMA, and the required R libraries.
+- Runtime images copy the pipeline into `/opt/cellphenotyper` so code and dependencies can be validated together.
+- Normal runs must not depend on host `R_LIBS_USER`, host Python packages, or task-local package installation.
+- Nextflow launches on the host and requires Java 17 or newer even when all processes run in Docker or Singularity.
+- Internal tissue masks must remain ordinary compressed TIFFs because downstream `tifffile` consumers reopen them during `GROW_TO_TISSUE`.
+- Large SIF files should be distributed through GHCR/ORAS. GitHub Release assets have a 2 GiB limit.
 
-- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
+## Automated publication
 
-Planned/target tag layout for `v2.3` releases:
+The preferred release path is the GitHub Actions workflow:
 
-- CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.3-arm64`
-- GPU arm64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64`
+1. Use `workflow_dispatch` with `gpu-amd64-update` to refresh only the current amd64 GPU runtime.
+2. Use `workflow_dispatch` with `all` to build the CPU/GPU architecture matrix, multi-architecture manifests, and SIF artifacts.
+3. Use a `runtime-vX.Y-buildN` tag for the amd64 GPU update path.
 
-Runtime dependency note:
+The workflow runs the complete `pytest` suite inside the published amd64 GPU runtime. The full matrix also builds architecture-specific images and publishes SIF artifacts to GHCR over ORAS.
 
-- Official runtime images are built with the slide-conversion and virtual mIF stack preinstalled, including `tensorflow`, `imagecodecs`, `pyvips`, `openslide`, `rasterio`, `huggingface_hub`, and `timm`.
-- Official runtime images now also copy the pipeline code itself into `/opt/cellphenotyper`, so published Docker/SIF artifacts and repository code stay aligned for offline or standalone inspection.
-- Official runtime images must also include the full KODAMA R stack (`KODAMA`, `KODAMAextra`, `SPARK`, `umap`, `bluster`) at build time. Normal pipeline runs should not depend on host `R_LIBS_USER`, host Python environments, or task-local runtime installs.
-- `Nextflow` still launches on the host and therefore still needs a host-side Java 17+ runtime even when every pipeline tool runs inside Docker or Singularity.
-- Internal tissue masks should be written as plain compressed TIFFs, not pyramidal TIFFs, because downstream `tifffile` readers must be able to reopen them reliably during `GROW_TO_TISSUE`.
-- The targeted amd64 GPU update is triggered by a tag such as `runtime-v2.7-buildN`. It publishes `2.7-gpu-amd64` to the repository-linked `cellphenotyper-runtime` package and runs the R isolation, TITAN/CONCH, KODAMA/fastPLS, source-integrity, and repository test checks before succeeding.
+## Manual container publication
 
-Expected Singularity filenames for release `v2.3` when built or uploaded:
-
-- `cellphenotyper-2.3-amd64.sif`
-- `cellphenotyper-2.3-arm64.sif`
-- `cellphenotyper-2.3-gpu-amd64.sif`
-- `cellphenotyper-2.3-gpu-arm64.sif`
-
-Operational notes:
-
-- Current amd64 SIF builds are too large for reliable GitHub Release asset distribution:
-  - `cellphenotyper-2.3-amd64.sif` is approximately `2.6G`
-  - `cellphenotyper-2.3-gpu-amd64.sif` is approximately `6.6G`
-- Therefore, GHCR Docker images remain the authoritative amd64 release artifacts, and amd64 SIF usage should be documented as:
-  - local `apptainer pull` / `singularity pull` from `docker://...`
-  - or registry-backed `oras://` publication when available
-- For the currently validated amd64 CPU/GPU path, the stable workflow is `docker://ghcr.io/tkcaccia/cellphenotyper:<tag>` -> local `apptainer pull`/`singularity pull` -> manual `--singularity_image`.
-- For user-side run failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).
-- Verify GHCR/ORAS availability before telling users to pull a `2.3` asset. Do not assume the tag exists until `docker buildx imagetools inspect ...` or `oras manifest fetch ...` succeeds.
-
-## Versioning policy
-
-- Release tags should follow semantic versioning (`vMAJOR.MINOR.PATCH`).
-- Update `INSTALL.md`, `TUTORIAL.md`, `PARAMETERS.md`, and `OUTPUT.md` whenever behavior or defaults change.
-- Update `LINUX_UPDATE.md` whenever container tags, Singularity assets, or runtime defaults change.
-
-## Container release workflow (GHCR + Singularity assets)
-
-1. Set credentials:
+Use a new version rather than overwriting an existing release:
 
 ```bash
-export GHCR_USER="tkcaccia"
-source GHCRtoken.env
-```
+export VERSION=X.Y.Z
+export IMAGE_REPO=ghcr.io/tkcaccia/cellphenotyper
 
-2. Publish Docker images to GHCR with explicit tags:
-
-```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || docker buildx use cellphenotyper-builder
-
-# Recommended host split:
-# - build amd64 images on a native Linux amd64/x86_64 host
-# - build arm64 images on a native arm64 host (Apple Silicon or Linux arm64)
-# QEMU-emulated amd64 validation of TensorFlow/PyTorch can fail with exit 132 on Apple Silicon.
-
-# amd64 GPU build prerequisite:
-# upload the custom TensorFlow wheel asset
-# tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
-# to the GitHub release v2.3 before building docker/Dockerfile.full.gpu.
-
-# When the dependency-install layer changes, force a fresh rebuild.
-# Do not trust cached layers for release validation.
+docker buildx create --name cellphenotyper-builder --use --bootstrap 2>/dev/null || \
+  docker buildx use cellphenotyper-builder
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3-amd64 \
-  --push .
+  -t "${IMAGE_REPO}:${VERSION}-amd64" --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.cpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3-arm64 \
-  --push .
+  -t "${IMAGE_REPO}:${VERSION}-arm64" --push .
 
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
-  --push .
+  -t "${IMAGE_REPO}:${VERSION}-gpu-amd64" --push .
 
 docker buildx build --platform linux/arm64 \
   -f docker/Dockerfile.full.gpu \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64 \
-  --push .
-
-docker buildx imagetools create \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3 \
-  ghcr.io/tkcaccia/cellphenotyper:2.3-amd64 \
-  ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
-
-docker buildx imagetools create \
-  -t ghcr.io/tkcaccia/cellphenotyper:2.3-gpu \
-  ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
-  ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
+  -t "${IMAGE_REPO}:${VERSION}-gpu-arm64" --push .
 ```
 
-3. Verify pushed Docker tags (explicit inspect commands):
+Build natively on each target architecture where possible. QEMU-emulated TensorFlow or PyTorch validation can fail even when a native runtime is valid.
+
+After all architecture-specific images pass validation, create the aggregate tags:
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu
+docker buildx imagetools create \
+  -t "${IMAGE_REPO}:${VERSION}" \
+  "${IMAGE_REPO}:${VERSION}-amd64" \
+  "${IMAGE_REPO}:${VERSION}-arm64"
 
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-gpu
+docker buildx imagetools create \
+  -t "${IMAGE_REPO}:${VERSION}-gpu" \
+  "${IMAGE_REPO}:${VERSION}-gpu-amd64" \
+  "${IMAGE_REPO}:${VERSION}-gpu-arm64"
 ```
 
-Before publishing or tagging an image as validated, run these checks on the built artifact:
+## Release validation
+
+Check every manifest before updating defaults or user documentation:
 
 ```bash
-docker run --rm ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 \
+docker buildx imagetools inspect "${IMAGE_REPO}:${VERSION}-amd64"
+docker buildx imagetools inspect "${IMAGE_REPO}:${VERSION}-arm64"
+docker buildx imagetools inspect "${IMAGE_REPO}:${VERSION}-gpu-amd64"
+docker buildx imagetools inspect "${IMAGE_REPO}:${VERSION}-gpu-arm64"
+```
+
+Validate the package stacks and repository tests in the built GPU image:
+
+```bash
+docker run --rm "${IMAGE_REPO}:${VERSION}-gpu-amd64" \
   Rscript -e 'library(KODAMA); library(KODAMAextra); library(SPARK); library(umap); cat("R packages OK\n")'
 
-docker run --rm -i --gpus all ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64 python - <<'PY'
-import torch, tensorflow as tf
-print("torch", torch.__version__, torch.version.cuda, torch.backends.cuda.is_built(), torch.cuda.is_available(), torch.cuda.device_count())
-print("tf", tf.__version__, tf.test.is_built_with_cuda(), len(tf.config.list_physical_devices("GPU")))
-PY
+docker run --rm --gpus all "${IMAGE_REPO}:${VERSION}-gpu-amd64" \
+  python -c 'import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda)'
+
+docker run --rm "${IMAGE_REPO}:${VERSION}-gpu-amd64" bash -lc \
+  'cd /opt/cellphenotyper && python -m pytest -q tests'
 ```
 
-4. Build/publish Singularity assets (run on each architecture host):
+## Singularity publication
+
+Build and publish an architecture-specific SIF from the already validated Docker image:
 
 ```bash
-# On arm64 host (Mac M1/M2 or Linux arm64)
-singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
-  --device cpu \
-  --upload \
-  --upload-mode auto
-
-# On amd64 host (Linux x86_64)
-singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
-  --device cpu \
-  --upload \
-  --upload-mode auto
-```
-
-Optional GPU Singularity asset (amd64):
-
-```bash
-singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
-  --device gpu \
-  --upload \
-  --upload-mode auto
-```
-
-Optional GPU Singularity asset (arm64/aarch64 Spark):
-
-```bash
-singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
-  --device gpu \
+./singularity/publish_sif_release_asset.sh \
+  --version "${VERSION}" \
   --source docker \
-  --docker-tag 2.3-gpu-arm64 \
-  --upload \
-  --upload-mode auto
+  --device cpu \
+  --docker-repo "${IMAGE_REPO}" \
+  --docker-tag "${VERSION}-amd64" \
+  --oras-repo "${IMAGE_REPO}" \
+  --asset-arch amd64 \
+  --upload-mode auto \
+  --upload
 ```
 
-Important behavior:
+Repeat with the matching device, architecture, and Docker tag. `--source docker` converts an existing OCI image; it does not build or push the Docker image.
 
-- `--source docker` in `publish_sif_release_asset.sh` pulls an existing OCI image and converts it to `.sif`, then publishes the SIF to GHCR over `oras://`.
-- Small SIFs can still be mirrored to GitHub Release assets, but large SIFs exceed GitHub's 2 GiB upload limit and therefore must use `oras://`.
-- It does **not** build/push Docker images to GHCR.
-- Docker publish is a separate step (`docker build` + `docker push`).
+## Updating defaults
 
-## After publishing: Linux user update steps
+After all artifacts are published and verified, update these files together:
 
-After a new Docker/Singularity release is published, Linux users should:
+- `nextflow.config`
+- `pipeline_paramers.yml`
+- `README.md`
+- `INSTALL.md`
+- `PARAMETERS.md`
+- `LINUX_UPDATE.md`
+- `singularity/README.md`
 
-1. Pull latest repository changes (`git pull`).
-2. Pull the updated Docker image (or clear singularity cache and rerun).
-3. Run pipeline with one profile only (`docker` or `singularity`).
-4. Verify `results_example/12_cluster_geojson/ROI_grown_mask.geojson`.
+Then run the repository test suite and a minimal Nextflow smoke test for each affected runtime path. Verify final spatial output under `results/15_cluster_geojson/<sample>/`.
 
-Use the complete command list in `LINUX_UPDATE.md`.
-
-For Singularity users, no manual pull command is needed.
-Nextflow auto-selects the local/ORAS-hosted `.sif` by architecture/device when using `-profile singularity`.
-
-```bash
-nextflow run main.nf \
-  -profile singularity \
-  -params-file pipeline_paramers.yml \
-  --start_point convert \
-  --end_point tissue_mask
-```
-
-## Changelog source
-
-Use Git history for full change details:
-
-```bash
-git log --oneline --decorate --graph
-```
+For user-side failures and remediation commands, see [Troubleshooting](TROUBLESHOOTING.md).

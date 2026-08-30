@@ -70,13 +70,13 @@ Do not use both profiles in the same run.
 Pull fresh image tag(s):
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:0.2.0
 docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-arm64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-arm64
 ```
 
-Use `cellphenotyper-runtime:2.7-gpu-amd64` on amd64. The arm64 GPU runtime remains a separately validated legacy/pending path.
+Use `cellphenotyper-runtime:2.7-gpu-amd64` on amd64. The published arm64 GPU runtime is a legacy path that must be validated against the target GPU compute capability.
 
 Run:
 
@@ -182,7 +182,7 @@ Add to run command:
 
 Final output:
 
-- `results_example/12_cluster_geojson/<sample_root>/<sample_root>_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/<sample_root>/<sample_root>_<variant>_grown_mask_smooth_class.geojson`
 
 Execution report:
 
@@ -203,7 +203,7 @@ nextflow run main.nf \
   --outdir_base results_example_lowmem
 ```
 
-## 7) Rerun only `10_cluster_mask` and `11_grown_tissue`
+## 7) Rerun only `12_cluster_mask` and `13_grown_tissue`
 
 ```bash
 nextflow run main.nf \

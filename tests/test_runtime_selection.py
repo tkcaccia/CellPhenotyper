@@ -23,6 +23,33 @@ def test_verified_gpu_runtime_is_the_default() -> None:
     assert "container_gpu_tag: 2.7-gpu-amd64" in PARAMETERS
 
 
+def test_published_cpu_runtimes_are_the_defaults() -> None:
+    assert "default_container_cpu_tag_amd64 = '2.2-amd64'" in CONFIG
+    assert "default_container_cpu_tag_arm64 = '0.2.0'" in CONFIG
+    assert "container_cpu_tag_amd64: 2.2-amd64" in PARAMETERS
+    assert "container_cpu_tag_arm64: 0.2.0" in PARAMETERS
+    assert "2.6-amd64" not in CONFIG
+    assert "2.6-arm64" not in CONFIG
+    assert "2.6-amd64" not in PARAMETERS
+    assert "2.6-arm64" not in PARAMETERS
+
+
+def test_gpu_release_refresh_uses_a_published_base_image() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "publish-runtime-release.yml").read_text()
+    dockerfile = (ROOT / "docker" / "Dockerfile.runtime-update.gpu").read_text()
+    assert "BASE_IMAGE=${{ env.IMAGE_REPO }}:2.2-gpu-amd64" in workflow
+    assert "ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64" in dockerfile
+    assert "2.3-gpu-amd64" not in workflow
+    assert "2.3-gpu-amd64" not in dockerfile
+
+
+def test_sif_publisher_requires_an_explicit_version() -> None:
+    publisher = (ROOT / "singularity" / "publish_sif_release_asset.sh").read_text()
+    assert 'VERSION=""' in publisher
+    assert "Missing required --version <semver>." in publisher
+    assert 'VERSION="2.3"' not in publisher
+
+
 def test_singularity_gpu_roles_use_the_verified_oci_runtime() -> None:
     assert "singularity_gpu_image_source   = 'docker'" in CONFIG
     assert "singularity_gpu_image_source: docker" in PARAMETERS
@@ -42,6 +69,17 @@ def test_auto_device_is_pipeline_wide_default() -> None:
     assert "def configured_gpu_runtime" in CONFIG
     assert "singularityBaseRunOptions = configured_gpu_runtime ? '--nv' : ''" in CONFIG
     assert "dockerGpuOptions = configured_gpu_runtime ? '--gpus all --shm-size=3g' : ''" in CONFIG
+
+
+def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
+    assert "kodama_landmarks: 1000" in PARAMETERS
+    assert "cluster_snn_k: 50" in PARAMETERS
+    assert "cluster_algorithm: leiden" in PARAMETERS
+    assert "cluster_landmark_cells: 10000" in PARAMETERS
+    assert "cluster_landmark_assign_k: 50" in PARAMETERS
+    assert "cluster_landmark_sample_strategy: knn_inverse_distance" in PARAMETERS
+    assert "cluster_landmark_density_power: 2.0" in PARAMETERS
+    assert "cluster_resolution: 0.3" in PARAMETERS
 
 
 def test_gpu_modules_consume_the_resolved_device() -> None:

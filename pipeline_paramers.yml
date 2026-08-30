@@ -25,7 +25,7 @@ start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
 # convert, grandqc, stardist, cell_consensus, tma, tissue_mask, cell_assignment, cytoplasm, gigatime,
-# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, cluster_geojson,
+# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, medsam_refine, cluster_geojson,
 # neoplastic_section, titan, pathofmpred
 
 # Runtime image selection
@@ -36,23 +36,23 @@ end_point: auto
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime
-container_cpu_tag: 2.6   # legacy generic fallback; use arch-specific tags below
-container_cpu_tag_amd64: 2.6-amd64
-container_cpu_tag_arm64: 2.6-arm64
+container_cpu_tag: 2.2-amd64   # legacy generic fallback; use arch-specific tags below
+container_cpu_tag_amd64: 2.2-amd64
+container_cpu_tag_arm64: 0.2.0
 container_gpu_tag: 2.7-gpu-amd64
 singularity_image_source: auto   # auto | oras | release | docker
 singularity_gpu_image_source: docker   # use the verified GPU OCI runtime through Singularity/Apptainer
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
-singularity_cpu_oras_tag_amd64: 2.6-sif-amd64
-singularity_cpu_oras_tag_arm64: 2.6-sif-arm64
-singularity_gpu_oras_tag_amd64: 2.6-sif-gpu-amd64
-singularity_gpu_oras_tag_arm64: 2.6-sif-gpu-arm64
+singularity_cpu_oras_tag_amd64: 2.2-sif-amd64
+singularity_cpu_oras_tag_arm64: 2.2-sif-arm64
+singularity_gpu_oras_tag_amd64: 2.2-sif-gpu-amd64
+singularity_gpu_oras_tag_arm64: 2.2-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
-singularity_release_tag: v2.6
-singularity_cpu_asset_amd64: cellphenotyper-2.6-amd64.sif
-singularity_cpu_asset_arm64: cellphenotyper-2.6-arm64.sif
-singularity_gpu_asset_amd64: cellphenotyper-2.6-gpu-amd64.sif
-singularity_gpu_asset_arm64: cellphenotyper-2.6-gpu-arm64.sif
+singularity_release_tag: v2.2
+singularity_cpu_asset_amd64: cellphenotyper-2.2-amd64.sif
+singularity_cpu_asset_arm64: cellphenotyper-2.2-arm64.sif
+singularity_gpu_asset_amd64: cellphenotyper-2.2-gpu-amd64.sif
+singularity_gpu_asset_arm64: cellphenotyper-2.2-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
 cpu_container_image: ""     # optional explicit CPU container path/URI
@@ -239,6 +239,7 @@ kodama_r_library_dir: /opt/micromamba/envs/kodama-r/lib/R/library
 kodama_embedding_mode: tile,inner_square
 kodama_dims_to_run: 20
 kodama_spark_top_features: 100
+kodama_landmarks: 1000
 kodama_n_cores: 4
 kodama_backend: cpu
 kodama_gpu_device: 0
@@ -246,8 +247,17 @@ kodama_gpu_device: 0
 # Clustering defaults (Louvain on KODAMA embedding)
 cluster_r_library_dir: /opt/micromamba/envs/stardist/lib/R/library
 cluster_kodama_dim: 20
-cluster_snn_k: 30
-cluster_resolution: auto
+cluster_snn_k: 50
+cluster_algorithm: leiden
+cluster_landmark_cells: 10000
+cluster_landmark_assign_k: 50
+cluster_landmark_sample_strategy: knn_inverse_distance
+cluster_landmark_density_knn_k: 50
+cluster_landmark_density_power: 2.0
+cluster_resolution: 0.3
+cluster_primary_variant: standard
+cluster_secondary_variant: none
+cluster_secondary_profile: fine
 
 # Cluster mask preview (overlay on crop_roi.tif)
 cluster_mask_compression: zlib

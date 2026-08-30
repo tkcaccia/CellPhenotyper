@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import tempfile
 
 import numpy as np
 
@@ -37,16 +38,29 @@ def install_local_titan_file_resolver(model_ref: str) -> Path | None:
 
     import huggingface_hub
     from transformers import PreTrainedTokenizerFast
-    from transformers.dynamic_module_utils import HF_MODULES_CACHE
+    from transformers import dynamic_module_utils
 
     # Transformers 4.57 does not copy nested relative imports when loading this
     # local remote-code repository. Stage the snapshot's Python modules only.
-    module_dir = Path(HF_MODULES_CACHE) / "transformers_modules" / model_dir.name
-    module_dir.mkdir(parents=True, exist_ok=True)
-    for package_dir in (Path(HF_MODULES_CACHE), module_dir.parent, module_dir):
-        (package_dir / "__init__.py").touch(exist_ok=True)
-    for source in model_dir.glob("*.py"):
-        shutil.copy2(source, module_dir / source.name)
+    def stage_remote_code(cache_root: Path) -> Path:
+        module_dir = cache_root / "transformers_modules" / model_dir.name
+        module_dir.mkdir(parents=True, exist_ok=True)
+        for package_dir in (cache_root, module_dir.parent, module_dir):
+            (package_dir / "__init__.py").touch(exist_ok=True)
+        for source in model_dir.glob("*.py"):
+            shutil.copy2(source, module_dir / source.name)
+        return module_dir
+
+    cache_root = Path(dynamic_module_utils.HF_MODULES_CACHE)
+    try:
+        stage_remote_code(cache_root)
+    except OSError:
+        fallback_root = Path(os.environ.get(
+            "CELLPHENOTYPER_HF_MODULES_CACHE",
+            str(Path(tempfile.gettempdir()) / "cellphenotyper_hf_modules"),
+        )).resolve()
+        dynamic_module_utils.HF_MODULES_CACHE = str(fallback_root)
+        stage_remote_code(fallback_root)
 
     original_download = huggingface_hub.hf_hub_download
     original_tokenizer_load = PreTrainedTokenizerFast.from_pretrained.__func__

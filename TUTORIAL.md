@@ -78,8 +78,8 @@ nextflow run main.nf \
 
 Final results:
 
-- `results_example/12_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
-- `results_example/12_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/ROI_A/ROI_A_standard_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/ROI_B/ROI_B_standard_grown_mask_smooth_class.geojson`
 
 ## Lima users: run location matters
 
@@ -128,13 +128,15 @@ limactl copy default:/home/<lima-user>/CellPhenotyper/results_example \
 ## Endpoint
 
 - Main output base folder: `outdir_base` in `pipeline_paramers.yml` (example: `results_full`)
-- Final segmentation endpoint: `results_full/12_cluster_geojson/<sample_root>/<sample_root>_grown_mask_smooth_class.geojson`
+- Final segmentation endpoint: `results_full/15_cluster_geojson/<sample_root>/<sample_root>_<variant>_grown_mask_smooth_class.geojson`
 
 ## Stage window (where to start/stop)
 
 Use `start_point` and `end_point` in `pipeline_paramers.yml` to select the execution window.
 Allowed stages:
-`convert`, `stardist`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`.
+`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `medsam_refine`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
+
+Restarting with `--start_point medsam_refine` reads the published StarDist crop/shift from stage 3 and the clustering, cluster-mask, and grown-mask artifacts from stages 11-13, then reruns MedSAM. Restarting with `--start_point cluster_geojson` reads the published stage 14 refined mask and does not rerun MedSAM.
 
 Example:
 
@@ -199,8 +201,8 @@ nextflow run main.nf \
 
 Expected output:
 
-- `results_full/03_tissue_mask/ROI_A/ROI_A_tissue_mask.tif`
-- `results_full/03_tissue_mask/ROI_B/ROI_B_tissue_mask.tif`
+- `results_full/04_tissue_mask/ROI_A/ROI_A_tissue_mask.tif`
+- `results_full/04_tissue_mask/ROI_B/ROI_B_tissue_mask.tif`
 
 ## 5) GPU execution
 

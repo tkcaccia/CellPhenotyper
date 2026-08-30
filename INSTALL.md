@@ -173,7 +173,7 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. The current validated GPU amd64 runtime is `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`; the `v2.3` CPU amd64 image remains the legacy CPU reference. Local SIFs can be built from either verified Docker tag.
+Use published runtime images. The current validated GPU amd64 runtime is `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference. Local SIFs can be built from either verified Docker tag.
 The current amd64 SIF builds are larger than ordinary GitHub release asset limits, so prefer local `apptainer pull` / `singularity pull` from the verified Docker tags.
 
 Container rule:
@@ -184,15 +184,17 @@ Container rule:
 
 Reference OCI tags:
 
-- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
+- CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
 
-Reference Singularity filenames built from those tags:
+Published GHCR/ORAS SIF references:
 
-- `cellphenotyper-2.3-amd64.sif`
-- `cellphenotyper-2.3-gpu-amd64.sif`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
 
-Treat `arm64`, multi-arch convenience tags, and GHCR `oras://` SIF references as pending until they are explicitly published and validated.
+The arm64 GPU SIF is a legacy artifact and must be validated against the target GPU compute capability; GB10-class (`sm_121`) systems require a compatible rebuilt image.
 
 Recommended validation after building a custom GPU image:
 
@@ -212,7 +214,7 @@ PY
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
 Default behavior is `runtime_image_mode: auto`, `singularity_image_source: auto` for CPU roles, and `singularity_gpu_image_source: docker` for GPU roles.
-For a stable `v2.3` run today, prefer a manually specified local `.sif` created from the verified Docker tag.
+For a stable run, prefer a manually specified local `.sif` created from one of the verified Docker tags above.
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
@@ -224,13 +226,13 @@ Default automatic runtime settings in `pipeline_paramers.yml`:
 To force a specific manual image, set:
 
 - `runtime_image_mode: manual`
-- `singularity_image: /path/to/cellphenotyper-2.3-amd64.sif` (example)
+- `singularity_image: /path/to/cellphenotyper-2.2-amd64.sif` (example)
 
 Build the SIF locally from GHCR:
 
 ```bash
-apptainer pull -F /path/to/cellphenotyper-2.3-amd64.sif \
-  docker://ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+apptainer pull -F /path/to/cellphenotyper-2.2-amd64.sif \
+  docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 ```
 
 To force docker:// fallback instead of ORAS/release assets in auto mode:
@@ -250,13 +252,13 @@ export SINGULARITY_DOCKER_PASSWORD="<github_token_with_read_packages>"
 Pull images with Docker:
 
 ```bash
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
 ```
 
 Use:
-- `2.3-amd64` on Linux x86_64/amd64
-- `2.3-gpu-amd64` on Linux amd64 with NVIDIA
+- `2.2-amd64` on Linux x86_64/amd64
+- `cellphenotyper-runtime:2.7-gpu-amd64` on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -265,7 +267,7 @@ Use this only when you need to publish a new container version.
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="2.3"
+export TAG="<new-version>"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -277,7 +279,7 @@ GPU publish:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="2.3-gpu-amd64"
+export TAG="<new-version>-gpu-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 docker build -f docker/Dockerfile.full.gpu -t "${IMAGE}" .
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin

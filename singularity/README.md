@@ -51,12 +51,18 @@ gh auth status
 
 ## Standard Release Workflow
 
+Choose a new release version first:
+
+```bash
+export VERSION=X.Y.Z
+```
+
 ### 1) Build/publish arm64 CPU asset (Mac M1/M2 or Linux arm64)
 
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device cpu \
   --upload \
   --upload-mode auto
@@ -66,7 +72,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device cpu \
   --tmpdir /var/tmp/apptainer/tmp \
   --cachedir /var/tmp/apptainer/cache \
@@ -80,7 +86,7 @@ If `/tmp` is small tmpfs in Lima, force temp/cache explicitly:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device cpu \
   --upload \
   --upload-mode auto
@@ -91,7 +97,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device gpu \
   --upload \
   --upload-mode auto
@@ -102,7 +108,7 @@ cd /path/to/CellPhenotyper
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device gpu \
   --upload \
   --upload-mode auto
@@ -117,24 +123,23 @@ Notes for arm64 GPU builds:
 ## Verify Published SIFs
 
 ```bash
-apptainer pull -F /tmp/cellphenotyper-2.3-amd64.sif \
-  oras://ghcr.io/tkcaccia/cellphenotyper:2.3-sif-amd64
+apptainer pull -F /tmp/cellphenotyper-2.2-amd64.sif \
+  oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64
 ```
 
 You can still inspect mirrored GitHub Release assets with:
 
 ```bash
-gh release view v2.3 \
+gh release list \
   --repo tkcaccia/CellPhenotyper \
-  --json assets \
-  --jq '.assets[].name'
+  --limit 10
 ```
 
 ## If You Need Docker-Source Build Instead of `.def`
 
 ```bash
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --source docker \
   --device cpu \
   --upload \
@@ -180,7 +185,7 @@ Then rerun:
 ```bash
 cd /path/to/CellPhenotyper
 ./singularity/publish_sif_release_asset.sh \
-  --version 2.3 \
+  --version "${VERSION}" \
   --device cpu \
   --outdir /var/tmp/apptainer/out \
   --upload
@@ -189,7 +194,7 @@ cd /path/to/CellPhenotyper
 If `/Users/...` mount is read-only in Lima, always write SIF to `/var/tmp/apptainer/out` and copy back to macOS:
 
 ```bash
-limactl copy default:/var/tmp/apptainer/out/cellphenotyper-2.3-arm64.sif \
+limactl copy default:/var/tmp/apptainer/out/cellphenotyper-${VERSION}-arm64.sif \
   /Users/<your-user>/Documents/CellPhenotyper/
 ```
 

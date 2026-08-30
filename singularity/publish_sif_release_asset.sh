@@ -9,7 +9,7 @@ Usage:
   singularity/publish_sif_release_asset.sh [options]
 
 Options:
-  --version <semver>             Version string used in asset name (default: 2.3)
+  --version <semver>             Version string used in asset name (required)
   --device <cpu|gpu>             Runtime target (default: cpu)
   --source <def|docker>          Build from definition file or pull from docker:// (default: def)
   --tmpdir <path>                Temp dir for singularity/apptainer build/pull
@@ -30,18 +30,18 @@ Options:
   --force                         Overwrite existing output file
   -h, --help                      Show this message
 
-  # Build an arm64 SIF from an arm64 docker tag while running on another host arch
-  singularity/publish_sif_release_asset.sh --source docker --device gpu --version 2.3 --docker-tag 2.3-gpu-arm64 --asset-arch arm64 --upload --upload-mode oras
+  # Build an arm64 SIF from an arm64 Docker tag while running on another host arch
+  singularity/publish_sif_release_asset.sh --source docker --device gpu --version "${VERSION}" --docker-tag "${VERSION}-gpu-arm64" --asset-arch arm64 --upload --upload-mode oras
 
 Examples:
   # Build arm64 CPU SIF on Apple Silicon/Linux ARM and upload it
-  singularity/publish_sif_release_asset.sh --version 2.3 --device cpu --upload --upload-mode auto
+  singularity/publish_sif_release_asset.sh --version "${VERSION}" --device cpu --upload --upload-mode auto
 
   # Build amd64 CPU SIF on Linux amd64 and upload it
-  singularity/publish_sif_release_asset.sh --version 2.3 --device cpu --upload --upload-mode auto
+  singularity/publish_sif_release_asset.sh --version "${VERSION}" --device cpu --upload --upload-mode auto
 
   # Build from docker:// image instead of definition file
-  singularity/publish_sif_release_asset.sh --source docker --device cpu --version 2.3 --upload --upload-mode auto
+  singularity/publish_sif_release_asset.sh --source docker --device cpu --version "${VERSION}" --upload --upload-mode auto
 USAGE
 }
 
@@ -61,7 +61,7 @@ normalize_arch() {
   esac
 }
 
-VERSION="2.3"
+VERSION=""
 DEVICE="cpu"
 SOURCE="def"
 OUTDIR="."
@@ -170,6 +170,17 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$VERSION" ]]; then
+  echo "Missing required --version <semver>." >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+  echo "Invalid --version '$VERSION'. Use MAJOR.MINOR or MAJOR.MINOR.PATCH." >&2
+  exit 1
+fi
 
 if [[ "$DEVICE" != "cpu" && "$DEVICE" != "gpu" ]]; then
   echo "Invalid --device '$DEVICE'. Use cpu or gpu." >&2

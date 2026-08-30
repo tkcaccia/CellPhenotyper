@@ -27,18 +27,18 @@ workflow POST_CLUSTER_PATHOFM {
         def key = (rawValue ?: fallback).toString().trim().toLowerCase().replace('-', '_')
         stageAliases.getOrDefault(key, key)
     }
-    def startIndex = stageOrder.indexOf(normalizeStage(params.start_point, 'cluster_geojson'))
-    def endIndex = stageOrder.indexOf(normalizeStage(params.end_point, 'pathofmpred'))
+    def startIndex = stageOrder.indexOf(normalizeStage.call(params.start_point, 'cluster_geojson'))
+    def endIndex = stageOrder.indexOf(normalizeStage.call(params.end_point, 'pathofmpred'))
     if (startIndex < 0) startIndex = 0
     if (endIndex < 0) endIndex = stageOrder.size() - 1
     def inWindow = { name ->
         def index = stageOrder.indexOf(name)
         index >= startIndex && index <= endIndex
     }
-    def runNeoplasticSection = inWindow('neoplastic_section')
-    def runTitan = inWindow('titan')
-    def runPathoFMPred = inWindow('pathofmpred')
-    def runClusterGeoJSON = inWindow('cluster_geojson')
+    def runNeoplasticSection = inWindow.call('neoplastic_section')
+    def runTitan = inWindow.call('titan')
+    def runPathoFMPred = inWindow.call('pathofmpred')
+    def runClusterGeoJSON = inWindow.call('cluster_geojson')
 
     def clusterVariants = [(params.cluster_primary_variant ?: 'standard').toString().trim() ?: 'standard']
     def secondaryVariant = (params.cluster_secondary_variant ?: '').toString().trim()
@@ -54,7 +54,7 @@ workflow POST_CLUSTER_PATHOFM {
 
     if (runNeoplasticSection) {
         if (!runClusterGeoJSON) {
-            finalClusterGeoJSONCh = image_input_ch.flatMap { sample_id, _ ->
+            finalClusterGeoJSONCh = image_input_ch.flatMap { sample_id, _image_input ->
                 clusterVariants.collect { cluster_variant ->
                     def sample_key = "${sample_id}::${cluster_variant}"
                     tuple(
@@ -84,25 +84,25 @@ workflow POST_CLUSTER_PATHOFM {
     def titanEmbeddingCh = Channel.empty()
     if (runTitan) {
         if (!runNeoplasticSection) {
-            selectedImageCh = image_input_ch.flatMap { sample_id, _ ->
+            selectedImageCh = image_input_ch.flatMap { sample_id, _image_input ->
                 clusterVariants.collect { cluster_variant ->
                     def sample_key = "${sample_id}::${cluster_variant}"
                     tuple(sample_key, sample_id, cluster_variant, file("${params.outdir_base}/16_neoplastic_section/${sample_id}/neoplastic_${sample_id}_${cluster_variant}/selected_section.ome.tif", checkIfExists: true))
                 }
             }
-            selectedMaskCh = image_input_ch.flatMap { sample_id, _ ->
+            selectedMaskCh = image_input_ch.flatMap { sample_id, _image_input ->
                 clusterVariants.collect { cluster_variant ->
                     def sample_key = "${sample_id}::${cluster_variant}"
                     tuple(sample_key, sample_id, cluster_variant, file("${params.outdir_base}/16_neoplastic_section/${sample_id}/neoplastic_${sample_id}_${cluster_variant}/selected_section_mask.tif", checkIfExists: true))
                 }
             }
-            selectedShiftCh = image_input_ch.flatMap { sample_id, _ ->
+            selectedShiftCh = image_input_ch.flatMap { sample_id, _image_input ->
                 clusterVariants.collect { cluster_variant ->
                     def sample_key = "${sample_id}::${cluster_variant}"
                     tuple(sample_key, sample_id, cluster_variant, file("${params.outdir_base}/16_neoplastic_section/${sample_id}/neoplastic_${sample_id}_${cluster_variant}/selected_section_shift.json", checkIfExists: true))
                 }
             }
-            selectedSummaryCh = image_input_ch.flatMap { sample_id, _ ->
+            selectedSummaryCh = image_input_ch.flatMap { sample_id, _image_input ->
                 clusterVariants.collect { cluster_variant ->
                     def sample_key = "${sample_id}::${cluster_variant}"
                     tuple(sample_key, sample_id, cluster_variant, file("${params.outdir_base}/16_neoplastic_section/${sample_id}/neoplastic_${sample_id}_${cluster_variant}/selected_section_summary.json", checkIfExists: true))
@@ -122,7 +122,7 @@ workflow POST_CLUSTER_PATHOFM {
         EXTRACT_TITAN_SECTION_EMBEDDING(titanInputCh)
         titanEmbeddingCh = EXTRACT_TITAN_SECTION_EMBEDDING.out.embedding_csv
     } else if (runPathoFMPred) {
-        titanEmbeddingCh = image_input_ch.flatMap { sample_id, _ ->
+        titanEmbeddingCh = image_input_ch.flatMap { sample_id, _image_input ->
             clusterVariants.collect { cluster_variant ->
                 def sample_key = "${sample_id}::${cluster_variant}"
                 tuple(sample_key, sample_id, cluster_variant, file("${params.outdir_base}/17_titan/${sample_id}/titan_${sample_id}_${cluster_variant}/titan_embedding.csv", checkIfExists: true))

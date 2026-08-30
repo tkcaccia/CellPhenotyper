@@ -37,9 +37,9 @@ nextflow run main.nf -profile singularity \
 | `runtime_image_mode` | `auto` | `auto` uses architecture/device-aware image selection; `manual` uses `singularity_image`/`docker_image`. |
 | `container_repo` | `ghcr.io/tkcaccia/cellphenotyper` | Base GHCR repository used by auto image selection. |
 | `container_gpu_repo` | `ghcr.io/tkcaccia/cellphenotyper-runtime` | GHCR repository used for the current amd64 GPU runtime. |
-| `container_cpu_tag` | `2.6` | Legacy generic fallback; multi-arch CPU manifest tag. Architecture-specific CPU tags below remain authoritative. |
-| `container_cpu_tag_amd64` | `2.6-amd64` | CPU tag for amd64 hosts. |
-| `container_cpu_tag_arm64` | `2.6-arm64` | CPU tag for arm64 hosts. |
+| `container_cpu_tag` | `2.2-amd64` | Legacy generic fallback. Architecture-specific CPU tags below remain authoritative. |
+| `container_cpu_tag_amd64` | `2.2-amd64` | Published CPU tag for amd64 hosts. |
+| `container_cpu_tag_arm64` | `0.2.0` | Published CPU tag for arm64 hosts. |
 | `container_gpu_tag` | `2.7-gpu-amd64` | Validated amd64 GPU tag used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` tries local `.sif`, then GHCR ORAS SIF tags, then legacy release assets, then `docker://` fallback. Valid values: `auto`, `oras`, `release`, `docker`. |
 | `singularity_gpu_image_source` | `docker` | GPU-specific Singularity/Apptainer source. The verified `2.7-gpu-amd64` runtime is pulled from its Docker OCI image by default. |
@@ -85,7 +85,7 @@ GPU run notes:
 - On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v2.2` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
-`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
+`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `medsam_refine`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
 
 ## Input Resolution
 
@@ -283,10 +283,10 @@ MedSAM behavior:
 - MedSAM refinement runs per cluster label. For large WSI crops, each cluster border is split into overlapping tiles controlled by `medsam_cluster_tile_size` and `medsam_cluster_tile_overlap`, so a tile may legitimately contain only one cluster.
 - Large masks use downsampled morphology for protected-core and editable-band construction, and full-resolution work is limited to the cluster-border tile passed to MedSAM. The default `medsam_device=auto` follows the pipeline-wide resolved compute device; forcing `medsam_device=cuda` still requires CUDA.
 
-Dual clustering behavior:
+Optional dual clustering behavior:
 
 - `cluster_primary_variant` defaults to `standard` and preserves the existing clustering choice.
-- `cluster_secondary_variant` defaults to `fine` and runs a second clustering branch with slightly higher cluster granularity.
+- `cluster_secondary_variant` defaults to `none`. Set it to `fine` to run a second clustering branch with slightly higher cluster granularity.
 - `cluster_secondary_profile=fine` tells `bin/Rcode_Clustering.R` to keep the same KODAMA embedding input but prefer a nearby higher-cluster solution when the score remains close to the standard branch.
 - `cluster_fine_resolution_multiplier` is used when `cluster_resolution` is fixed instead of `auto`.
 - `cluster_fine_score_margin` controls how far the fine branch is allowed to deviate from the best standard auto-clustering score.
@@ -299,8 +299,8 @@ Additional automatic outputs:
 - `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_mean_intensity.csv` and `..._cyto_gigatime_mean_intensity.csv` contain per-object mean marker intensities.
 - `05_gigatime/<sample>/quantification_<sample>/<sample>_nuclei_gigatime_intensity_stats.csv` and `..._cyto_gigatime_intensity_stats.csv` also include per-marker sums and maxima.
 - If an input ROI GeoJSON was provided, the pipeline rasterizes the crop-aligned ROI into a labeled mask at `06_roi/<sample>/<sample>_input_roi_mask.tif`, writes a preview overlay at `06_roi/<sample>/<sample>_input_roi_mask_preview.png`, and records the value-to-label mapping at `06_roi/<sample>/<sample>_input_roi_mask_labels.json`.
-- `11_clustering/<sample>/` now contains both `standard` and `fine` clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG.
-- `14_medsam_refine_tissue/<sample>/` now contains the variant-specific KODAMA membership PNG copied next to the MedSAM-refined mask outputs for both clustering branches as `<sample>_<variant>_medsam_kodama_membership.png`.
+- `11_clustering/<sample>/` contains clustering CSVs, summaries, and KODAMA membership plots as both PDF and PNG for every configured variant.
+- `14_medsam_refine_tissue/<sample>/` contains the variant-specific KODAMA membership PNG copied next to each MedSAM-refined mask as `<sample>_<variant>_medsam_kodama_membership.png`.
 # Multi-Model Cell Identification
 
 `cell_consensus_enable` enables the GPU-only post-StarDist ensemble. On a resolved CPU run the pipeline logs a warning and retains StarDist outputs rather than launching unavailable GPU models. HoVer-Net MoNuSAC and CellViT++ run serially to cap peak VRAM, then `cell_consensus_min_support` controls how many methods must identify a cell (default `2`). `cell_consensus_match_radius_um` is the maximum centroid distance in physical units (default `4.0` microns); it is converted to pixels from `shift.json`. `cell_consensus_geometry_priority` deterministically selects the preferred available contour for each accepted component. Because detector contours can overlap completely, the raster writer reserves one unique centroid-near seed pixel per canonical cell and verifies that every ID in `objects.csv` is present in `labels.tif` before publishing the stage.

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64
+ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

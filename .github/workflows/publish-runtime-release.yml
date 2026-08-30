@@ -22,7 +22,6 @@ on:
 env:
   IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper
   UPDATE_IMAGE_REPO: ghcr.io/tkcaccia/cellphenotyper-runtime
-  TF_WHEEL_NAME: tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 
 jobs:
   release_version:
@@ -99,8 +98,6 @@ jobs:
           push: true
           provenance: false
           tags: ${{ env.IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-${{ matrix.tag }}
-          build-args: |
-            STARDIST_TF_WHEEL_URL=https://github.com/${{ github.repository }}/releases/download/v${{ needs.release_version.outputs.version }}/${{ env.TF_WHEEL_NAME }}
 
   docker-manifests:
     name: Docker manifest tags
@@ -241,7 +238,7 @@ jobs:
           cache-from: type=gha,scope=gpu-amd64-update
           cache-to: type=gha,mode=max,scope=gpu-amd64-update
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.3-gpu-amd64
+            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.2-gpu-amd64
           tags: ${{ env.UPDATE_IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
 
       - name: Verify published runtime
@@ -257,5 +254,6 @@ jobs:
             grep -q "if ivalue > block" /opt/cellphenotyper/bin/run_stardist_roi_segmentation.py
             grep -q "03d_cell_consensus" /opt/cellphenotyper/UPSTREAM_DIFFS.md
             cd /opt/cellphenotyper
-            /opt/micromamba/envs/stardist/bin/python -m unittest discover -s tests -v
+            /opt/micromamba/envs/stardist/bin/python -m pip install --disable-pip-version-check --no-cache-dir pytest
+            /opt/micromamba/envs/stardist/bin/python -m pytest -q tests
           '

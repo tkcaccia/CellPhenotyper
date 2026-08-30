@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -69,6 +70,38 @@ class TitanEmbeddingContractTest(unittest.TestCase):
             missing = Path(directory) / "missing-titan-snapshot"
             with self.assertRaisesRegex(FileNotFoundError, "not accessible"):
                 titan.install_local_titan_file_resolver(str(missing))
+
+    def test_local_resolver_falls_back_when_transformers_cache_is_read_only(self):
+        try:
+            from transformers import dynamic_module_utils
+        except ImportError:
+            self.skipTest("transformers is not installed locally")
+        original_cache = dynamic_module_utils.HF_MODULES_CACHE
+        original_fallback = os.environ.get("CELLPHENOTYPER_HF_MODULES_CACHE")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                snapshot = root / "snapshot"
+                snapshot.mkdir()
+                (snapshot / "configuration_titan.py").write_text("# test\n")
+                blocker = root / "not-a-directory"
+                blocker.write_text("blocked")
+                fallback = root / "fallback"
+                dynamic_module_utils.HF_MODULES_CACHE = str(blocker)
+                os.environ["CELLPHENOTYPER_HF_MODULES_CACHE"] = str(fallback)
+                self.assertEqual(
+                    titan.install_local_titan_file_resolver(str(snapshot)),
+                    snapshot.resolve(),
+                )
+                self.assertTrue(
+                    (fallback / "transformers_modules" / "snapshot" / "configuration_titan.py").is_file()
+                )
+        finally:
+            dynamic_module_utils.HF_MODULES_CACHE = original_cache
+            if original_fallback is None:
+                os.environ.pop("CELLPHENOTYPER_HF_MODULES_CACHE", None)
+            else:
+                os.environ["CELLPHENOTYPER_HF_MODULES_CACHE"] = original_fallback
 
     def test_singularity_binds_absolute_titan_model(self):
         root = Path(__file__).parents[1]

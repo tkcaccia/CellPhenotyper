@@ -33,6 +33,7 @@ Data/*.btf
 hf_datasets/
 local_copies/
 remote_previews/
+/Visium_HD_11mm_Human_Breast_Cancer_*/
 
 # manuscript working material; retain only the current revised artifact
 Manuscript/*
@@ -47,9 +48,6 @@ singularity-cellphenotyper-*.sif
 
 # runtime outputs
 *.html
-*.txt
-!docker/requirements.grandqc.base.txt
-!docker/requirements.grandqc.infer.txt
 
 # local TensorFlow build artifacts used for maintainer-only GPU image builds
 docker/wheels/

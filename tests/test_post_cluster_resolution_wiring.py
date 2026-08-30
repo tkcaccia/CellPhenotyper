@@ -8,7 +8,9 @@ def test_growth_and_medsam_receive_stardist_resolution_sidecar() -> None:
     workflow = (ROOT / "main.nf").read_text(encoding="utf-8")
     assert "def resolution_for_growth_variant_ch = Channel.empty()" in workflow
     assert "resolution_for_growth_variant_ch = shift_json_ch" in workflow
-    assert workflow.count(".join(resolution_for_growth_variant_ch)") == 2
+    spatial = (ROOT / "subworkflows" / "post_grow_spatial_outputs.nf").read_text(encoding="utf-8")
+    assert workflow.count(".join(resolution_for_growth_variant_ch)") == 1
+    assert spatial.count(".join(resolution_for_growth_variant_ch)") == 1
 
     grow = (ROOT / "modules/grow_to_tissue.nf").read_text(encoding="utf-8")
     medsam = (ROOT / "modules/refine_grown_tissue_medsam.nf").read_text(encoding="utf-8")

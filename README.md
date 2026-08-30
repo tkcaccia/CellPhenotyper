@@ -1,6 +1,6 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs GrandQC artifact QC, StarDist segmentation, optional tissue microarray (TMA) spot detection with cell-to-spot assignment, GigaTIME virtual mIF inference, marker-intensity quantification on nuclei and cytoplasm masks, UNI-2 embeddings, KODAMA-based clustering, and final tissue-cluster GeoJSON export.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs GrandQC artifact QC; StarDist, HoVer-Net and CellViT++ consensus segmentation; optional tissue microarray (TMA) analysis; GigaTIME virtual mIF inference; marker quantification; paired UNI-2 embeddings; KODAMA and Leiden clustering; MedSAM border refinement; and final tissue-cluster GeoJSON export.
 
 Main command:
 
@@ -50,26 +50,25 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 - Docker profile uses GHCR images.
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
 - Singularity/Apptainer GPU roles use `singularity_gpu_image_source: docker` by default, selecting the verified `2.7-gpu-amd64` OCI runtime instead of legacy GPU SIF metadata.
-- In GPU mode, only GPU-capable steps (StarDist, UNI-2 embeddings) use the GPU container; other steps stay on the CPU container.
+- In GPU mode, GPU-capable stages including GrandQC, StarDist, HoVer-Net, CellViT++, GigaTIME, UNI-2, MedSAM and TITAN use the GPU runtime; other stages use the CPU runtime.
 - On arm64 GPU runs, missing GPU assets fall back to CPU containers (no amd64 GPU image fallback).
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
 
 Currently verified and published:
 
 - Docker GPU amd64 (`v2.7`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
-- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-amd64`
-- Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`
-- Verified local/cluster SIF filenames:
-  - `cellphenotyper-2.3-amd64.sif`
-  - `cellphenotyper-2.3-gpu-amd64.sif`
+- Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
+- Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
+- Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
+- Published GHCR/ORAS SIF artifacts: `2.2-sif-amd64`, `2.2-sif-arm64`, `2.2-sif-gpu-amd64`, and `2.2-sif-gpu-arm64` under `ghcr.io/tkcaccia/cellphenotyper`.
 
-`arm64`, multi-arch convenience tags, and GHCR `oras://` SIF publication should be treated as pending until they are explicitly published and inspected.
+The legacy arm64 GPU artifact is published but is not suitable for every GPU generation. In particular, GB10-class (`sm_121`) systems require a rebuilt arm64 GPU SIF with a compatible CUDA/PyTorch stack.
 The currently built amd64 SIF files are too large for ordinary GitHub release assets, so the stable amd64 Singularity workflow is still local `apptainer pull` / `singularity pull` from the verified Docker tags.
 
 Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
 ```
 
@@ -162,14 +161,14 @@ Outputs are written per sample to:
 
 The new `*_gigatime_quantification.csv` file is a wide per-object table in the same spirit as mcMicro-style single-cell quantification outputs: one row per label with area, centroid, bounding box, and per-marker mean/sum/max columns. The mean-intensity CSV remains convenient for lightweight downstream modeling, while the stats CSV preserves the explicit summary fields.
 
-## Dual clustering outputs
+## Optional dual clustering outputs
 
-After KODAMA, CellPhenotyper now produces two clustering variants for every sample:
+After KODAMA, CellPhenotyper produces the `standard` clustering variant by default. Set `--cluster_secondary_variant fine` to add a second branch:
 
 - `standard`: the current/default clustering behavior
 - `fine`: a slightly higher-resolution clustering that prefers a few more clusters when the KODAMA clustering score stays close to the standard solution
 
-Downstream stages run independently for both variants:
+Downstream stages run independently for every configured variant:
 
 - `11_clustering`
 - `12_cluster_mask`
@@ -283,14 +282,14 @@ export SIF_DIR=$BASE/singularity
 export KERAS_HOME=$BASE/keras
 export HF_HOME=$BASE/hf
 export HF_HUB_CACHE=$HF_HOME/hub
-export SIF=$SIF_DIR/cellphenotyper-2.3-amd64.sif
+export SIF=$SIF_DIR/cellphenotyper-2.2-amd64.sif
 mkdir -p "$SIF_DIR" "$KERAS_HOME/models/StarDist2D" "$HF_HUB_CACHE"
 
 # 1) token file must define HF_TOKEN=...
 source /scratch/<project>/tokens.env
 
 # 2) pull prebuilt SIF once (on a node with internet)
-apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.3-amd64
+apptainer pull -F "$SIF" docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 
 # 3) predownload StarDist model and normalize to expected local folder
 curl -L -o "$KERAS_HOME/models/StarDist2D/python_2D_versatile_he.zip" \
@@ -361,7 +360,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.3-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper:2.3-gpu-amd64`.
+- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
@@ -376,7 +375,7 @@ nextflow run main.nf \
   --enable_gpu_on_arm64 true
 ```
 
-Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). Older `v2.3` arm64 GPU assets may expose CUDA but still fail at runtime with `no kernel image is available`.
+Note: on GB10-class arm64 GPUs (`sm_121`), use a locally rebuilt arm64 GPU SIF from `singularity/cellphenotyper_full_gpu.def` (nightly `cu130` PyTorch). The legacy `2.2-gpu-arm64` asset may expose CUDA but still fail at runtime with `no kernel image is available`.
 
 Rerun only `cluster_mask` and `grow_tissue`:
 
@@ -436,8 +435,8 @@ tail -n 50 -f .nextflow.log
 
 Final output:
 
-- `results_example/15_cluster_geojson/ROI_A/ROI_A_grown_mask_smooth_class.geojson`
-- `results_example/15_cluster_geojson/ROI_B/ROI_B_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/ROI_A/ROI_A_standard_grown_mask_smooth_class.geojson`
+- `results_example/15_cluster_geojson/ROI_B/ROI_B_standard_grown_mask_smooth_class.geojson`
 - `results_example/05_gigatime/ROI_A/gigatime_ROI_A_ometiff/gigatime_probs.ome.tif`
 - `results_example/05_gigatime/ROI_B/gigatime_ROI_B_ometiff/gigatime_probs.ome.tif`
 - `results_example/06_roi/ROI_A/ROI_A_input_roi_mask.tif` if `ROI_A.geojson` was supplied
@@ -474,7 +473,7 @@ Minimal Docker publish example:
 ```bash
 export GHCR_USER="tkcaccia"
 source GHCRtoken.env
-export TAG="2.3-amd64"
+export TAG="<new-version>-amd64"
 export IMAGE="ghcr.io/${GHCR_USER}/cellphenotyper:${TAG}"
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
