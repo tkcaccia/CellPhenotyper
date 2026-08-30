@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -55,12 +56,21 @@ class CellVitBatchTest(unittest.TestCase):
     def test_runtime_environment_keeps_ray_and_caches_in_task_output(self):
         with tempfile.TemporaryDirectory() as directory:
             outdir = Path(directory) / "output"
-            env, runtime_dir = cellvit.prepare_runtime_env(outdir)
-            self.assertEqual(Path(env["RAY_TMPDIR"]), runtime_dir / "tmp")
-            self.assertEqual(Path(env["TMPDIR"]), runtime_dir / "tmp")
-            self.assertEqual(Path(env["XDG_CACHE_HOME"]), runtime_dir / "cache")
-            self.assertEqual(Path(env["MPLCONFIGDIR"]), runtime_dir / "matplotlib")
-            self.assertTrue((runtime_dir / "tmp").is_dir())
+            env, runtime_dir, ray_temp_dir = cellvit.prepare_runtime_env(outdir)
+            try:
+                self.assertEqual(Path(env["RAY_TMPDIR"]), ray_temp_dir)
+                self.assertEqual(Path(env["TMPDIR"]), ray_temp_dir)
+                self.assertEqual(Path(env["XDG_CACHE_HOME"]), runtime_dir / "cache")
+                self.assertEqual(Path(env["MPLCONFIGDIR"]), runtime_dir / "matplotlib")
+                self.assertEqual(ray_temp_dir.parent, Path("/tmp"))
+                cellvit.validate_ray_temp_dir(ray_temp_dir)
+            finally:
+                shutil.rmtree(ray_temp_dir, ignore_errors=True)
+
+    def test_long_ray_temp_path_is_rejected_before_inference(self):
+        long_path = Path("/tmp") / ("x" * 90)
+        with self.assertRaisesRegex(RuntimeError, "AF_UNIX"):
+            cellvit.validate_ray_temp_dir(long_path)
 
     def test_normalization_preserves_id_and_emits_name(self):
         payload = {

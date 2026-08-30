@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -18,6 +19,8 @@ PANNUKE_TYPE_MAP = {
     "4": "dead",
     "5": "epithelial",
 }
+
+RAY_UNIX_SOCKET_MAX_BYTES = 107
 
 
 def source_mpp(shift_path: Path, fallback: float) -> float:
@@ -66,16 +69,37 @@ def require_readable_file(path: Path, label: str) -> None:
         raise PermissionError(f"{label} is not readable by uid {os.geteuid()}: {path}")
 
 
-def prepare_runtime_env(outdir: Path) -> tuple[dict[str, str], Path]:
+def validate_ray_temp_dir(temp_dir: Path) -> None:
+    representative_socket = (
+        temp_dir / "ray" / "session_2000-01-01_00-00-00_000000_0000000"
+        / "sockets" / "plasma_store"
+    )
+    socket_bytes = len(os.fsencode(str(representative_socket)))
+    if socket_bytes > RAY_UNIX_SOCKET_MAX_BYTES:
+        raise RuntimeError(
+            f"Ray temporary path is too long for an AF_UNIX socket ({socket_bytes} bytes): "
+            f"{temp_dir}"
+        )
+
+
+def prepare_runtime_env(outdir: Path) -> tuple[dict[str, str], Path, Path]:
     runtime_dir = outdir / "runtime"
-    for child in (runtime_dir / "tmp", runtime_dir / "cache", runtime_dir / "matplotlib"):
+    for child in (runtime_dir / "cache", runtime_dir / "matplotlib"):
         child.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(os.environ.get("CELLVIT_TMP_ROOT", "/tmp"))
+    temp_root.mkdir(parents=True, exist_ok=True)
+    ray_temp_dir = Path(tempfile.mkdtemp(prefix="cellvit_", dir=str(temp_root)))
+    try:
+        validate_ray_temp_dir(ray_temp_dir)
+    except Exception:
+        shutil.rmtree(ray_temp_dir, ignore_errors=True)
+        raise
     env = os.environ.copy()
-    env["TMPDIR"] = str(runtime_dir / "tmp")
-    env["RAY_TMPDIR"] = str(runtime_dir / "tmp")
+    env["TMPDIR"] = str(ray_temp_dir)
+    env["RAY_TMPDIR"] = str(ray_temp_dir)
     env["XDG_CACHE_HOME"] = str(runtime_dir / "cache")
     env["MPLCONFIGDIR"] = str(runtime_dir / "matplotlib")
-    return env, runtime_dir
+    return env, runtime_dir, ray_temp_dir
 
 
 def make_pyramid(src: Path, dst: Path) -> None:
@@ -168,20 +192,23 @@ def main() -> None:
     if args.amp:
         cmd.append("--enforce_amp")
     cmd += ["process_wsi", "--wsi_path", str(prepared), "--wsi_mpp", str(mpp)]
-    env, runtime_dir = prepare_runtime_env(outdir)
-    subprocess.run(cmd, check=True, env=env)
-    candidates = sorted(raw_dir.rglob("cells.json"))
-    if not candidates:
-        raise RuntimeError(f"CellViT++ produced no cells.json under {raw_dir}")
-    metadata = {
-        "model": args.model, "taxonomy": args.taxonomy, "source_mpp": mpp,
-        "batch_size": batch_size, "ray_workers": ray_workers,
-        "ray_worker_cpus": ray_worker_cpus,
-    }
-    normalize_output(candidates[0], outdir / "cellvit_cells.json", args.taxonomy, metadata)
-    (outdir / "cellvit_metadata.json").write_text(json.dumps(metadata, indent=2))
-    prepared.unlink(missing_ok=True)
-    shutil.rmtree(runtime_dir, ignore_errors=True)
+    env, runtime_dir, ray_temp_dir = prepare_runtime_env(outdir)
+    try:
+        subprocess.run(cmd, check=True, env=env)
+        candidates = sorted(raw_dir.rglob("cells.json"))
+        if not candidates:
+            raise RuntimeError(f"CellViT++ produced no cells.json under {raw_dir}")
+        metadata = {
+            "model": args.model, "taxonomy": args.taxonomy, "source_mpp": mpp,
+            "batch_size": batch_size, "ray_workers": ray_workers,
+            "ray_worker_cpus": ray_worker_cpus,
+        }
+        normalize_output(candidates[0], outdir / "cellvit_cells.json", args.taxonomy, metadata)
+        (outdir / "cellvit_metadata.json").write_text(json.dumps(metadata, indent=2))
+        prepared.unlink(missing_ok=True)
+    finally:
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        shutil.rmtree(ray_temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
