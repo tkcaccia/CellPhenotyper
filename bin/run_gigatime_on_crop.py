@@ -18,7 +18,7 @@ from torch import nn
 import zarr
 from skimage.color import rgb2lab
 from skimage.filters import threshold_otsu
-from skimage.morphology import binary_closing, disk, remove_small_holes, remove_small_objects
+from skimage.morphology import closing, disk, remove_small_holes, remove_small_objects
 
 from gigatime_resolution import choose_downsample_factor, estimate_prediction_gib
 from gigatime_hardware import choose_gigatime_hardware_settings
@@ -1139,6 +1139,25 @@ def choose_zarr_chunks(
     return (1, int(chunk_y), int(chunk_x))
 
 
+def clean_background_skip_mask(
+    mask: np.ndarray,
+    *,
+    close_radius: int,
+    min_obj_area: int,
+    hole_area: int,
+) -> np.ndarray:
+    mask = np.asarray(mask, dtype=bool)
+    if close_radius > 0:
+        mask = closing(mask, disk(close_radius), mode="ignore")
+    if hole_area > 0:
+        # The legacy area_threshold removed regions strictly smaller than the
+        # threshold; max_size is inclusive in scikit-image >= 0.26.
+        mask = remove_small_holes(mask, max_size=max(0, hole_area - 1))
+    if min_obj_area > 0:
+        mask = remove_small_objects(mask, max_size=max(0, min_obj_area - 1))
+    return np.asarray(mask, dtype=bool)
+
+
 def build_background_skip_mask(
     source_path: str,
     page: int,
@@ -1159,14 +1178,12 @@ def build_background_skip_mask(
     lab = rgb2lab(rgb_small)
     chroma = np.sqrt(lab[..., 1] * lab[..., 1] + lab[..., 2] * lab[..., 2])
     thresh = threshold_otsu(chroma)
-    mask = chroma > thresh
-    if close_radius > 0:
-        mask = binary_closing(mask, disk(close_radius))
-    if hole_area > 0:
-        mask = remove_small_holes(mask, area_threshold=hole_area)
-    if min_obj_area > 0:
-        mask = remove_small_objects(mask, min_size=min_obj_area)
-    mask = np.asarray(mask, dtype=bool)
+    mask = clean_background_skip_mask(
+        chroma > thresh,
+        close_radius=close_radius,
+        min_obj_area=min_obj_area,
+        hole_area=hole_area,
+    )
 
     mask_h, mask_w = mask.shape
     scale_y = float(final_h) / float(mask_h)

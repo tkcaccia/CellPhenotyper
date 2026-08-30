@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +49,25 @@ class GigaTIMERuntimeTest(unittest.TestCase):
         self.assertEqual(accum.shape, (len(gigatime.CHANNEL_NAMES), 4, 4))
         self.assertTrue(np.allclose(accum, 0.5, atol=1e-6))
         self.assertTrue(np.all(counts >= 1.0))
+
+    def test_background_mask_cleanup_is_warning_free_and_preserves_thresholds(self):
+        mask = np.zeros((9, 9), dtype=bool)
+        mask[1:6, 1:6] = True
+        mask[3, 3] = False
+        mask[8, 8] = True
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cleaned = gigatime.clean_background_skip_mask(
+                mask,
+                close_radius=1,
+                hole_area=2,
+                min_obj_area=2,
+            )
+
+        self.assertFalse(any(issubclass(item.category, FutureWarning) for item in caught))
+        self.assertTrue(cleaned[3, 3])
+        self.assertFalse(cleaned[8, 8])
 
     @unittest.skipUnless(TORCH_AVAILABLE and torch.cuda.is_available(), "CUDA runtime required")
     def test_cuda_oom_reduces_batch_and_retries_same_positions(self):
