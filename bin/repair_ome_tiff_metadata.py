@@ -54,12 +54,21 @@ def open_image(path: Path, rgb: bool):
     return image
 
 
+def strip_inherited_ome_description(image):
+    """Remove source OME XML before changing pixel type or channel layout."""
+    staging = image.copy()
+    if staging.get_typeof("image-description"):
+        staging.remove("image-description")
+    return staging
+
+
 def write_label_flat(source, path: Path, mpp_x: float, mpp_y: float, block_rows: int = 512) -> None:
     import numpy as np
 
     dtype = label_storage_dtype(int(source.max()))
     if dtype.itemsize == 1:
-        source.cast("uchar").copy(xres=1000.0 / mpp_x, yres=1000.0 / mpp_y).tiffsave(
+        staging = strip_inherited_ome_description(source.cast("uchar"))
+        staging.copy(xres=1000.0 / mpp_x, yres=1000.0 / mpp_y).tiffsave(
             str(path), tile=True, tile_width=512, tile_height=512, pyramid=False,
             compression="lzw", bigtiff=True, resunit="cm",
         )
@@ -103,7 +112,8 @@ def repair(path: Path, mpp_x: float, mpp_y: float, rgb: bool, max_workers: int) 
     replacement = path.with_name(f".{path.name}.{token}.replacement.ome.tif")
     try:
         if rgb:
-            source.copy(xres=1000.0 / mpp_x, yres=1000.0 / mpp_y).tiffsave(
+            staging = strip_inherited_ome_description(source)
+            staging.copy(xres=1000.0 / mpp_x, yres=1000.0 / mpp_y).tiffsave(
                 str(flat), tile=True, tile_width=512, tile_height=512, pyramid=False,
                 compression="lzw", bigtiff=True, resunit="cm",
             )

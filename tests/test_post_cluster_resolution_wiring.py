@@ -43,3 +43,9 @@ def test_explicit_false_is_not_replaced_for_default_true_stages() -> None:
     assert "params.cell_consensus_enable ?: true" not in workflow
     assert "params.tma_enable == null" in workflow
     assert "params.cell_consensus_enable == null" in workflow
+
+
+def test_repair_staging_drops_inherited_ome_xml() -> None:
+    source = (ROOT / "bin/repair_ome_tiff_metadata.py").read_text(encoding="utf-8")
+    assert "def strip_inherited_ome_description" in source
+    assert 'staging.remove("image-description")' in source
