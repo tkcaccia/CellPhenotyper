@@ -35,3 +35,11 @@ def test_medsam_keeps_native_compute_dtype_and_big_endian_storage() -> None:
     assert 'label_dtype = np.dtype(label_dtype).newbyteorder("=")' in source
     assert 'storage_dtype = label_dtype.newbyteorder(">")' in source
     assert "dtype=storage_dtype" in source
+
+
+def test_explicit_false_is_not_replaced_for_default_true_stages() -> None:
+    workflow = (ROOT / "main.nf").read_text(encoding="utf-8")
+    assert "params.tma_enable ?: true" not in workflow
+    assert "params.cell_consensus_enable ?: true" not in workflow
+    assert "params.tma_enable == null" in workflow
+    assert "params.cell_consensus_enable == null" in workflow
