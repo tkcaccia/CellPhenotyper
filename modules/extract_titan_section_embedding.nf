@@ -8,6 +8,13 @@ process EXTRACT_TITAN_SECTION_EMBEDDING {
     cpus { Math.max(1, Math.min(params.max_cpus as int, params.titan_cpus as int)) }
     memory { "${Math.max(8, Math.min(params.max_memory_gb as int, params.titan_memory_gb as int))} GB" }
     time { params.titan_time as String }
+    containerOptions {
+        def modelPath = (params.titan_model ?: '').toString().trim()
+        if (!modelPath || !new File(modelPath).isAbsolute()) return ''
+        if (workflow.containerEngine == 'singularity') return "-B ${modelPath}:${modelPath}:ro"
+        if (workflow.containerEngine == 'docker') return "-v ${modelPath}:${modelPath}:ro"
+        ''
+    }
 
     input:
     tuple val(sample_key), val(sample_id), val(cluster_variant), path(selected_image), path(selected_mask), path(selected_shift), path(selected_summary)

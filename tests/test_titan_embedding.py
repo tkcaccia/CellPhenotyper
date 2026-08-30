@@ -71,10 +71,14 @@ class TitanEmbeddingContractTest(unittest.TestCase):
                 titan.install_local_titan_file_resolver(str(missing))
 
     def test_singularity_binds_absolute_titan_model(self):
-        config = (Path(__file__).parents[1] / "nextflow.config").read_text()
-        self.assertIn("new File(configured_titan_model).isAbsolute()", config)
+        root = Path(__file__).parents[1]
+        config = (root / "nextflow.config").read_text()
         bind_block = config.split("def singularity_bind_targets = [", 1)[1].split("]", 1)[0]
-        self.assertIn("titan_model_bind_target", bind_block)
+        self.assertNotIn("titan_model", bind_block)
+        module = (root / "modules" / "extract_titan_section_embedding.nf").read_text()
+        self.assertIn("containerOptions", module)
+        self.assertIn("workflow.containerEngine == 'singularity'", module)
+        self.assertIn('return "-B ${modelPath}:${modelPath}:ro"', module)
 
 
 if __name__ == "__main__":
