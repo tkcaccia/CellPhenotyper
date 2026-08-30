@@ -26,9 +26,13 @@ process EXTRACT_TITAN_SECTION_EMBEDDING {
 
     script:
     def scriptPath = "${projectDir}/${params.titan_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    codeDigest.update(new File(scriptPath).bytes)
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def offlineFlag = (params.titan_offline as boolean) ? '--offline' : ''
     """
     set -euo pipefail
+    echo "[INFO] TITAN extraction code fingerprint: ${codeFingerprint}"
     test "${params._resolved_compute_device ?: params.compute_device}" = "gpu" || { echo "TITAN requires a resolved GPU runtime" >&2; exit 2; }
     case "${params.titan_model}" in
       /*) test -d "${params.titan_model}" || { echo "Absolute TITAN model directory is not visible inside the container: ${params.titan_model}" >&2; exit 2; } ;;

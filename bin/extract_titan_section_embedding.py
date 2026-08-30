@@ -161,6 +161,41 @@ def vips_region_to_pil(image, x: int, y: int, width: int, height: int, source_ti
     return Image.fromarray(array, mode="RGB")
 
 
+def open_vips_rgb(path: str):
+    """Open RGB OME-TIFFs even when TIFF channels are stored as separate pages."""
+    import pyvips
+    import tifffile
+
+    image = pyvips.Image.new_from_file(path, access="random")
+    if image.bands != 1:
+        return image
+
+    try:
+        with tifffile.TiffFile(path) as tif:
+            if not tif.is_ome or not tif.series:
+                return image
+            series = tif.series[0]
+            if "C" not in series.axes or int(series.shape[series.axes.index("C")]) < 3:
+                return image
+            for axis in ("T", "Z"):
+                if axis in series.axes and int(series.shape[series.axes.index(axis)]) > 1:
+                    return image
+        channels = [image]
+        for page in (1, 2):
+            channel = pyvips.Image.new_from_file(path, access="random", page=page)
+            if (channel.width, channel.height, channel.bands) != (image.width, image.height, 1):
+                raise RuntimeError(
+                    f"OME RGB channel {page} has incompatible dimensions: "
+                    f"{channel.width}x{channel.height}x{channel.bands}"
+                )
+            channels.append(channel)
+        return channels[0].bandjoin(channels[1:])
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Could not assemble OME RGB channels from {path}: {exc}") from exc
+
+
 def write_embedding_csv(path: Path, sample_id: str, section_id: str, embedding: np.ndarray) -> None:
     values = np.asarray(embedding, dtype=np.float32).reshape(-1)
     if values.size != 768 or not np.isfinite(values).all():
@@ -222,7 +257,9 @@ def main() -> None:
     ).eval().to(device)
     conch, transform = model.return_conch()
     conch = conch.eval().to(device)
-    image = pyvips.Image.new_from_file(args.image, access="random")
+    image = open_vips_rgb(args.image)
+    if image.bands < 3:
+        raise RuntimeError(f"TITAN requires an RGB input image, but {args.image} has {image.bands} band(s)")
     candidates = list(tile_candidates(Path(args.mask), source_tile, args.min_tissue_coverage))
     if not candidates:
         raise RuntimeError("No TITAN patches passed the selected-section tissue threshold")

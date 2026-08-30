@@ -32,6 +32,25 @@ class ProcessCodeFingerprintTest(unittest.TestCase):
             ["gigatime_script", "bin/gigatime_hardware.py", "bin/gigatime_resolution.py"],
         )
 
+    def test_post_cluster_image_writers_track_metadata_helpers(self):
+        expectations = {
+            "modules/grow_to_tissue.nf": ["grow_script", "bin/ome_tiff_metadata.py"],
+            "modules/refine_grown_tissue_medsam.nf": [
+                "refine_script", "bin/medsam_border_refine.py", "bin/ome_tiff_metadata.py",
+            ],
+            "modules/select_neoplastic_section.nf": [
+                "scriptPath", "bin/grow_to_tissue.py", "bin/ome_tiff_metadata.py",
+            ],
+        }
+        for module, files in expectations.items():
+            self.assert_fingerprint(module, files)
+
+    def test_titan_tracks_its_image_loader(self):
+        self.assert_fingerprint(
+            "modules/extract_titan_section_embedding.nf",
+            ["scriptPath"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

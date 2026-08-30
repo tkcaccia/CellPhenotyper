@@ -10,6 +10,9 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from grow_to_tissue import pyramidize_with_raw2ometiff
+from ome_tiff_metadata import validate_ome_tiff
+
 
 def polygon_components(geometry):
     if geometry.geom_type == "Polygon":
@@ -182,6 +185,7 @@ def write_crop(
     mpp: float,
     padding_um: float,
     tile_size: int,
+    max_workers: int,
 ) -> dict:
     import numpy as np
     import pyvips
@@ -229,10 +233,29 @@ def write_crop(
     mask = pyvips.Image.new_from_file(str(mask_path), access="sequential")
     masked = (mask > 0).ifthenelse(crop, 255).copy(xres=1000.0 / mpp, yres=1000.0 / mpp)
     crop_path = outdir / "selected_section.ome.tif"
+    flat_path = outdir / ".selected_section_flat.tif"
     masked.tiffsave(
-        str(crop_path), tile=True, tile_width=512, tile_height=512, pyramid=True,
-        compression="jpeg", Q=92, bigtiff=True, resunit="cm",
+        str(flat_path), tile=True, tile_width=512, tile_height=512, pyramid=False,
+        compression="lzw", bigtiff=True, resunit="cm",
     )
+    try:
+        pyramidize_with_raw2ometiff(
+            in_tif=str(flat_path),
+            out_ome_tif=str(crop_path),
+            compression="LZW",
+            max_workers=max(1, int(max_workers)),
+            downsample="GAUSSIAN",
+            overwrite=True,
+            keep_tmp=False,
+            legacy=False,
+        )
+        validate_ome_tiff(
+            crop_path,
+            expected_shape=(height, width),
+            expected_mpp=(mpp, mpp),
+        )
+    finally:
+        flat_path.unlink(missing_ok=True)
 
     scale = min(1.0, 3000.0 / max(width, height))
     thumb = masked.resize(scale) if scale < 1 else masked
@@ -267,6 +290,7 @@ def main() -> None:
     parser.add_argument("--padding-um", type=float, default=256.0)
     parser.add_argument("--spatial-bin-size", type=int, default=2048)
     parser.add_argument("--tile-size", type=int, default=512)
+    parser.add_argument("--max-workers", type=int, default=4)
     parser.add_argument("--require-neoplastic", action="store_true")
     args = parser.parse_args()
 
@@ -281,6 +305,7 @@ def main() -> None:
     mpp = source_mpp(Path(args.shift), args.default_mpp)
     crop_metadata = write_crop(
         Path(args.image), selected, outdir, mpp, args.padding_um, args.tile_size,
+        args.max_workers,
     )
     write_sections_csv(sections, outdir / "section_neoplastic_counts.csv", mpp, selected["section_id"])
     write_geojson(selected, outdir / "selected_section.geojson")

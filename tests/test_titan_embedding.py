@@ -80,6 +80,12 @@ class TitanEmbeddingContractTest(unittest.TestCase):
         self.assertIn("workflow.containerEngine == 'singularity'", module)
         self.assertIn('return "-B ${modelPath}:${modelPath}:ro"', module)
 
+    def test_ome_rgb_loader_is_used(self):
+        source = MODULE_PATH.read_text()
+        self.assertIn("def open_vips_rgb", source)
+        self.assertIn("image = open_vips_rgb(args.image)", source)
+        self.assertIn("TITAN requires an RGB input image", source)
+
 
 if __name__ == "__main__":
     unittest.main()

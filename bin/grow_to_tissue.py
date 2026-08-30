@@ -44,6 +44,14 @@ import tifffile
 from tifffile import imread, imwrite
 from scipy.ndimage import distance_transform_edt
 
+from ome_tiff_metadata import (
+    create_tiff_memmap,
+    label_storage_dtype,
+    read_mpp_json,
+    tiff_resolution_kwargs,
+    validate_ome_tiff,
+)
+
 
 # Optional preview deps
 try:
@@ -339,10 +347,18 @@ def write_upsampled_lowres_mask(
     factor: int,
     dtype: np.dtype,
     block_rows: int,
+    mpp_x: float,
+    mpp_y: float,
 ) -> tuple[np.ndarray, int]:
     f = max(1, int(factor))
     h, w = full_shape
-    out = tifffile.memmap(out_path, shape=(h, w), dtype=dtype, bigtiff=True)
+    out = create_tiff_memmap(
+        out_path,
+        shape=(h, w),
+        dtype=dtype,
+        mpp_x=mpp_x,
+        mpp_y=mpp_y,
+    )
     nonzero = 0
     for y0, y1 in row_blocks(h, block_rows):
         ly0 = y0 // f
@@ -371,6 +387,8 @@ def grow_downsampled_to_fullres(
     restrict_to_seeded_components_flag: bool,
     fill_holes_area: int,
     close_radius: int,
+    mpp_x: float,
+    mpp_y: float,
 ) -> tuple[np.ndarray, float]:
     seeds_full = open_tiff_2d(seed_path, "seed mask")
     f = max(1, int(factor))
@@ -416,7 +434,7 @@ def grow_downsampled_to_fullres(
 
     grown_low = grow_clusters_with_nearest_seed(seeds_low, tissue_low)
     maxlab = int(grown_low.max()) if grown_low.size else 0
-    out_dtype = np.uint16 if maxlab <= 65535 else np.uint32
+    out_dtype = label_storage_dtype(maxlab)
     grown_full, nonzero = write_upsampled_lowres_mask(
         grown_low,
         tissue_full_for_write,
@@ -425,6 +443,8 @@ def grow_downsampled_to_fullres(
         factor=f,
         dtype=out_dtype,
         block_rows=block_rows,
+        mpp_x=mpp_x,
+        mpp_y=mpp_y,
     )
     frac = float(nonzero / max(1, seeds_full.shape[0] * seeds_full.shape[1]))
     return grown_full, frac
@@ -605,7 +625,7 @@ def pyramidize_with_raw2ometiff(in_tif: str,
     try:
         print(f"[INFO] bioformats2raw -> {tmpdir}")
         subprocess.run(
-            ["bioformats2raw", "--downsample-type", downsample, in_tif, tmpdir],
+            ["bioformats2raw", "--log-level=OFF", "--downsample-type", downsample, in_tif, tmpdir],
             check=True,
             env=tool_env,
         )
@@ -640,6 +660,10 @@ def main():
     ap.add_argument("--mask", required=True, help="Seed mask TIFF: integer cluster labels (0=background)")
     ap.add_argument("--tissue-mask", required=True, help="Binary tissue mask TIFF (nonzero=tissue)")
     ap.add_argument("--out", required=True, help="FINAL output pyramidal OME-TIFF (e.g. grown_mask.ome.tif)")
+    ap.add_argument("--resolution-json", default="",
+                    help="Pipeline shift/resolution JSON containing authoritative source_mpp metadata.")
+    ap.add_argument("--default-mpp", type=float, default=0.0,
+                    help="Fallback MPP used only when --resolution-json has no physical size.")
     ap.add_argument("--preview", default=None, help="Optional preview PNG")
     ap.add_argument("--preview-factor", type=int, default=10)
     ap.add_argument("--preview-threshold-mb", type=float, default=100.0,
@@ -674,8 +698,8 @@ def main():
     ap.add_argument("--pyr-compression", default="LZW",
                     help="UNCOMPRESSED|LZW|JPEG|JPEG_2000|JPEG_2000_LOSSY (default LZW).")
     ap.add_argument("--max-workers", type=int, default=16)
-    ap.add_argument("--downsample", default="GAUSSIAN",
-                    help="SIMPLE|GAUSSIAN|AREA|LINEAR|CUBIC|LANCZOS (default GAUSSIAN).")
+    ap.add_argument("--downsample", default="SIMPLE",
+                    help="SIMPLE|GAUSSIAN|AREA|LINEAR|CUBIC|LANCZOS (default SIMPLE for categorical labels).")
     ap.add_argument("--legacy", action="store_true", help="Write Bio-Formats 5.9.x-compatible pyramid.")
     ap.add_argument("--overwrite", action="store_true", help="Overwrite existing output.")
     ap.add_argument("--keep-tmp", action="store_true", help="Keep intermediate .rawdir.")
@@ -703,6 +727,9 @@ def main():
 
     args = ap.parse_args()
 
+    mpp_x, mpp_y = read_mpp_json(args.resolution_json, args.default_mpp)
+    print(f"[INFO] Output physical resolution: mpp_x={mpp_x:.9g}, mpp_y={mpp_y:.9g}")
+
     seed_shape, _ = tiff_2d_shape_dtype(args.mask, "seed mask")
     seed_pixels = int(seed_shape[0] * seed_shape[1])
     use_downsampled_classic = (
@@ -728,6 +755,8 @@ def main():
             restrict_to_seeded_components_flag=bool(args.restrict_to_seeded_components),
             fill_holes_area=int(args.fill_holes_area),
             close_radius=int(args.close_radius),
+            mpp_x=mpp_x,
+            mpp_y=mpp_y,
         )
         try:
             pyramidize_with_raw2ometiff(
@@ -740,14 +769,16 @@ def main():
                 keep_tmp=args.keep_tmp,
                 legacy=args.legacy,
             )
-        except Exception as e:
-            print(f"[WARN] Pyramidal conversion failed ({e}). Writing flat TIFF fallback to: {args.out}")
+            ome_summary = validate_ome_tiff(
+                args.out,
+                expected_shape=seed_shape,
+                expected_mpp=(mpp_x, mpp_y),
+            )
+            print(f"[INFO] Validated grown OME-TIFF: {json.dumps(ome_summary, sort_keys=True)}")
+        except Exception:
             if os.path.exists(args.out):
-                if args.overwrite:
-                    os.remove(args.out)
-                else:
-                    raise
-            shutil.copyfile(tmp_flat, args.out)
+                os.remove(args.out)
+            raise
         if args.preview:
             save_preview_png(
                 image_path=args.image,
@@ -864,9 +895,15 @@ def main():
     tmp_flat = os.path.join(outdir, f".tmp_flat_{os.getpid()}_{int(time.time())}.tif")
 
     maxlab = int(grown.max()) if grown.size else 0
-    flat = grown.astype(np.uint16) if maxlab <= 65535 else grown.astype(np.uint32)
+    flat = grown.astype(label_storage_dtype(maxlab))
 
-    imwrite(tmp_flat, flat)  # temp only; final compression is handled by raw2ometiff
+    imwrite(
+        tmp_flat,
+        flat,
+        bigtiff=True,
+        byteorder=flat.dtype.byteorder if flat.dtype.itemsize > 1 else None,
+        **tiff_resolution_kwargs(mpp_x, mpp_y, "YX"),
+    )
 
     # Pyramidize + compress using the same approach as your script :contentReference[oaicite:3]{index=3}
     try:
@@ -880,16 +917,16 @@ def main():
             keep_tmp=args.keep_tmp,
             legacy=args.legacy,
         )
-    except Exception as e:
-        # Robust fallback for environments where raw2ometiff/bioformats2raw are present
-        # but incompatible with the generated temporary pyramid source.
-        print(f"[WARN] Pyramidal conversion failed ({e}). Writing flat TIFF fallback to: {args.out}")
+        ome_summary = validate_ome_tiff(
+            args.out,
+            expected_shape=seeds.shape,
+            expected_mpp=(mpp_x, mpp_y),
+        )
+        print(f"[INFO] Validated grown OME-TIFF: {json.dumps(ome_summary, sort_keys=True)}")
+    except Exception:
         if os.path.exists(args.out):
-            if args.overwrite:
-                os.remove(args.out)
-            else:
-                raise
-        shutil.copyfile(tmp_flat, args.out)
+            os.remove(args.out)
+        raise
 
     # Preview
     if args.preview:

@@ -843,7 +843,7 @@ PREPARE_STARDIST_AUTO_ROI(auto_roi_input_ch)
 stardist_roi_geojson_ch = provided_roi_for_stardist_ch.mix(PREPARE_STARDIST_AUTO_ROI.out.roi_geojson)
 }
 
-def need_stardist_outputs = run_stardist || run_cell_consensus || run_tma || (!tissue_mask_from_input && run_tissue_mask) || run_cell_assignment || run_cytoplasm || run_uni2 || run_neoplastic_section
+def need_stardist_outputs = run_stardist || run_cell_consensus || run_tma || (!tissue_mask_from_input && run_tissue_mask) || run_cell_assignment || run_cytoplasm || run_uni2 || run_grow_tissue || run_cluster_geojson || run_neoplastic_section
 
 def crop_roi_ch = Channel.empty()
 def labels_tif_ch = Channel.empty()
@@ -1349,6 +1349,7 @@ if (run_cluster_mask) {
 
 def image_for_growth_variant_ch = Channel.empty()
 def tissue_mask_variant_ch = Channel.empty()
+def resolution_for_growth_variant_ch = Channel.empty()
 if (run_grow_tissue || run_cluster_geojson) {
   def image_for_growth_ch = run_stardist
     ? crop_roi_ch
@@ -1371,6 +1372,14 @@ if (run_grow_tissue || run_cluster_geojson) {
         tuple(sample_key, tissue_mask_tif)
       }
     }
+
+  resolution_for_growth_variant_ch = shift_json_ch
+    .flatMap { sample_id, resolution_json ->
+      cluster_variant_defs.collect { spec ->
+        def sample_key = "${sample_id}::${spec.variant}"
+        tuple(sample_key, resolution_json)
+      }
+    }
 }
 
 def grown_mask_ch = Channel.empty()
@@ -1378,8 +1387,9 @@ if (run_grow_tissue) {
   def grow_input_ch = cluster_mask_ch
     .join(image_for_growth_variant_ch)
     .join(tissue_mask_variant_ch)
-    .map { sample_key, sample_id, cluster_variant, cluster_mask_tif, image_tif, tissue_mask_tif ->
-      tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, tissue_mask_tif)
+    .join(resolution_for_growth_variant_ch)
+    .map { sample_key, sample_id, cluster_variant, cluster_mask_tif, image_tif, tissue_mask_tif, resolution_json ->
+      tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, tissue_mask_tif, resolution_json)
     }
   GROW_TO_TISSUE(grow_input_ch)
   grown_mask_ch = GROW_TO_TISSUE.out.grown_mask
@@ -1405,8 +1415,9 @@ if (run_cluster_geojson && grown_refine_method == 'medsam_border_refine') {
     .join(image_for_growth_variant_ch)
     .join(cluster_mask_file_ch)
     .join(cluster_kodama_png_file_ch)
-    .map { sample_key, sample_id, cluster_variant, grown_mask_tif, image_tif, cluster_mask_tif, kodama_membership_png ->
-      tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, grown_mask_tif, kodama_membership_png)
+    .join(resolution_for_growth_variant_ch)
+    .map { sample_key, sample_id, cluster_variant, grown_mask_tif, image_tif, cluster_mask_tif, kodama_membership_png, resolution_json ->
+      tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, grown_mask_tif, kodama_membership_png, resolution_json)
     }
   REFINE_GROWN_TISSUE_MEDSAM(refine_input_ch)
   refined_mask_ch = REFINE_GROWN_TISSUE_MEDSAM.out.refined_mask

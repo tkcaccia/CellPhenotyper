@@ -19,9 +19,17 @@ process SELECT_NEOPLASTIC_SECTION {
 
     script:
     def scriptPath = "${projectDir}/${params.neoplastic_section_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    [
+      scriptPath,
+      "${projectDir}/bin/grow_to_tissue.py",
+      "${projectDir}/bin/ome_tiff_metadata.py",
+    ].each { codeDigest.update(new File(it).bytes) }
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def requireFlag = (params.neoplastic_section_require_cells as boolean) ? '--require-neoplastic' : ''
     """
     set -euo pipefail
+    echo "[INFO] Neoplastic section code fingerprint: ${codeFingerprint}"
     python "${scriptPath}" \
       --cluster-geojson "${cluster_geojson}" --objects "${objects_csv}" \
       --image "${image_tif}" --shift "${shift_json}" --cluster-variant "${cluster_variant}" \
@@ -30,7 +38,8 @@ process SELECT_NEOPLASTIC_SECTION {
       --default-mpp ${params.neoplastic_section_default_mpp} \
       --padding-um ${params.neoplastic_section_padding_um} \
       --spatial-bin-size ${params.neoplastic_section_spatial_bin_size} \
-      --tile-size ${params.neoplastic_section_tile_size} ${requireFlag}
+      --tile-size ${params.neoplastic_section_tile_size} \
+      --max-workers ${Math.max(1, task.cpus as int)} ${requireFlag}
     """
 
     stub:

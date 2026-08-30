@@ -11,7 +11,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     time { params.medsam_refine_time as String }
 
     input:
-    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(grown_mask_tif), path(kodama_membership_png)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(grown_mask_tif), path(kodama_membership_png), path(resolution_json)
 
     output:
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif"), emit: refined_mask
@@ -23,6 +23,15 @@ process REFINE_GROWN_TISSUE_MEDSAM {
 
     script:
     def refine_script = "${projectDir}/${params.grown_tissue_refine_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    [
+      refine_script,
+      "${projectDir}/bin/grow_to_tissue.py",
+      "${projectDir}/bin/grow_to_tissue_core.py",
+      "${projectDir}/bin/medsam_border_refine.py",
+      "${projectDir}/bin/ome_tiff_metadata.py",
+    ].each { codeDigest.update(new File(it).bytes) }
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def overwrite_flag = (params.grow_overwrite as boolean) ? '--overwrite' : ''
     def keep_tmp_flag = (params.grow_keep_tmp as boolean) ? '--keep-tmp' : ''
     def legacy_flag = (params.grow_legacy as boolean) ? '--legacy' : ''
@@ -70,6 +79,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     }
     """
     set -euo pipefail
+    echo "[INFO] MedSAM refinement code fingerprint: ${codeFingerprint}"
     echo "[INFO] MedSAM runtime tune: profile=${hardwareProfile}, auto_hardware=${medsamAutoHardware}, memory_budget_gb=${memoryBudgetGb}, max_workers=${resolvedMaxWorkers}"
 
     python "${refine_script}" \
@@ -77,6 +87,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       --image "${image_tif}" \
       --seed-mask "${cluster_mask_tif}" \
       --grown-mask "${grown_mask_tif}" \
+      --resolution-json "${resolution_json}" \
       --out "${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif" \
       --preview "${sample_id}_${cluster_variant}_grown_refined_qc_preview.png" \
       --preview-factor ${params.grow_preview_factor} \

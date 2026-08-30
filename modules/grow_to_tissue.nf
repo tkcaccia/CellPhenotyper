@@ -9,7 +9,7 @@ process GROW_TO_TISSUE {
     time { params.grow_time as String }
 
     input:
-    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(tissue_mask_tif)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(tissue_mask_tif), path(resolution_json)
 
     output:
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask.ome.tif"), emit: grown_mask
@@ -17,6 +17,9 @@ process GROW_TO_TISSUE {
 
     script:
     def grow_script = "${projectDir}/${params.grow_script}"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    [grow_script, "${projectDir}/bin/ome_tiff_metadata.py"].each { codeDigest.update(new File(it).bytes) }
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def grow_method = 'classic_existing'
     def restrict_flag = (params.grow_restrict_to_seeded_components as boolean) ? '--restrict-to-seeded-components' : ''
     def add_nuclei_flag = (params.grow_add_nuclei as boolean) ? '' : '--no-add-nuclei'
@@ -26,11 +29,13 @@ process GROW_TO_TISSUE {
     def tail_flags = [legacy_flag, overwrite_flag, keep_tmp_flag].findAll { it?.trim() }.join(' ')
     """
     set -euo pipefail
+    echo "[INFO] Grow-to-tissue code fingerprint: ${codeFingerprint}"
 
     python "${grow_script}" \
       --image "${image_tif}" \
       --mask "${cluster_mask_tif}" \
       --tissue-mask "${tissue_mask_tif}" \
+      --resolution-json "${resolution_json}" \
       --out "${sample_id}_${cluster_variant}_grown_mask.ome.tif" \
       --preview "${sample_id}_${cluster_variant}_grown_qc_preview.png" \
       --preview-factor ${params.grow_preview_factor} \

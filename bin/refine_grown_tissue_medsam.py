@@ -16,6 +16,14 @@ from PIL import Image, ImageDraw, ImageFont
 from tifffile import imwrite
 import tifffile
 
+from ome_tiff_metadata import (
+    create_tiff_memmap,
+    label_storage_dtype,
+    read_mpp_json,
+    tiff_resolution_kwargs,
+    validate_ome_tiff,
+)
+
 from grow_to_tissue import (
     DEFAULT_PALETTE,
     ensure_2d,
@@ -319,15 +327,17 @@ def pyramidize_or_fallback(tmp_flat: Path, out_path: str, args) -> None:
             keep_tmp=args.keep_tmp,
             legacy=args.legacy,
         )
-    except Exception as exc:
-        print(f"[WARN] Pyramidal conversion failed ({exc}). Writing flat TIFF fallback to: {out_path}")
+        ome_summary = validate_ome_tiff(
+            out_path,
+            expected_shape=args.output_spatial_shape,
+            expected_mpp=(args.source_mpp_x, args.source_mpp_y),
+        )
+        print(f"[INFO] Validated MedSAM OME-TIFF: {json.dumps(ome_summary, sort_keys=True)}")
+    except Exception:
         out_file = Path(out_path)
         if out_file.exists():
-            if args.overwrite:
-                out_file.unlink()
-            else:
-                raise
-        shutil.copyfile(tmp_flat, out_path)
+            out_file.unlink()
+        raise
 
 
 def count_nonzero_2d_blocks(arr: np.ndarray, block_rows: int = 512) -> int:
@@ -518,6 +528,8 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             label_dtype = grown_reader.dtype
         if np.dtype(label_dtype).itemsize < 2:
             label_dtype = np.uint16
+        label_dtype = np.dtype(label_dtype).newbyteorder("=")
+        storage_dtype = label_dtype.newbyteorder(">")
 
         h, w = shape
         tile_size = max(512, int(args.medsam_cluster_tile_size))
@@ -536,8 +548,8 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             refined_out = tifffile.memmap(tmp_flat)
             if tuple(refined_out.shape) != (h, w):
                 raise ValueError(f"--stream-resume-tmp shape mismatch: {tuple(refined_out.shape)} vs {(h, w)}")
-            if np.dtype(refined_out.dtype) != np.dtype(label_dtype):
-                label_dtype = np.dtype(refined_out.dtype)
+            storage_dtype = np.dtype(refined_out.dtype)
+            label_dtype = storage_dtype.newbyteorder("=")
             print(
                 f"[INFO] Resuming streaming MedSAM from checkpoint={tmp_flat} "
                 f"skip_completed_foreground_tiles={resume_tiles}"
@@ -552,7 +564,13 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             tmp_flat = outdir / f".tmp_refined_stream_{os.getpid()}_{int(time.time())}.tif"
             if tmp_flat.exists():
                 tmp_flat.unlink()
-            refined_out = tifffile.memmap(tmp_flat, shape=(h, w), dtype=label_dtype, bigtiff=True)
+            refined_out = create_tiff_memmap(
+                tmp_flat,
+                shape=(h, w),
+                dtype=storage_dtype,
+                mpp_x=args.source_mpp_x,
+                mpp_y=args.source_mpp_y,
+            )
 
         raw_pixels = 0
         print(
@@ -785,6 +803,8 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             "mode": "large_image_streaming",
             "image_shape": [int(h), int(w)],
             "medsam_device": str(med_cfg.device),
+            "source_mpp_x": float(args.source_mpp_x),
+            "source_mpp_y": float(args.source_mpp_y),
             "medsam_runtime_sec": round(float(time.perf_counter() - start), 3),
             "medsam_tile_inference_sec": round(float(tile_runtime_sec), 3),
             "tiles_total": int(total_tiles),
@@ -839,6 +859,10 @@ def main() -> None:
     ap.add_argument("--seed-mask", required=True, help="Step-15 cluster mask TIFF")
     ap.add_argument("--grown-mask", required=True, help="Step-16 grown tissue mask TIFF")
     ap.add_argument("--out", required=True, help="Output refined OME-TIFF path")
+    ap.add_argument("--resolution-json", default="",
+                    help="Pipeline shift/resolution JSON containing authoritative source_mpp metadata.")
+    ap.add_argument("--default-mpp", type=float, default=0.0,
+                    help="Fallback MPP used only when --resolution-json has no physical size.")
     ap.add_argument("--preview", required=True, help="Output preview PNG path")
     ap.add_argument("--preview-factor", type=int, default=10)
     ap.add_argument("--preview-threshold-mb", type=float, default=100.0)
@@ -886,6 +910,8 @@ def main() -> None:
     ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=True)
     args = ap.parse_args()
 
+    args.source_mpp_x, args.source_mpp_y = read_mpp_json(args.resolution_json, args.default_mpp)
+
     med_cfg = make_medsam_config(args)
     image_shape = tiff_spatial_shape(args.image, "image")
     seed_shape = tiff_spatial_shape(args.seed_mask, "seed mask")
@@ -894,6 +920,11 @@ def main() -> None:
         raise ValueError(f"Step-15 and step-16 masks must share the same shape: {seed_shape} vs {grown_shape}")
     if image_shape != seed_shape:
         raise ValueError(f"Image and masks must share the same spatial shape: {image_shape} vs {seed_shape}")
+    args.output_spatial_shape = seed_shape
+    print(
+        f"[INFO] Output physical resolution: mpp_x={args.source_mpp_x:.9g}, "
+        f"mpp_y={args.source_mpp_y:.9g}"
+    )
     pixel_count = int(seed_shape[0]) * int(seed_shape[1])
     if args.large_image_mode == "stream" or (
         args.large_image_mode == "auto" and pixel_count > int(args.large_image_max_pixels)
@@ -956,6 +987,8 @@ def main() -> None:
 
     summary = {
         "sample_id": args.sample_id,
+        "source_mpp_x": float(args.source_mpp_x),
+        "source_mpp_y": float(args.source_mpp_y),
         "medsam_runtime_sec": round(float(runtime_sec), 3),
         "raw_pixels": int((raw_labels > 0).sum()),
         "final_pixels": int((refined_labels > 0).sum()),
@@ -1032,28 +1065,16 @@ def main() -> None:
 
     tmp_flat = outdir / f".tmp_refined_flat_{os.getpid()}_{int(time.time())}.tif"
     maxlab = int(refined_labels.max()) if refined_labels.size else 0
-    flat = refined_labels.astype(np.uint16) if maxlab <= 65535 else refined_labels.astype(np.uint32)
-    imwrite(tmp_flat, flat)
+    flat = refined_labels.astype(label_storage_dtype(maxlab))
+    imwrite(
+        tmp_flat,
+        flat,
+        bigtiff=True,
+        byteorder=flat.dtype.byteorder if flat.dtype.itemsize > 1 else None,
+        **tiff_resolution_kwargs(args.source_mpp_x, args.source_mpp_y, "YX"),
+    )
     try:
-        pyramidize_with_raw2ometiff(
-            in_tif=str(tmp_flat),
-            out_ome_tif=str(args.out),
-            compression=args.pyr_compression,
-            max_workers=args.max_workers,
-            downsample=args.downsample,
-            overwrite=args.overwrite,
-            keep_tmp=args.keep_tmp,
-            legacy=args.legacy,
-        )
-    except Exception as exc:
-        print(f"[WARN] Pyramidal conversion failed ({exc}). Writing flat TIFF fallback to: {args.out}")
-        out_path = Path(args.out)
-        if out_path.exists():
-            if args.overwrite:
-                out_path.unlink()
-            else:
-                raise
-        shutil.copyfile(tmp_flat, args.out)
+        pyramidize_or_fallback(tmp_flat, args.out, args)
     finally:
         try:
             tmp_flat.unlink()
