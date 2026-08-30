@@ -11,6 +11,7 @@ __pycache__/
 *.pyc
 *.pyo
 .hf_cache/
+.keras
 .nextflow_host/
 .tmp_*
 main.nf.bak_*
