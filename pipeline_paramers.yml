@@ -249,6 +249,8 @@ cluster_r_library_dir: /opt/micromamba/envs/stardist/lib/R/library
 cluster_kodama_dim: 20
 cluster_snn_k: 50
 cluster_algorithm: leiden
+# 0 keeps the graph-derived count; set >=2 to merge nearest communities exactly.
+cluster_target_clusters: 0
 cluster_landmark_cells: 10000
 cluster_landmark_assign_k: 50
 cluster_landmark_sample_strategy: knn_inverse_distance

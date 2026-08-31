@@ -4,7 +4,15 @@ args <- commandArgs(trailingOnly = TRUE)
 }
 
 if (length(args) < 2L) {
-  stop("Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv> [--dim N] [--k N] [--algorithm louvain|leiden|walktrap] [--landmark-cells N] [--landmark-assign-k N] [--landmark-sample-strategy random|grid|knn_inverse_distance] [--landmark-density-knn-k N] [--landmark-density-power X] [--walktrap-clusters N] [--resolution auto|X] [--profile standard|fine]")
+  stop(paste(
+    "Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv>",
+    "[--dim N] [--k N] [--algorithm louvain|leiden|walktrap]",
+    "[--target-clusters N] [--landmark-cells N] [--landmark-assign-k N]",
+    "[--landmark-sample-strategy random|grid|knn_inverse_distance]",
+    "[--landmark-density-knn-k N] [--landmark-density-power X]",
+    "[--walktrap-clusters N] [--resolution auto|X]",
+    "[--profile standard|fine]"
+  ))
 }
 
 kodama_dir <- args[1]
@@ -13,6 +21,7 @@ out_csv <- args[2]
 selected_file_dim <- 20L
 requested_k <- 50L
 cluster_algorithm <- "leiden"
+target_clusters <- 0L
 walktrap_clusters <- 4L
 landmark_cells <- 10000L
 landmark_assign_k <- 50L
@@ -53,6 +62,11 @@ if (length(args) > 2L) {
     }
     if (flag == "--algorithm" && i + 1L <= length(args)) {
       cluster_algorithm <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--target-clusters" && i + 1L <= length(args)) {
+      target_clusters <- as.integer(args[i + 1L])
       i <- i + 2L
       next
     }
@@ -151,6 +165,9 @@ if (!is.finite(requested_k) || requested_k < 2L) {
 }
 if (!(cluster_algorithm %in% c("louvain", "leiden", "walktrap"))) {
   stop("--algorithm must be 'louvain', 'leiden', or 'walktrap'.")
+}
+if (!is.finite(target_clusters) || target_clusters < 0L || target_clusters == 1L) {
+  stop("--target-clusters must be 0 (disabled) or an integer >= 2.")
 }
 if (!is.finite(walktrap_clusters) || walktrap_clusters < 2L) {
   stop("--walktrap-clusters must be an integer >= 2.")
@@ -299,6 +316,56 @@ cluster_centroids <- function(vis, membership) {
   out <- do.call(rbind, lapply(ids, function(id) colMeans(vis[membership == id, , drop = FALSE])))
   rownames(out) <- as.character(ids)
   out
+}
+
+collapse_clusters_to_target <- function(vis, membership, target) {
+  collapsed <- renumber_membership(membership)
+  initial_count <- length(unique(collapsed))
+  if (target == 0L || initial_count == target) {
+    return(list(
+      membership = collapsed,
+      applied = FALSE,
+      initial_count = initial_count,
+      merge_history = ""
+    ))
+  }
+  if (initial_count < target) {
+    stop(sprintf(
+      "Cannot force %d clusters because %s produced only %d clusters.",
+      target,
+      cluster_algorithm,
+      initial_count
+    ))
+  }
+
+  merge_history <- character(0)
+  while (length(unique(collapsed)) > target) {
+    centers <- cluster_centroids(vis, collapsed)
+    center_distances <- as.matrix(stats::dist(centers))
+    diag(center_distances) <- Inf
+    nearest <- which(
+      center_distances == min(center_distances),
+      arr.ind = TRUE
+    )
+    nearest <- nearest[nearest[, 1] < nearest[, 2], , drop = FALSE]
+    nearest <- nearest[order(nearest[, 1], nearest[, 2]), , drop = FALSE]
+    keep_id <- as.integer(rownames(centers)[nearest[1, 1]])
+    drop_id <- as.integer(rownames(centers)[nearest[1, 2]])
+    merge_distance <- center_distances[nearest[1, 1], nearest[1, 2]]
+    merge_history <- c(
+      merge_history,
+      sprintf("%d+%d@%.6f", keep_id, drop_id, merge_distance)
+    )
+    collapsed[collapsed == drop_id] <- keep_id
+    collapsed <- renumber_membership(collapsed)
+  }
+
+  list(
+    membership = collapsed,
+    applied = TRUE,
+    initial_count = initial_count,
+    merge_history = paste(merge_history, collapse = ";")
+  )
 }
 
 merge_small_clusters <- function(vis, membership, min_size) {
@@ -1008,7 +1075,12 @@ if (cluster_algorithm == "walktrap") {
 }
 
 raw_membership <- renumber_membership(best$membership)
-final_membership <- renumber_membership(best$final_membership)
+target_result <- collapse_clusters_to_target(
+  vis,
+  best$final_membership,
+  target_clusters
+)
+final_membership <- renumber_membership(target_result$membership)
 
 raw_cluster_count <- length(unique(raw_membership))
 final_cluster_count <- length(unique(final_membership))
@@ -1034,6 +1106,15 @@ summary_df <- data.frame(
   actual_k = as.integer(actual_k),
   cluster_algorithm = cluster_algorithm,
   leiden_objective = leiden_objective,
+  target_clusters = as.integer(target_clusters),
+  target_applied = isTRUE(target_result$applied),
+  target_strategy = if (target_clusters > 0L) {
+    "nearest_centroid_merge_in_kodama_space"
+  } else {
+    "disabled"
+  },
+  target_input_cluster_count = as.integer(target_result$initial_count),
+  target_merge_history = target_result$merge_history,
   landmark_cells = as.integer(landmark_cells),
   landmark_sample_strategy = landmark_sample_strategy,
   landmark_density_knn_k = as.integer(landmark_density_knn_k),
@@ -1096,6 +1177,21 @@ if (!isTRUE(picked$exact)) {
 }
 cat(sprintf("[INFO] Requested k=%d actual k=%d\n", requested_k, actual_k))
 cat(sprintf("[INFO] Cluster algorithm=%s\n", cluster_algorithm))
+if (target_clusters > 0L) {
+  cat(sprintf(
+    paste0(
+      "[INFO] Target clusters=%d input clusters=%d final clusters=%d ",
+      "strategy=nearest_centroid_merge_in_kodama_space applied=%s\n"
+    ),
+    target_clusters,
+    target_result$initial_count,
+    final_cluster_count,
+    ifelse(target_result$applied, "yes", "no")
+  ))
+  if (nzchar(target_result$merge_history)) {
+    cat(sprintf("[INFO] Target merge history=%s\n", target_result$merge_history))
+  }
+}
 cat(sprintf("[INFO] Landmark cells requested=%d used=%d strategy=%s assignment=%s assign_k=%d\n",
   as.integer(landmark_cells),
   as.integer(best$landmark_cells_used %||% NA_integer_),

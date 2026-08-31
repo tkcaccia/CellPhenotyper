@@ -38,6 +38,7 @@ process RUN_RCODE_CLUSTERING {
       --dim ${params.cluster_kodama_dim} \
       --k ${params.cluster_snn_k} \
       --algorithm ${params.cluster_algorithm} \
+      --target-clusters ${params.cluster_target_clusters} \
       --walktrap-clusters ${params.cluster_walktrap_clusters} \
       --walktrap-max-cells ${params.cluster_walktrap_max_cells} \
       --walktrap-assign-k ${params.cluster_walktrap_assign_k} \

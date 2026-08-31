@@ -75,11 +75,21 @@ def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
     assert "kodama_landmarks: 1000" in PARAMETERS
     assert "cluster_snn_k: 50" in PARAMETERS
     assert "cluster_algorithm: leiden" in PARAMETERS
+    assert "cluster_target_clusters: 0" in PARAMETERS
     assert "cluster_landmark_cells: 10000" in PARAMETERS
     assert "cluster_landmark_assign_k: 50" in PARAMETERS
     assert "cluster_landmark_sample_strategy: knn_inverse_distance" in PARAMETERS
     assert "cluster_landmark_density_power: 2.0" in PARAMETERS
     assert "cluster_resolution: 0.3" in PARAMETERS
+
+
+def test_target_cluster_count_is_wired_to_clustering() -> None:
+    module = (ROOT / "modules" / "run_rcode_clustering.nf").read_text()
+    script = (ROOT / "bin" / "Rcode_Clustering.R").read_text()
+    assert "--target-clusters ${params.cluster_target_clusters}" in module
+    assert 'flag == "--target-clusters"' in script
+    assert "collapse_clusters_to_target" in script
+    assert "nearest_centroid_merge_in_kodama_space" in script
 
 
 def test_gpu_modules_consume_the_resolved_device() -> None:
