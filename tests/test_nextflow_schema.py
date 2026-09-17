@@ -221,6 +221,7 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "analysis_intent",
         "evidence_gate_mode",
         "input_resolution_max_metadata_conflict_fraction",
+        "convert_channel_order",
         "roi_validation_mode",
         "cell_consensus_fusion_acceptance_policy",
         "gigatime_seam_qc_mode",

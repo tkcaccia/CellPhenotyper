@@ -63,6 +63,7 @@ Magnification labels such as 20x or 40x are not accepted as a substitute for phy
 | Aperio SVS (`.svs`) | Yes | Reader/conversion route available | No scanner-model or site generalization claim. |
 | Hamamatsu NDPI (`.ndpi`) | Yes | Reader/conversion route available | No scanner-model or site generalization claim. |
 | Zeiss CZI (`.czi`) | Yes | Multi-region routing implemented | Region-specific files should use `<image>.czi - ScanRegionN.geojson`; multi-plane and arbitrary scene semantics are not validated. |
+| Olympus VSI (`.vsi`) | Yes | Real VSI conversion and explicit-RGB runtime checks | Requires the sibling `_<sample>_` companion directory. Three planar brightfield channels are joined into canonical RGB; source order defaults to `RGB` and is configurable through `convert_channel_order`. |
 | Leica SCN and MRXS (`.scn`, `.mrxs`) | Yes | Parser route only unless a run records otherwise | Reader support and scientific validation must be demonstrated on representative files. |
 | Olympus VMS/VMU (`.vms`, `.vmu`) | Yes | Parser route only unless a run records otherwise | Companion-file layouts and reader behavior require explicit testing. |
 | Generic TIFF (`.tif`, `.tiff`) | Yes | Conversion/validation route available | Ambiguous axes, photometric interpretation and MPP are rejected by strict QC. |

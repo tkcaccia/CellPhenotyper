@@ -4,7 +4,9 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 
 def _normalize_compression(compression: str) -> str:
@@ -16,6 +18,226 @@ def _normalize_compression(compression: str) -> str:
     if value in {"lzw", "none", "uncompressed"}:
         return value
     return value or "jpeg"
+
+
+def _normalize_channel_order(channel_order: str) -> str:
+    order = ("RGB" if channel_order is None else channel_order).strip().upper()
+    if len(order) != 3 or set(order) != {"R", "G", "B"}:
+        raise ValueError(
+            "--channel-order must contain R, G, and B exactly once "
+            "(one of RGB, RBG, GRB, GBR, BRG, or BGR)."
+        )
+    return order
+
+
+def _rgb_indices_from_source_order(channel_order: str) -> tuple[int, int, int]:
+    """Return source-plane indices needed to write canonical R, G, B output.
+
+    ``channel_order`` describes the meaning of source planes 0, 1, and 2.
+    For example, BGR maps source plane 2 to output red, plane 1 to green,
+    and plane 0 to blue.
+    """
+    order = _normalize_channel_order(channel_order)
+    return tuple(order.index(channel) for channel in "RGB")
+
+
+def _is_rgb_compatible_photometric(value: str) -> bool:
+    """Return whether TIFF storage decodes to canonical three-channel RGB."""
+    return str(value or "").strip().upper() in {"RGB", "YCBCR"}
+
+
+def _ome_dtype(dtype_name: str) -> str:
+    mapping = {
+        "uint8": "uint8",
+        "int8": "int8",
+        "uint16": "uint16",
+        "int16": "int16",
+        "uint32": "uint32",
+        "int32": "int32",
+        "float32": "float",
+        "float64": "double",
+    }
+    try:
+        return mapping[dtype_name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported planar RGB pixel type: {dtype_name}") from exc
+
+
+def _unit_to_micrometres(value: float | None, unit: str | None) -> float | None:
+    if value is None:
+        return None
+    normalized = (unit or "um").strip().lower().replace("μ", "µ")
+    if normalized in {"µm", "um", "micrometer", "micrometre"}:
+        return value
+    if normalized in {"nm", "nanometer", "nanometre"}:
+        return value / 1000.0
+    if normalized in {"mm", "millimeter", "millimetre"}:
+        return value * 1000.0
+    return value
+
+
+def _ome_physical_sizes_micrometres(ome_xml: str | None) -> tuple[float | None, float | None]:
+    if not ome_xml:
+        return None, None
+    try:
+        root = ET.fromstring(ome_xml)
+        pixels = root.find(".//{*}Pixels")
+        if pixels is None:
+            return None, None
+        x = float(pixels.attrib["PhysicalSizeX"]) if pixels.attrib.get("PhysicalSizeX") else None
+        y = float(pixels.attrib["PhysicalSizeY"]) if pixels.attrib.get("PhysicalSizeY") else x
+        return (
+            _unit_to_micrometres(x, pixels.attrib.get("PhysicalSizeXUnit")),
+            _unit_to_micrometres(y, pixels.attrib.get("PhysicalSizeYUnit")),
+        )
+    except (ET.ParseError, TypeError, ValueError):
+        return None, None
+
+
+def _build_rgb_ome_xml(
+    image_name: str,
+    width: int,
+    height: int,
+    dtype_name: str,
+    mpp_x: float | None,
+    mpp_y: float | None,
+) -> str:
+    physical = ""
+    if mpp_x is not None and mpp_y is not None:
+        physical = (
+            f' PhysicalSizeX="{mpp_x:.12g}" PhysicalSizeXUnit="µm"'
+            f' PhysicalSizeY="{mpp_y:.12g}" PhysicalSizeYUnit="µm"'
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+        f'<Image ID="Image:0" Name="{escape(image_name, {chr(34): "&quot;"})}">'
+        f'<Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="{_ome_dtype(dtype_name)}"'
+        f' SizeX="{width}" SizeY="{height}" SizeC="3" SizeZ="1" SizeT="1"'
+        f' Interleaved="true"{physical}>'
+        '<Channel ID="Channel:0:0" Name="RGB" SamplesPerPixel="3"><LightPath/></Channel>'
+        '<TiffData IFD="0" PlaneCount="1"/>'
+        '</Pixels></Image></OME>'
+    )
+
+
+def _ensure_explicit_rgb_ome_tiff(
+    path: Path,
+    channel_order: str,
+    compression: str,
+    quality: int,
+    tile: int,
+) -> str:
+    """Stream a three-plane grayscale OME-TIFF into explicit RGB storage.
+
+    Bio-Formats commonly preserves brightfield VSI colour as three CYX
+    MINISBLACK planes.  This is scientifically valid OME data but ambiguous to
+    generic pathology readers.  The rewrite joins those planes into canonical
+    interleaved RGB while preserving physical calibration and a SubIFD pyramid.
+    """
+    import tifffile
+
+    order = _normalize_channel_order(channel_order)
+    with tifffile.TiffFile(str(path)) as tif:
+        if not tif.series:
+            raise RuntimeError(f"Converted TIFF contains no image series: {path}")
+        series = tif.series[0]
+        axes = str(getattr(series, "axes", "") or "")
+        shape = tuple(int(value) for value in series.shape)
+        page = series.pages[0]
+        photometric = str(getattr(getattr(page, "photometric", None), "name", getattr(page, "photometric", ""))).upper()
+        samples_per_pixel = int(getattr(page, "samplesperpixel", 1) or 1)
+        channel_axis = "C" if "C" in axes else ("S" if "S" in axes else "")
+        channel_count = shape[axes.index(channel_axis)] if channel_axis else samples_per_pixel
+        if _is_rgb_compatible_photometric(photometric) and channel_count == 3:
+            return "already-rgb-compatible"
+        if channel_count != 3 or len(series.pages) < 3:
+            raise RuntimeError(
+                "Planar brightfield image cannot be converted to RGB automatically: "
+                f"axes={axes!r} shape={shape} photometric={photometric!r} "
+                f"channels={channel_count} pages={len(series.pages)}."
+            )
+        width = shape[axes.index("X")]
+        height = shape[axes.index("Y")]
+        dtype_name = str(series.dtype)
+        mpp_x, mpp_y = _ome_physical_sizes_micrometres(tif.ome_metadata)
+
+    if mpp_x is None or mpp_y is None:
+        raise RuntimeError(
+            "Cannot normalize planar brightfield channels to RGB without physical pixel-size metadata."
+        )
+
+    try:
+        import pyvips
+    except Exception as exc:
+        raise RuntimeError("Planar RGB normalization requires pyvips in the runtime image.") from exc
+
+    source_planes = [
+        pyvips.Image.new_from_file(str(path), access="sequential", page=idx)
+        for idx in range(3)
+    ]
+    rgb_indices = _rgb_indices_from_source_order(order)
+    rgb_planes = [source_planes[idx] for idx in rgb_indices]
+    image = rgb_planes[0].bandjoin(rgb_planes[1:]).copy(
+        interpretation="srgb",
+        xres=1000.0 / mpp_x,
+        yres=1000.0 / mpp_y,
+    )
+    ome_xml = _build_rgb_ome_xml(path.name, width, height, dtype_name, mpp_x, mpp_y)
+    image.set_type(pyvips.GValue.gstr_type, "image-description", ome_xml)
+
+    normalized_compression = _normalize_compression(compression)
+    if normalized_compression == "uncompressed":
+        normalized_compression = "none"
+    save_kwargs = dict(
+        tile=True,
+        tile_width=tile,
+        tile_height=tile,
+        pyramid=True,
+        subifd=True,
+        bigtiff=True,
+        compression=normalized_compression,
+        properties=False,
+        resunit="cm",
+    )
+    if normalized_compression == "jpeg":
+        save_kwargs["Q"] = quality
+    elif normalized_compression in {"deflate", "lzw"}:
+        save_kwargs["predictor"] = "horizontal"
+
+    temporary = path.with_name(f".{path.name}.rgb-normalizing.tif")
+    try:
+        image.tiffsave(str(temporary), **save_kwargs)
+        with tifffile.TiffFile(str(temporary)) as tif:
+            series = tif.series[0]
+            page = series.pages[0]
+            observed_photometric = str(
+                getattr(getattr(page, "photometric", None), "name", getattr(page, "photometric", ""))
+            ).upper()
+            # TIFF/JPEG stores three-channel colour as YCbCr even when the
+            # source image and OME channel contract are canonical RGB.  All
+            # standard TIFF readers decode those samples back to RGB, so both
+            # tags are valid RGB-compatible storage.  Lossless TIFF codecs
+            # retain the literal RGB photometric tag.
+            if (
+                not _is_rgb_compatible_photometric(observed_photometric)
+                or int(getattr(page, "samplesperpixel", 1) or 1) != 3
+                or not tif.ome_metadata
+                or len(getattr(series, "levels", ()) or ()) < 2
+            ):
+                raise RuntimeError(
+                    "RGB normalization did not produce a three-sample RGB-compatible "
+                    "pyramidal OME-TIFF: "
+                    f"photometric={observed_photometric!r} "
+                    f"samples={getattr(page, 'samplesperpixel', None)} "
+                    f"ome={bool(tif.ome_metadata)} levels={len(getattr(series, 'levels', ()) or ())}."
+                )
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+    return f"planar-{order}-to-interleaved-RGB"
 
 
 def _parse_input_region(raw_value: str) -> tuple[str, int | None]:
@@ -191,7 +413,15 @@ def _convert_czi(src: Path, dst: Path, compression: str, tile: int, input_region
     return f"{backend}+{backend_name}(scene={selected_name})"
 
 
-def _convert_vsi(src: Path, dst: Path, compression: str, quality: int, series_index: int) -> str:
+def _convert_vsi(
+    src: Path,
+    dst: Path,
+    compression: str,
+    quality: int,
+    series_index: int,
+    channel_order: str,
+    tile: int,
+) -> str:
     """Convert an Olympus VSI and its sibling _<stem>_ data directory.
 
     VSI headers are not self-contained. Bio-Formats resolves the companion
@@ -248,7 +478,14 @@ def _convert_vsi(src: Path, dst: Path, compression: str, quality: int, series_in
         command.extend([str(zarr_dir), str(dst)])
         subprocess.run(command, check=True)
 
-    return f"bioformats2raw+raw2ometiff(series={series_index})"
+    rgb_backend = _ensure_explicit_rgb_ome_tiff(
+        dst,
+        channel_order=channel_order,
+        compression=compression,
+        quality=quality,
+        tile=tile,
+    )
+    return f"bioformats2raw+raw2ometiff(series={series_index})+{rgb_backend}"
 
 
 def _convert_with_pyvips(src: Path, dst: Path, compression: str, tile: int, quality: int, pyramid: bool) -> str:
@@ -323,7 +560,15 @@ def _convert_with_pillow(src: Path, dst: Path, compression: str, quality: int) -
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert generic image inputs to TIFF with configurable compression.")
     parser.add_argument("--input", required=True, help="Input image path.")
-    parser.add_argument("--output", required=True, help="Output TIFF path.")
+    parser.add_argument("--output", help="Output TIFF path.")
+    parser.add_argument(
+        "--normalize-existing",
+        action="store_true",
+        help=(
+            "Normalize --input in place when it contains three planar grayscale "
+            "brightfield channels; explicit RGB/YCbCr inputs are unchanged."
+        ),
+    )
     parser.add_argument("--input-region", default="", help="Optional input region selector (used for CZI scene extraction).")
     parser.add_argument("--compression", default="jpeg", help="TIFF compression (default: jpeg).")
     parser.add_argument("--quality", type=int, default=90, help="JPEG quality for lossy TIFF compression (default: 90).")
@@ -335,9 +580,33 @@ def main() -> None:
         default=1,
         help="Bio-Formats series containing the primary Olympus VSI WSI (default: 1).",
     )
+    parser.add_argument(
+        "--channel-order",
+        default="RGB",
+        type=_normalize_channel_order,
+        help=(
+            "Meaning of source planes before canonical RGB output (default: RGB). "
+            "Allowed values: RGB, RBG, GRB, GBR, BRG, BGR."
+        ),
+    )
     args = parser.parse_args()
 
     src = Path(args.input)
+    if args.normalize_existing:
+        backend = _ensure_explicit_rgb_ome_tiff(
+            src,
+            channel_order=args.channel_order,
+            compression=args.compression,
+            quality=args.quality,
+            tile=args.tile,
+        )
+        print(
+            f"[INFO] RGB normalization for {src.name}: {backend} "
+            f"(channel_order={args.channel_order})"
+        )
+        return
+    if not args.output:
+        parser.error("--output is required unless --normalize-existing is used")
     dst = Path(args.output)
     dst.parent.mkdir(parents=True, exist_ok=True)
 
@@ -350,10 +619,18 @@ def main() -> None:
         return
 
     if src.suffix.lower() == ".vsi":
-        backend = _convert_vsi(src, dst, args.compression, args.quality, args.vsi_series_index)
+        backend = _convert_vsi(
+            src,
+            dst,
+            args.compression,
+            args.quality,
+            args.vsi_series_index,
+            args.channel_order,
+            args.tile,
+        )
         print(
             f"[INFO] Converted {src.name} -> {dst.name} with {backend} "
-            f"(compression={args.compression}, pyramid=True)"
+            f"(compression={args.compression}, pyramid=True, channel_order={args.channel_order})"
         )
         return
 

@@ -118,6 +118,7 @@ nextflow run main.nf -profile singularity \
 | `roi_geojson` | `null` | Single-sample ROI GeoJSON path. Ignored when `folder_input` is set. |
 | `outdir_base` | `results` | Base output directory. |
 | `vsi_series_index` | `1` | Bio-Formats series containing the primary whole-slide image for Olympus VSI input. The prostate VSI files use series 1; change only after inspecting another scanner export. |
+| `convert_channel_order` | `RGB` | Meaning of source planes when a three-plane brightfield image must be joined. Accepts `RGB`, `RBG`, `GRB`, `GBR`, `BRG`, or `BGR`; the normalized pyramidal OME-TIFF always decodes to canonical RGB. JPEG-in-TIFF uses standard `YCbCr` storage, while lossless codecs retain an `RGB` photometric tag. |
 | `storage_preflight_mode` | `fail` | `off`, `warn`, or `fail`. The default rejects expected output/work/cache demand that cannot fit while restart-only insufficiency is a review warning. |
 | `storage_min_free_gib` | `20.0` | Per-filesystem free-space reserve retained after estimated demand. |
 | `storage_safety_factor` | `1.25` | Safety multiplier for expected published-output and Nextflow-work growth. |
@@ -238,7 +239,7 @@ The `convert` stage validates physical pixel size before doing expensive convers
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `convert_compression` | `LZW` | Compression mode. |
+| `convert_compression` | `JPEG` | Compression mode. JPEG-in-TIFF stores canonical colour as `YCbCr` and readers decode it to RGB; choose a lossless codec when a literal `RGB` photometric tag is required. |
 | `convert_downsample` | `GAUSSIAN` | Pyramid downsample algorithm. |
 | `convert_rgb` | `true` | Convert to RGB. |
 | `convert_overwrite` | `true` | Overwrite output if existing. |

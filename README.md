@@ -12,7 +12,7 @@ Its primary intended use is research-only exploratory multimodal characterizatio
 
 The map distinguishes artifact QC, role-aware multi-detector instance fusion, virtual mIF, TMA analysis, cell-centred and spatial-grid UNI-2 routes, and tissue interpretation. See the [metro-map sources and regeneration instructions](docs/pipeline_metro/README.md) for the curated definition, technical Nextflow DAG, and interactive version.
 
-Before analysis, the conversion stage writes source and converted input-QC JSON reports. They record full-file SHA-256, dimensions, axes, dtype, bit depth, channel/color interpretation, compression, tiling, pyramid levels, all detected physical-resolution sources and any conflicts. Strict defaults reject missing or implausible MPP, anisotropic pixels, contradictory MPP sources without a verified override, non-color converted inputs and non-pyramidal converted images. Three-channel JPEG-in-TIFF `YCbCr` is accepted as RGB-compatible storage. The shared `crop_roi.tif` is also written automatically as a lossless, tiled SubIFD pyramid; its level geometry, compression and physical calibration are validated before publication and recorded in `crop_summary.json`.
+Before analysis, the conversion stage writes source and converted input-QC JSON reports. They record full-file SHA-256, dimensions, axes, dtype, bit depth, channel/color interpretation, compression, tiling, pyramid levels, all detected physical-resolution sources and any conflicts. Strict defaults reject missing or implausible MPP, anisotropic pixels, contradictory MPP sources without a verified override, non-color converted inputs and non-pyramidal converted images. Brightfield inputs represented as three planar `MINISBLACK` channels, including this layout when exported from Olympus VSI by Bio-Formats, are automatically streamed into an interleaved, pyramidal OME-TIFF with canonical RGB channel order. Source planes are interpreted as `RGB` by default; `--convert_channel_order` accepts any RGB permutation when a scanner exports a different plane order. Lossless TIFF compression retains the literal `RGB` photometric tag; JPEG-in-TIFF uses standard `YCbCr` storage and is decoded to the same canonical RGB samples for analysis. The shared `crop_roi.tif` is also written automatically as a lossless, tiled SubIFD pyramid; its level geometry, compression and physical calibration are validated before publication and recorded in `crop_summary.json`.
 
 After a run, begin with `00_execution/index.html`. The review-first landing page places failed or review-required quality signals and the permitted claim ceiling before the image gallery, then links runtimes, disk use and every indexed output. Open `00_execution/specimen_atlas.html` for a specimen-by-specimen review of source morphology, analysis support, cell instances, virtual markers, tissue domains, uncertainty, boundary refinement and optional research endpoints. Every atlas panel states its observation route, unit and interpretation limit; absent layers remain explicit.
 
@@ -630,6 +630,11 @@ python bin/run_sample_batch.py \
 ```
 
 Olympus `.vsi` inputs are supported when the VSI header and its required
-`_<sample>_` companion directory remain together in the input folder.
+`_<sample>_` companion directory remain together in the input folder. When the
+selected series is stored as three grayscale planes, CellPhenotyper joins them
+into explicit RGB automatically. The source planes are assumed to be `RGB`; use
+`--convert_channel_order BGR` (or another RGB permutation) only when scanner
+metadata or visual QC establishes a different source order. The published
+OME-TIFF is always canonical RGB.
 
 See `OUTPUT.md` for the complete stage 16-18 artifacts and `PARAMETERS.md` for restart points. A restart at `titan` reuses stage 16; a restart at `pathofmpred` reuses the existing TITAN CSV.

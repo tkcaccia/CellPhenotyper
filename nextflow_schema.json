@@ -139,6 +139,12 @@
           "default": 1,
           "description": "Bio-Formats series containing the primary whole-slide image in an Olympus VSI input."
         },
+        "convert_channel_order": {
+          "type": "string",
+          "enum": ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"],
+          "default": "RGB",
+          "description": "Meaning of the three source planes during planar colour conversion. Output always decodes to canonical RGB; JPEG-in-TIFF may use standard YCbCr storage."
+        },
         "publish_dir_mode": {
           "type": "string",
           "enum": ["copy", "rellink"],

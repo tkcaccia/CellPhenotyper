@@ -7,6 +7,7 @@
 # Single-sample mode: set `image_input` (and optionally `roi_geojson`).
 image_input: null
 vsi_series_index: 1  # Olympus VSI primary whole-slide series; these prostate scans use series 1
+convert_channel_order: RGB  # source-plane order; output is always canonical interleaved RGB
 roi_geojson: null
 folder_input: Data
 

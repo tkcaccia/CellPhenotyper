@@ -121,11 +121,22 @@ PY
         --compression "${params.convert_compression}" \
         --quality ${params.convert_jpeg_quality} \
         --vsi-series-index ${params.vsi_series_index} \
+        --channel-order ${params.convert_channel_order} \
         ${params.convert_pyramid ? '--pyramid' : ''} \
         --tile 512
     fi
 
     [[ -s "${sample_id}.ome.tif" ]] || { echo "Converted OME-TIFF missing or empty: ${sample_id}.ome.tif" >&2; exit 1; }
+
+    if [[ "${params.convert_rgb}" == "true" ]]; then
+      python "${generic_converter_script}" \
+        --input "${sample_id}.ome.tif" \
+        --normalize-existing \
+        --compression "${params.convert_compression}" \
+        --quality ${params.convert_jpeg_quality} \
+        --channel-order ${params.convert_channel_order} \
+        --tile 512
+    fi
 
     if [[ "${params.input_resolution_check}" == "true" ]]; then
       python "${resolution_validator_script}" \
