@@ -363,21 +363,29 @@ def validate_crop_pyramid(
         observed = tuple(shapes[0])
         if observed != tuple(map(int, expected_shape)):
             raise RuntimeError(f"Crop shape mismatch: expected={expected_shape} observed={observed}")
-        expected_levels = 1 + len(pyramid_level_shapes(*expected_shape, tile_size))
-        if len(shapes) != expected_levels:
+        pyramid_required = max(map(int, expected_shape)) > int(tile_size)
+        if pyramid_required and len(shapes) < 2:
             raise RuntimeError(
-                f"ROI crop pyramid is incomplete: expected_levels={expected_levels} "
-                f"observed_levels={len(shapes)}"
+                "ROI crop pyramid is incomplete: a reduced level is required for "
+                f"shape={expected_shape} and tile_size={tile_size}"
             )
         if not tif.pages[0].is_tiled:
             raise RuntimeError("ROI crop level 0 must be tiled")
         for previous_shape, current_shape in zip(shapes, shapes[1:]):
-            expected_reduced = [(previous_shape[0] + 1) // 2, (previous_shape[1] + 1) // 2]
-            if current_shape != expected_reduced:
+            allowed_y = {max(1, previous_shape[0] // 2), max(1, (previous_shape[0] + 1) // 2)}
+            allowed_x = {max(1, previous_shape[1] // 2), max(1, (previous_shape[1] + 1) // 2)}
+            if current_shape[0] not in allowed_y or current_shape[1] not in allowed_x:
                 raise RuntimeError(
-                    f"ROI crop pyramid geometry is invalid: expected={expected_reduced} "
+                    "ROI crop pyramid geometry is invalid: expected each axis to be "
+                    f"floor/ceil(previous/2), allowed_y={sorted(allowed_y)} "
+                    f"allowed_x={sorted(allowed_x)} "
                     f"observed={current_shape}"
                 )
+        if pyramid_required and max(shapes[-1]) > int(tile_size):
+            raise RuntimeError(
+                "ROI crop pyramid is incomplete: smallest overview still exceeds one tile, "
+                f"last_shape={shapes[-1]} tile_size={tile_size}"
+            )
         page = tif.pages[0]
         compression = getattr(page.compression, "name", str(page.compression))
         resolution_mpp = None
@@ -397,7 +405,7 @@ def validate_crop_pyramid(
                     f"ROI crop MPP mismatch: expected={source_mpp} observed={resolution_mpp}"
                 )
         return {
-            "required": expected_levels > 1,
+            "required": pyramid_required,
             "validated": True,
             "level_count": len(shapes),
             "level_shapes_yx": shapes,

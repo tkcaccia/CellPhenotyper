@@ -212,6 +212,35 @@ def test_crop_pyramid_validation_rejects_flat_wsi_crop(tmp_path: Path) -> None:
         module.validate_crop_pyramid(output, (513, 600), source_mpp=None)
 
 
+def test_crop_pyramid_validation_accepts_floor_halving_for_odd_libvips_levels(tmp_path: Path) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "prepare_analysis_crop_floor_pyramid", ROOT / "bin" / "prepare_analysis_crop.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    output = tmp_path / "floor_halved_crop.tif"
+    with tifffile.TiffWriter(output, bigtiff=True) as tif:
+        tif.write(
+            np.zeros((513, 601, 3), dtype=np.uint8),
+            photometric="rgb",
+            tile=(32, 32),
+            subifds=1,
+            metadata=None,
+        )
+        tif.write(
+            np.zeros((256, 300, 3), dtype=np.uint8),
+            photometric="rgb",
+            tile=(32, 32),
+            subfiletype=1,
+            metadata=None,
+        )
+
+    receipt = module.validate_crop_pyramid(output, (513, 601), source_mpp=None)
+    assert receipt["level_shapes_yx"] == [[513, 601], [256, 300]]
+
+
 def test_crop_pyramid_validation_requires_mpp_tags_when_calibrated(tmp_path: Path) -> None:
     spec = importlib.util.spec_from_file_location(
         "prepare_analysis_crop_missing_mpp", ROOT / "bin" / "prepare_analysis_crop.py"
