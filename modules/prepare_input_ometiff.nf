@@ -24,6 +24,7 @@ process PREPARE_INPUT_OMETIFF {
     def staged_image_name = image_file.getName()
     def is_ome = image_name.endsWith('.ome.tif') || image_name.endsWith('.ome.tiff')
     def is_btf = image_name.endsWith('.btf')
+    def is_vsi = image_name.endsWith('.vsi')
     def is_tiff_like = image_name.endsWith('.tif') || image_name.endsWith('.tiff')
     def rgb_flag = params.convert_rgb ? '--rgb' : ''
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
@@ -34,6 +35,7 @@ process PREPARE_INPUT_OMETIFF {
     def resolution_hash_flag = params.input_hash_enable ? '' : '--skip-file-hash'
     def converted_rgb_requirement = params.input_require_rgb ? '--require-rgb' : ''
     def converted_pyramid_requirement = params.input_require_pyramid ? '--require-pyramid' : ''
+    def reference_report_flag = is_vsi ? '' : "--reference-report ${sample_id}.source_resolution.json"
     def codeFingerprint = PipelineHelpers.codeFingerprint([
       resolution_validator_script,
       generic_converter_script,
@@ -72,7 +74,10 @@ PY
       export PYTHONPATH="\$CONVERT_PYDEPS:\${PYTHONPATH:-}"
     fi
 
-    if [[ "${params.input_resolution_check}" == "true" ]]; then
+    if [[ "${params.input_resolution_check}" == "true" && "${is_vsi}" == "true" ]]; then
+      printf '{"schema_version":2,"image":"%s","status":"deferred_to_selected_vsi_series","vsi_series_index":%s,"effective_mpp":null,"strict":true}\n' \
+        "${staged_image_name}" "${params.vsi_series_index}" > "${sample_id}.source_resolution.json"
+    elif [[ "${params.input_resolution_check}" == "true" ]]; then
       python "${resolution_validator_script}" \
         --image "${staged_image_name}" \
         --report "${sample_id}.source_resolution.json" \
@@ -126,7 +131,7 @@ PY
       python "${resolution_validator_script}" \
         --image "${sample_id}.ome.tif" \
         --report "${sample_id}.converted_resolution.json" \
-        --reference-report "${sample_id}.source_resolution.json" \
+        ${reference_report_flag} \
         --min-mpp ${params.input_resolution_min_mpp} \
         --max-mpp ${params.input_resolution_max_mpp} \
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
