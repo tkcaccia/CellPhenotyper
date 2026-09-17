@@ -18,6 +18,22 @@ def test_growth_and_medsam_receive_stardist_resolution_sidecar() -> None:
     assert '--resolution-json "${resolution_json}"' in grow
     assert "path(resolution_json)" in medsam
     assert '--resolution-json "${resolution_json}"' in medsam
+    assert "params.input_resolution_override_mpp as double" in medsam
+    assert '--default-mpp ${authoritativeMpp}' in medsam
+    assert "path(cluster_mask_tif, stageAs: 'seed_cluster_mask.tif')" in medsam
+    assert "path(grown_mask_tif, stageAs: 'baseline_grown_mask.ome.tif')" in medsam
+    assert "tissue_mask_variant_ch" in spatial
+    assert "path(tissue_mask_tif)" in medsam
+    assert '--tissue-mask "${tissue_mask_tif}"' in medsam
+    medsam_script = (ROOT / "bin/refine_grown_tissue_medsam.py").read_text(encoding="utf-8")
+    medsam_core = (ROOT / "bin/medsam_border_refine.py").read_text(encoding="utf-8")
+    assert "allowed_support_mask=tissue_support" in medsam_script
+    assert "allowed_support_mask=tile_tissue" in medsam_script
+    assert "final_outside_allowed_support_pixels" in medsam_core
+    assert "label_outer &= allowed_support" in medsam_core
+    assert "background_mask = _obvious_background_mask(image) | ~allowed_support" in medsam_core
+    assert "final_mask &= allowed_support" in medsam_core
+    assert "final_labels[~allowed_support] = 0" in medsam_core
 
 
 def test_neoplastic_section_uses_validated_bioformats_ome_output() -> None:

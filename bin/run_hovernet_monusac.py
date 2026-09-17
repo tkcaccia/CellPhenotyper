@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hardware_runtime import auto_batch_from_free_vram
 
 
 MONUSAC_TYPE_INFO = {
@@ -18,6 +23,19 @@ MONUSAC_TYPE_INFO = {
     "2": ["lymphocyte", [0, 0, 255]],
     "3": ["macrophage", [0, 255, 0]],
     "4": ["neutrophil", [255, 255, 0]],
+}
+
+MONUSAC_MODEL_SCOPE = {
+    "target": "MoNuSAC-annotated epithelial, lymphocyte, macrophage, and neutrophil nuclei",
+    "exhaustive_nuclei_detector": False,
+    "known_omissions": [
+        "fibroblasts and other nuclei not annotated as positive classes in MoNuSAC",
+    ],
+    "interpretation": (
+        "This checkpoint is not expected to return the same total nucleus count as "
+        "a general-purpose detector. Use its detections as class-specific supporting evidence."
+    ),
+    "reference": "https://github.com/simongraham/hovernet_inference#datasets",
 }
 
 
@@ -39,23 +57,12 @@ def read_source_mpp(shift_path: Path, fallback: float) -> float:
 
 
 def auto_batch_size(requested: int, gpu: str) -> int:
-    if requested > 0:
-        return requested
-    try:
-        output = subprocess.check_output(
-            ["nvidia-smi", "-i", str(gpu), "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            text=True,
-        )
-        memory_mib = int(output.strip().splitlines()[0])
-    except Exception:
-        return 16
-    if memory_mib >= 70 * 1024:
-        return 128
-    if memory_mib >= 40 * 1024:
-        return 64
-    if memory_mib >= 20 * 1024:
-        return 32
-    return 16
+    return auto_batch_from_free_vram(
+        requested,
+        gpu,
+        tiers=((68 * 1024, 128), (38 * 1024, 64), (18 * 1024, 32)),
+        fallback=16,
+    )
 
 
 def objective_power_for_mpp(mpp: float) -> int:
@@ -72,6 +79,24 @@ def require_readable_file(path: Path, label: str) -> None:
         raise FileNotFoundError(f"{label} not found: {path}")
     if not os.access(path, os.R_OK):
         raise PermissionError(f"{label} is not readable by uid {os.geteuid()}: {path}")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def git_revision(repo: Path) -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        return None
 
 
 def prepare_runtime_repo(repo: Path, outdir: Path) -> Path:
@@ -159,6 +184,24 @@ def make_pyramidal_input(src: Path, dst: Path, scale: float, target_mpp: float) 
     return original
 
 
+def make_inference_mask(src: Path, dst: Path) -> tuple[int, int]:
+    """Convert the shared clean-tissue mask to HoVer-Net's named PNG contract."""
+    import pyvips
+
+    mask = pyvips.Image.new_from_file(str(src), access="sequential")
+    if mask.bands > 1:
+        mask = mask[0]
+    mask = (mask > 0).ifthenelse(255, 0).cast("uchar")
+    mask.pngsave(str(dst), compression=6)
+    return mask.width, mask.height
+
+
+def inference_mask_args(mask_dir: Path | None) -> list[str]:
+    if mask_dir is None:
+        return []
+    return [f"--input_mask_dir={mask_dir}", "--save_mask", "--save_thumb"]
+
+
 def normalize_output(raw_json: Path, output_json: Path, inverse_scale: float, metadata: dict) -> None:
     raw = json.loads(raw_json.read_text())
     instances = raw.get("nuclei", raw.get("nuc", raw)) if isinstance(raw, dict) else raw
@@ -200,6 +243,7 @@ def main() -> None:
     parser.add_argument("--chunk-shape", type=int, default=10000)
     parser.add_argument("--tile-shape", type=int, default=2048)
     parser.add_argument("--prediction-cache", default="")
+    parser.add_argument("--clean-tissue-mask", default="")
     args = parser.parse_args()
 
     # HoVer-Net is launched from its repository, so every task-local path must
@@ -220,6 +264,15 @@ def main() -> None:
     scale = source_mpp / args.target_mpp
     normalized_slide = input_dir / "hovernet_input.tif"
     width, height = make_pyramidal_input(image, normalized_slide, scale, args.target_mpp)
+    clean_tissue_mask = Path(args.clean_tissue_mask).resolve() if args.clean_tissue_mask else None
+    inference_mask_dir = outdir / "input_mask"
+    inference_mask_shape = None
+    if clean_tissue_mask is not None:
+        require_readable_file(clean_tissue_mask, "GrandQC clean-tissue mask")
+        inference_mask_dir.mkdir(exist_ok=True)
+        inference_mask_shape = make_inference_mask(
+            clean_tissue_mask, inference_mask_dir / f"{normalized_slide.stem}.png",
+        )
     # Upstream initializes debug.log in its current directory. The bundled
     # repository is read-only in Singularity, so always run an isolated copy.
     runtime_repo = prepare_runtime_repo(repo, outdir)
@@ -244,6 +297,7 @@ def main() -> None:
         "wsi", f"--input_dir={input_dir}", f"--output_dir={raw_dir}", f"--cache_path={cache_dir}",
         "--proc_mag=40", f"--chunk_shape={args.chunk_shape}", f"--tile_shape={args.tile_shape}",
     ]
+    cmd += inference_mask_args(inference_mask_dir if clean_tissue_mask is not None else None)
     env = os.environ.copy()
     runtime_cache_dir = outdir / "runtime_cache"
     (runtime_cache_dir / "matplotlib").mkdir(parents=True, exist_ok=True)
@@ -256,15 +310,49 @@ def main() -> None:
     if not candidates:
         raise RuntimeError(f"HoVer-Net produced no instance JSON under {raw_dir}")
     raw_json = next((p for p in candidates if p.stem == normalized_slide.stem), candidates[0])
+    checkpoint_sha256 = file_sha256(checkpoint)
+    upstream_revision = git_revision(repo)
     metadata = {
         "source_mpp": source_mpp, "target_mpp": args.target_mpp, "coordinate_scale": scale,
         "source_width": width, "source_height": height, "batch_size": batch_size,
+        "checkpoint_path": str(checkpoint),
+        "checkpoint_sha256": checkpoint_sha256,
+        "upstream_revision": upstream_revision,
+        "model_provenance": {
+            "source_repository": "https://github.com/vqdang/hover_net",
+            "requested_revision": None,
+            "resolved_revision": upstream_revision,
+            "cache_path": str(checkpoint.parent),
+            "checkpoints": [{
+                "logical_name": "MoNuSAC",
+                "cache_path": str(checkpoint),
+                "filename": checkpoint.name,
+                "size_bytes": int(checkpoint.stat().st_size),
+                "sha256": checkpoint_sha256,
+                "status": "verified",
+            }],
+        },
+        "model_scope": MONUSAC_MODEL_SCOPE,
+        "inference_tissue_mask": {
+            "source": "grandqc_clean_tissue" if clean_tissue_mask is not None else "upstream_otsu",
+            "path": str(clean_tissue_mask) if clean_tissue_mask is not None else None,
+            "shape_xy": list(inference_mask_shape) if inference_mask_shape is not None else None,
+        },
     }
     # Always emit one stable schema, even when no coordinate rescaling is needed.
-    normalize_output(raw_json, outdir / "hovernet_cells.json", 1.0 / scale, metadata)
+    normalized_path = outdir / "hovernet_cells.json"
+    normalize_output(raw_json, normalized_path, 1.0 / scale, metadata)
+    if args.clean_tissue_mask:
+        from grandqc_mask import filter_cell_payload
+        payload, filter_summary = filter_cell_payload(
+            json.loads(normalized_path.read_text()), args.clean_tissue_mask, shift,
+        )
+        normalized_path.write_text(json.dumps(payload))
+        metadata["grandqc_filter"] = filter_summary
     (outdir / "hovernet_metadata.json").write_text(json.dumps(metadata, indent=2))
     shutil.rmtree(cache_dir, ignore_errors=True)
     shutil.rmtree(input_dir, ignore_errors=True)
+    shutil.rmtree(inference_mask_dir, ignore_errors=True)
     shutil.rmtree(runtime_cache_dir, ignore_errors=True)
     if runtime_repo != repo:
         shutil.rmtree(runtime_repo, ignore_errors=True)

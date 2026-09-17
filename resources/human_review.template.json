@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "review_id": "",
+  "study_id": "",
+  "run_name": "",
+  "review_date_utc": "",
+  "reviewer": {
+    "role": "",
+    "expertise": "",
+    "independent_of_pipeline_development": false,
+    "blinded_to_outcomes": false
+  },
+  "review_scope": {
+    "analysis_intent": "exploratory",
+    "sample_codes": [],
+    "sampling_plan": "",
+    "sampling_seed": null,
+    "all_failed_gates_reviewed": false,
+    "all_exclusions_reviewed": false
+  },
+  "run_identity": {
+    "pipeline_commit": "",
+    "container_digests": [],
+    "analysis_contract_path": "",
+    "project_outputs_path": "",
+    "project_outputs_sha256": ""
+  },
+  "stage_decisions": [
+    {
+      "stage": "input_and_roi",
+      "decision": "pending",
+      "evidence_output_ids": [],
+      "unacceptable_failures": [],
+      "limitations": [],
+      "comments": ""
+    }
+  ],
+  "overall": {
+    "decision": "pending",
+    "approved_claim_ceiling": "engineering_feasibility_and_exploratory_description_only",
+    "limitations": [],
+    "required_follow_up": []
+  },
+  "privacy_confirmation": {
+    "contains_no_direct_patient_identifiers": false,
+    "review_assets_follow_study_access_policy": false
+  }
+}

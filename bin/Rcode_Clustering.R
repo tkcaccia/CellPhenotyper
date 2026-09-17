@@ -7,11 +7,14 @@ if (length(args) < 2L) {
   stop(paste(
     "Usage: Rscript Rcode_Clustering.R <kodama_dir> <out_csv>",
     "[--dim N] [--k N] [--algorithm louvain|leiden|walktrap]",
+    "[--cluster-representation umap2d|pca|kodama_graph] [--cluster-dimensions N] [--compare-with-clusters CSV]",
     "[--target-clusters N] [--landmark-cells N] [--landmark-assign-k N]",
     "[--landmark-sample-strategy random|grid|knn_inverse_distance]",
     "[--landmark-density-knn-k N] [--landmark-density-power X]",
     "[--walktrap-clusters N] [--resolution auto|X]",
-    "[--profile standard|fine]"
+    "[--profile standard|fine] [--seed N] [--stability-runs N]",
+    "[--assignment-min-vote-margin X] [--stability-min-fraction X]",
+    "[--abstain-uncertain true|false]"
   ))
 }
 
@@ -19,6 +22,9 @@ kodama_dir <- args[1]
 out_csv <- args[2]
 
 selected_file_dim <- 20L
+cluster_representation <- "umap2d"
+cluster_dimensions <- 0L
+comparison_clusters <- NULL
 requested_k <- 50L
 cluster_algorithm <- "leiden"
 target_clusters <- 0L
@@ -38,6 +44,12 @@ leiden_objective <- "modularity"
 resolution_grid <- c(0.005, 0.01, 0.02, 0.03, 0.04, 0.05)
 score_margin <- 0.015
 cluster_profile <- "standard"
+clustering_seed <- 1L
+stability_runs <- 3L
+assignment_min_vote_margin <- 0.10
+stability_min_fraction <- 0.67
+abstain_uncertain <- FALSE
+active_seed <- clustering_seed
 fine_resolution_multiplier <- 1.35
 fine_score_margin <- 0.03
 fine_resolution_max <- 1.20
@@ -50,6 +62,21 @@ if (length(args) > 2L) {
   i <- 3L
   while (i <= length(args)) {
     flag <- args[i]
+    if (flag == "--cluster-representation" && i + 1L <= length(args)) {
+      cluster_representation <- tolower(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--cluster-dimensions" && i + 1L <= length(args)) {
+      cluster_dimensions <- suppressWarnings(as.integer(args[i + 1L]))
+      i <- i + 2L
+      next
+    }
+    if (flag == "--compare-with-clusters" && i + 1L <= length(args)) {
+      comparison_clusters <- args[i + 1L]
+      i <- i + 2L
+      next
+    }
     if (flag == "--dim" && i + 1L <= length(args)) {
       selected_file_dim <- as.integer(args[i + 1L])
       i <- i + 2L
@@ -133,6 +160,32 @@ if (length(args) > 2L) {
       i <- i + 2L
       next
     }
+    if (flag == "--seed" && i + 1L <= length(args)) {
+      clustering_seed <- as.integer(args[i + 1L])
+      active_seed <- clustering_seed
+      i <- i + 2L
+      next
+    }
+    if (flag == "--stability-runs" && i + 1L <= length(args)) {
+      stability_runs <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--assignment-min-vote-margin" && i + 1L <= length(args)) {
+      assignment_min_vote_margin <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--stability-min-fraction" && i + 1L <= length(args)) {
+      stability_min_fraction <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--abstain-uncertain" && i + 1L <= length(args)) {
+      abstain_uncertain <- tolower(args[i + 1L]) %in% c("true", "1", "yes", "y", "on")
+      i <- i + 2L
+      next
+    }
     if (flag == "--fine-multiplier" && i + 1L <= length(args)) {
       fine_resolution_multiplier <- as.numeric(args[i + 1L])
       i <- i + 2L
@@ -157,6 +210,33 @@ if (length(args) > 2L) {
   }
 }
 
+if (!cluster_representation %in% c("umap2d", "pca", "kodama_graph")) {
+  stop("--cluster-representation must be umap2d, pca, or kodama_graph")
+}
+native_graph_mode <- identical(cluster_representation, "kodama_graph")
+if (native_graph_mode) {
+  if (cluster_algorithm != "leiden" || resolution_mode != "fixed" || cluster_profile != "standard")
+    stop("kodama_graph currently requires Leiden, fixed resolution and profile standard")
+  if (cluster_dimensions != 0L) stop("kodama_graph does not accept coordinate dimensions")
+  unsupported <- c("--k", "--walktrap-clusters", "--walktrap-max-cells", "--walktrap-assign-k",
+    "--landmark-assign-k", "--landmark-sample-strategy", "--landmark-density-knn-k",
+    "--landmark-density-power", "--landmark-grid-bins", "--landmark-grid-max-per-bin",
+    "--fine-multiplier", "--fine-score-margin", "--fine-resolution-max", "--fine-min-cluster-increase")
+  if (any(args %in% unsupported)) stop("kodama_graph does not rebuild a coordinate graph or accept landmark/fine options: ", paste(intersect(args, unsupported), collapse = ", "))
+  if ("--landmark-cells" %in% args && landmark_cells != 0L)
+    stop("kodama_graph requires all native observations; --landmark-cells must be 0 or omitted")
+  landmark_cells <- 0L
+  selected_script <- sub("^--file=", "", grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1L])
+  helper_directory <- dirname(normalizePath(selected_script, mustWork = TRUE))
+  source(file.path(helper_directory, "kodama_graph_export.R"))
+  source(file.path(helper_directory, "kodama_graph_clustering.R"))
+}
+if (!is.finite(cluster_dimensions) || (cluster_dimensions != 0L && cluster_dimensions < 3L)) {
+  stop("--cluster-dimensions must be 0 (all saved PCA scores) or >=3")
+}
+if (cluster_representation == "umap2d" && cluster_dimensions != 0L) {
+  stop("--cluster-dimensions applies only to pca; umap2d is the explicit two-dimensional baseline")
+}
 if (!is.finite(selected_file_dim) || selected_file_dim < 2L) {
   stop("--dim must be an integer >= 2.")
 }
@@ -220,6 +300,18 @@ if (!is.finite(fine_resolution_max) || fine_resolution_max <= 0) {
 if (!is.finite(fine_min_cluster_increase) || fine_min_cluster_increase < 1L) {
   stop("--fine-min-cluster-increase must be an integer >= 1.")
 }
+if (!is.finite(clustering_seed)) {
+  stop("--seed must be an integer.")
+}
+if (!is.finite(stability_runs) || stability_runs < 1L || stability_runs > 20L) {
+  stop("--stability-runs must be between 1 and 20.")
+}
+if (!is.finite(assignment_min_vote_margin) || assignment_min_vote_margin < 0 || assignment_min_vote_margin > 1) {
+  stop("--assignment-min-vote-margin must be between 0 and 1.")
+}
+if (!is.finite(stability_min_fraction) || stability_min_fraction < 0 || stability_min_fraction > 1) {
+  stop("--stability-min-fraction must be between 0 and 1.")
+}
 
 require_namespace <- function(pkg) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -227,10 +319,12 @@ require_namespace <- function(pkg) {
   }
 }
 
-require_namespace("bluster")
 require_namespace("igraph")
-require_namespace("cluster")
-if (landmark_cells > 0L) {
+if (!native_graph_mode) {
+  require_namespace("bluster")
+  require_namespace("cluster")
+}
+if (!native_graph_mode && landmark_cells > 0L) {
   require_namespace("BiocNeighbors")
 }
 
@@ -294,17 +388,66 @@ renumber_membership <- function(membership) {
   out
 }
 
+adjusted_rand_index <- function(reference, candidate) {
+  reference <- as.integer(reference)
+  candidate <- as.integer(candidate)
+  if (length(reference) != length(candidate) || length(reference) < 2L) {
+    return(NA_real_)
+  }
+  choose_two <- function(x) x * (x - 1) / 2
+  contingency <- table(reference, candidate)
+  pair_total <- choose_two(length(reference))
+  if (pair_total <= 0) return(NA_real_)
+  observed <- sum(choose_two(contingency))
+  row_pairs <- sum(choose_two(rowSums(contingency)))
+  column_pairs <- sum(choose_two(colSums(contingency)))
+  expected <- row_pairs * column_pairs / pair_total
+  upper <- 0.5 * (row_pairs + column_pairs)
+  denominator <- upper - expected
+  if (abs(denominator) < .Machine$double.eps) {
+    return(if (identical(reference, candidate)) 1 else 0)
+  }
+  as.numeric((observed - expected) / denominator)
+}
+
+align_membership_to_reference <- function(reference, candidate) {
+  reference <- as.integer(reference)
+  candidate <- as.integer(candidate)
+  contingency <- table(candidate, reference)
+  candidate_ids <- rownames(contingency)
+  reference_ids <- colnames(contingency)
+  pairs <- which(contingency > 0, arr.ind = TRUE)
+  mapping <- setNames(rep(NA_integer_, length(candidate_ids)), candidate_ids)
+  used_reference <- character(0)
+  if (nrow(pairs) > 0L) {
+    pair_counts <- contingency[pairs]
+    pair_order <- order(-pair_counts, pairs[, 1], pairs[, 2])
+    for (pair_index in pair_order) {
+      candidate_id <- candidate_ids[pairs[pair_index, 1]]
+      reference_id <- reference_ids[pairs[pair_index, 2]]
+      if (is.na(mapping[candidate_id]) && !(reference_id %in% used_reference)) {
+        mapping[candidate_id] <- as.integer(reference_id)
+        used_reference <- c(used_reference, reference_id)
+      }
+    }
+  }
+  for (candidate_id in names(mapping)[is.na(mapping)]) {
+    mapping[candidate_id] <- as.integer(reference_ids[which.max(contingency[candidate_id, ])])
+  }
+  unname(as.integer(mapping[as.character(candidate)]))
+}
+
 mean_silhouette <- function(vis, membership) {
   if (nrow(vis) < 4L || length(unique(membership)) < 2L) {
     return(NA_real_)
   }
   idx <- seq_len(nrow(vis))
   if (nrow(vis) > silhouette_max_cells) {
-    set.seed(1L)
+    set.seed(active_seed)
     idx <- sort(sample(idx, silhouette_max_cells))
   }
   sil <- tryCatch(
-    cluster::silhouette(as.integer(membership[idx]), stats::dist(scale(vis[idx, , drop = FALSE]))),
+    cluster::silhouette(as.integer(membership[idx]), stats::dist(if (cluster_representation == "pca") vis[idx, , drop = FALSE] else scale(vis[idx, , drop = FALSE]))),
     error = function(e) NULL
   )
   if (is.null(sil)) return(NA_real_)
@@ -416,7 +559,7 @@ merge_small_clusters <- function(vis, membership, min_size) {
 }
 
 run_louvain <- function(graph_obj, vis, resolution_value, merge_min_size, algorithm = "louvain", leiden_objective = "modularity") {
-  set.seed(1L)
+  set.seed(active_seed)
   if (algorithm == "leiden") {
     objective <- if (identical(tolower(leiden_objective), "cpm")) "CPM" else "modularity"
     cl <- igraph::cluster_leiden(graph_obj, objective_function = objective, resolution = resolution_value)
@@ -449,7 +592,24 @@ vote_membership <- function(nn_index, ref_membership) {
   votes <- matrix(ref_membership[as.vector(nn_index)], nrow = nrow(nn_index), ncol = ncol(nn_index))
   cluster_ids <- sort(unique(as.integer(ref_membership)))
   vote_counts <- vapply(cluster_ids, function(cluster_id) rowSums(votes == cluster_id), numeric(nrow(votes)))
-  as.integer(cluster_ids[max.col(vote_counts, ties.method = "first")])
+  if (is.null(dim(vote_counts))) {
+    vote_counts <- matrix(vote_counts, ncol = 1L)
+  }
+  winner_col <- max.col(vote_counts, ties.method = "first")
+  winner_count <- vote_counts[cbind(seq_len(nrow(vote_counts)), winner_col)]
+  second_count <- rep(0, nrow(vote_counts))
+  if (ncol(vote_counts) > 1L) {
+    for (cluster_col in seq_len(ncol(vote_counts))) {
+      eligible <- winner_col != cluster_col
+      second_count[eligible] <- pmax(second_count[eligible], vote_counts[eligible, cluster_col])
+    }
+  }
+  vote_total <- pmax(1, rowSums(vote_counts))
+  list(
+    membership = as.integer(cluster_ids[winner_col]),
+    vote_fraction = as.numeric(winner_count / vote_total),
+    vote_margin = as.numeric((winner_count - second_count) / vote_total)
+  )
 }
 
 knn_query_indices <- function(data, query, k) {
@@ -500,19 +660,30 @@ knn_self_mean_distance <- function(x, k) {
 
 assign_from_landmarks <- function(vis, landmark_vis, landmark_membership, landmark_idx, assign_k, label) {
   used_assign_k <- max(1L, min(as.integer(assign_k), nrow(landmark_vis)))
-  cat(sprintf("[INFO] Assigning all %d cells from %s landmarks by %d-NN vote in KODAMA space\n", nrow(vis), label, used_assign_k))
+  cat(sprintf("[INFO] Assigning all %d cells from %s landmarks by %d-NN vote in %s feature space (%d dimensions)\n", nrow(vis), label, used_assign_k, cluster_representation, ncol(vis)))
   flush.console()
   nn <- knn_query_indices(landmark_vis, vis, used_assign_k)
   cat(sprintf("[INFO] Landmark assignment KNN backend: %s\n", nn$backend))
   flush.console()
-  membership <- vote_membership(nn$index, landmark_membership)
+  voted <- vote_membership(nn$index, landmark_membership)
+  membership <- voted$membership
+  vote_fraction <- voted$vote_fraction
+  vote_margin <- voted$vote_margin
   membership[landmark_idx] <- landmark_membership
+  vote_fraction[landmark_idx] <- 1
+  vote_margin[landmark_idx] <- 1
   names(membership) <- rownames(vis)
   membership <- renumber_membership(membership)
   backend <- nn$backend
   rm(nn)
   gc(FALSE)
-  list(membership = membership, assign_k = used_assign_k, knn_backend = backend)
+  list(
+    membership = membership,
+    assign_k = used_assign_k,
+    knn_backend = backend,
+    vote_fraction = vote_fraction,
+    vote_margin = vote_margin
+  )
 }
 
 knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power) {
@@ -527,7 +698,7 @@ knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power
     density_reference_cells <- nrow(vis)
   }
   if (nrow(vis) > density_reference_cells) {
-    set.seed(1L)
+    set.seed(active_seed)
     reference_idx <- sort(sample.int(nrow(vis), density_reference_cells))
     density_vis <- vis[reference_idx, , drop = FALSE]
     used_density_k <- max(1L, min(as.integer(density_k), nrow(density_vis) - 1L))
@@ -611,7 +782,7 @@ select_landmarks <- function(vis, max_cells, sample_strategy, grid_bins, grid_ma
 }
 
 run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power) {
-  set.seed(1L)
+  set.seed(active_seed)
   n_cells <- nrow(vis)
   n_clusters <- as.integer(n_clusters)
   max_cells <- as.integer(max_cells)
@@ -628,6 +799,8 @@ run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, s
     assignment_mode <- "exact"
     used_assign_k <- 0L
     assignment_knn_backend <- NA_character_
+    assignment_vote_fraction <- rep(1, n_cells)
+    assignment_vote_margin <- rep(1, n_cells)
   } else {
     landmark_idx <- select_landmarks(vis, max_cells, sample_strategy, grid_bins, grid_max_per_bin, density_k, density_power)
     landmark_vis <- vis[landmark_idx, , drop = FALSE]
@@ -651,6 +824,8 @@ run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, s
     membership <- assigned$membership
     used_assign_k <- assigned$assign_k
     assignment_knn_backend <- assigned$knn_backend
+    assignment_vote_fraction <- assigned$vote_fraction
+    assignment_vote_margin <- assigned$vote_margin
     graph_cells <- nrow(landmark_vis)
     assignment_mode <- "landmark_knn"
     rm(assigned, landmark_vis, landmark_membership)
@@ -676,7 +851,9 @@ run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, s
     landmark_cells_used = as.integer(graph_cells),
     landmark_assignment_mode = assignment_mode,
     landmark_assign_k_used = as.integer(used_assign_k),
-    landmark_assignment_knn_backend = as.character(assignment_knn_backend)
+    landmark_assignment_knn_backend = as.character(assignment_knn_backend),
+    assignment_vote_fraction = assignment_vote_fraction,
+    assignment_vote_margin = assignment_vote_margin
   )
 }
 
@@ -699,66 +876,129 @@ grid_balanced_sample <- function(vis, bins, max_per_bin, max_total) {
 
 cluster_plot_colors <- function(vis, membership, algorithm) {
   cluster_ids <- sort(unique(as.integer(membership)))
-  cols <- setNames(rep("#000000", length(cluster_ids)), as.character(cluster_ids))
-  cent <- do.call(rbind, lapply(cluster_ids, function(id) colMeans(vis[membership == id, , drop = FALSE])))
-  rownames(cent) <- as.character(cluster_ids)
-  sizes <- table(as.integer(membership))
-  if (length(cluster_ids) >= 4L) {
-    background <- names(which.max(sizes))
-    rest <- setdiff(rownames(cent), background)
-    left <- rest[which.min(cent[rest, 1])]
-    bottom <- rest[which.min(cent[rest, 2])]
-    green_candidates <- setdiff(rest, c(left, bottom))
-    green <- if (length(green_candidates)) green_candidates[1] else NA_character_
-    cols[background] <- "#000000"
-    cols[left] <- "#F2D51B"
-    cols[bottom] <- "#8B0000"
-    if (!is.na(green)) cols[green] <- "#007000"
-    extra <- setdiff(rest, c(left, bottom, green))
-    if (length(extra)) cols[extra] <- rep(c("#1F77B4", "#FF7F0E", "#9467BD"), length.out = length(extra))
-  } else if (length(cluster_ids) == 3L) {
-    left <- rownames(cent)[which.min(cent[, 1])]
-    bottom <- rownames(cent)[which.min(cent[, 2])]
-    rest <- setdiff(rownames(cent), c(left, bottom))
-    cols[left] <- "#F2D51B"
-    cols[bottom] <- "#8B0000"
-    if (length(rest)) cols[rest[1]] <- "#007000"
-  } else {
-    palette_hex <- c(
-      "#000000", "#007000", "#8B0000", "#F2D51B",
-      "#1F77B4", "#FF7F0E", "#9467BD", "#0082C8"
-    )
-    cols <- setNames(rep(palette_hex, length.out = length(cluster_ids)), as.character(cluster_ids))
-  }
-  cols
+  palette_hex <- c(
+    "#0072B2", "#E69F00", "#009E73", "#CC79A7",
+    "#D55E00", "#56B4E9", "#F0E442", "#000000",
+    "#332288", "#88CCEE", "#44AA99", "#117733",
+    "#999933", "#DDCC77", "#CC6677", "#882255"
+  )
+  color_index <- ((cluster_ids - 1L) %% length(palette_hex)) + 1L
+  setNames(palette_hex[color_index], as.character(cluster_ids))
 }
 
-draw_membership_plot <- function(vis, membership, cluster_colors, algorithm, main = NULL) {
-  set.seed(1L)
+draw_membership_plot <- function(vis, membership, cluster_colors, algorithm, is_abstained = NULL, main = NULL) {
+  set.seed(clustering_seed)
   plot_max_points <- 350000L
   plot_idx <- if (nrow(vis) > plot_max_points) sort(sample.int(nrow(vis), plot_max_points)) else seq_len(nrow(vis))
+  accepted <- if (is.null(is_abstained)) {
+    rep(TRUE, nrow(vis))
+  } else {
+    !as.logical(is_abstained)
+  }
   plot(vis[plot_idx, 1], vis[plot_idx, 2],
     pch = 16,
     cex = 0.18,
-    col = grDevices::adjustcolor("black", alpha.f = 0.25),
+    col = grDevices::adjustcolor("#BDBDBD", alpha.f = 0.45),
     xlab = "KODAMA dimension 1",
     ylab = "KODAMA dimension 2",
     main = main
   )
   for (cluster_id in names(cluster_colors)) {
-    idx <- plot_idx[membership[plot_idx] == as.integer(cluster_id)]
+    idx <- plot_idx[
+      membership[plot_idx] == as.integer(cluster_id) & accepted[plot_idx]
+    ]
     if (!length(idx)) next
     color <- cluster_colors[cluster_id]
-    alpha <- if (identical(unname(color), "#000000")) 0.35 else 0.65
-    points(vis[idx, 1], vis[idx, 2], pch = 16, cex = 0.16, col = grDevices::adjustcolor(color, alpha.f = alpha))
+    points(vis[idx, 1], vis[idx, 2], pch = 16, cex = 0.16, col = grDevices::adjustcolor(color, alpha.f = 0.68))
+  }
+  abstained_idx <- plot_idx[!accepted[plot_idx]]
+  if (length(abstained_idx)) {
+    points(
+      vis[abstained_idx, 1], vis[abstained_idx, 2],
+      pch = 16, cex = 0.20, col = grDevices::adjustcolor("#6F6F6F", alpha.f = 0.85)
+    )
+  }
+  accepted_counts <- vapply(
+    as.integer(names(cluster_colors)),
+    function(cluster_id) sum(membership == cluster_id & accepted),
+    integer(1)
+  )
+  legend_labels <- sprintf("cluster %s accepted n=%d", names(cluster_colors), accepted_counts)
+  legend_colors <- unname(cluster_colors)
+  if (any(!accepted)) {
+    legend_labels <- c(legend_labels, sprintf("abstained n=%d", sum(!accepted)))
+    legend_colors <- c(legend_colors, "#6F6F6F")
   }
   legend("topright",
-    legend = sprintf("cluster %s n=%d", names(cluster_colors), as.integer(table(membership)[names(cluster_colors)])),
-    col = cluster_colors,
+    legend = legend_labels,
+    col = legend_colors,
     pch = 16,
     bty = "n",
-    cex = 0.8
+    cex = 0.72
   )
+}
+
+draw_uncertainty_plot <- function(vis, uncertainty_reason, is_abstained, assignment_vote_margin, stability_fraction, main = NULL) {
+  set.seed(clustering_seed)
+  plot_max_points <- 350000L
+  plot_idx <- if (nrow(vis) > plot_max_points) sort(sample.int(nrow(vis), plot_max_points)) else seq_len(nrow(vis))
+  status <- as.character(uncertainty_reason)
+  status_levels <- c(
+    "none",
+    "ambiguous_assignment",
+    "seed_instability",
+    "ambiguous_assignment_and_seed_instability"
+  )
+  status_colors <- c("#BDBDBD", "#E69F00", "#56B4E9", "#CC79A7")
+  status_labels <- c("no threshold violation", "ambiguous assignment", "seed instability", "assignment + instability")
+  status[!(status %in% status_levels)] <- "other"
+  status_levels <- c(status_levels, "other")
+  status_colors <- c(status_colors, "#333333")
+  status_labels <- c(status_labels, "other uncertainty")
+
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+  par(mfrow = c(1, 2), mar = c(4.4, 4.4, 3.4, 1.0), oma = c(0, 0, 1.5, 0))
+  plot(
+    vis[plot_idx, 1], vis[plot_idx, 2], pch = 16, cex = 0.18,
+    col = grDevices::adjustcolor("#D0D0D0", alpha.f = 0.45),
+    xlab = "KODAMA dimension 1", ylab = "KODAMA dimension 2",
+    main = sprintf("Uncertainty reason | abstained n=%d", sum(as.logical(is_abstained)))
+  )
+  for (idx_status in seq_along(status_levels)) {
+    selected <- plot_idx[status[plot_idx] == status_levels[idx_status]]
+    if (!length(selected)) next
+    point_size <- if (status_levels[idx_status] == "none") 0.13 else 0.24
+    alpha <- if (status_levels[idx_status] == "none") 0.35 else 0.88
+    points(
+      vis[selected, 1], vis[selected, 2], pch = 16, cex = point_size,
+      col = grDevices::adjustcolor(status_colors[idx_status], alpha.f = alpha)
+    )
+  }
+  present <- vapply(status_levels, function(level) any(status == level), logical(1))
+  legend(
+    "topright", legend = sprintf("%s n=%d", status_labels[present], vapply(status_levels[present], function(level) sum(status == level), integer(1))),
+    col = status_colors[present], pch = 16, bty = "n", cex = 0.68
+  )
+  combined_confidence <- pmin(
+    pmax(0, pmin(1, as.numeric(assignment_vote_margin))),
+    pmax(0, pmin(1, as.numeric(stability_fraction)))
+  )
+  combined_confidence[!is.finite(combined_confidence)] <- 0
+  breaks <- seq(0, 1, length.out = 101L)
+  confidence_palette <- grDevices::colorRampPalette(c("#D73027", "#FEE08B", "#1A9850"))(100L)
+  color_index <- pmax(1L, pmin(100L, findInterval(combined_confidence[plot_idx], breaks, all.inside = TRUE)))
+  plot(
+    vis[plot_idx, 1], vis[plot_idx, 2], pch = 16, cex = 0.18,
+    col = grDevices::adjustcolor(confidence_palette[color_index], alpha.f = 0.72),
+    xlab = "KODAMA dimension 1", ylab = "KODAMA dimension 2",
+    main = "Minimum assignment/stability score"
+  )
+  legend(
+    "topright", legend = c("lower confidence", "higher confidence"),
+    col = c(confidence_palette[1], confidence_palette[100]), pch = 16, bty = "n", cex = 0.68
+  )
+  if (!is.null(main)) mtext(main, side = 3, outer = TRUE, line = 0.2, cex = 0.9)
 }
 
 preferred_cluster_cap <- function(n_cells) {
@@ -847,7 +1087,7 @@ run_louvain_landmark <- function(
   density_k,
   density_power
 ) {
-  set.seed(1L)
+  set.seed(active_seed)
   n_cells <- nrow(vis)
   if (max_cells == 0L || n_cells <= max_cells) {
     landmark_idx <- seq_len(n_cells)
@@ -942,11 +1182,15 @@ run_louvain_landmark <- function(
     membership <- landmark_membership
     used_assign_k <- 0L
     assignment_knn_backend <- NA_character_
+    assignment_vote_fraction <- rep(1, n_cells)
+    assignment_vote_margin <- rep(1, n_cells)
   } else {
     assigned <- assign_from_landmarks(vis, landmark_vis, landmark_membership, landmark_idx, assign_k, cluster_algorithm)
     membership <- assigned$membership
     used_assign_k <- assigned$assign_k
     assignment_knn_backend <- assigned$knn_backend
+    assignment_vote_fraction <- assigned$vote_fraction
+    assignment_vote_margin <- assigned$vote_margin
     rm(assigned)
   }
   membership <- renumber_membership(membership)
@@ -974,7 +1218,47 @@ run_louvain_landmark <- function(
     landmark_density_knn_backend = as.character(sampling_density_knn_backend),
     landmark_assignment_knn_backend = as.character(assignment_knn_backend),
     landmark_density_median_all = as.numeric(sampling_density_median_all),
-    landmark_density_median_selected = as.numeric(sampling_density_median_selected)
+    landmark_density_median_selected = as.numeric(sampling_density_median_selected),
+    assignment_vote_fraction = assignment_vote_fraction,
+    assignment_vote_margin = assignment_vote_margin
+  )
+}
+
+run_selected_clustering <- function(vis, seed_value) {
+  active_seed <<- as.integer(seed_value)
+  if (native_graph_mode) return(run_native_kodama_leiden(native_graph_info, fixed_resolution, leiden_objective, active_seed))
+  if (cluster_algorithm == "walktrap") {
+    return(run_walktrap_fixed(
+      vis,
+      actual_k,
+      walktrap_clusters,
+      landmark_cells,
+      landmark_assign_k,
+      landmark_sample_strategy,
+      landmark_grid_bins,
+      landmark_grid_max_per_bin,
+      landmark_density_knn_k,
+      landmark_density_power
+    ))
+  }
+  run_louvain_landmark(
+    vis,
+    actual_k,
+    cluster_algorithm,
+    leiden_objective,
+    resolution_mode,
+    fixed_resolution,
+    resolution_grid_eval,
+    cluster_profile,
+    fine_score_margin,
+    fine_min_cluster_increase,
+    landmark_cells,
+    landmark_assign_k,
+    landmark_sample_strategy,
+    landmark_grid_bins,
+    landmark_grid_max_per_bin,
+    landmark_density_knn_k,
+    landmark_density_power
   )
 }
 
@@ -983,30 +1267,77 @@ picked <- {
   select_kodama_file(selected_file_dim, info$dims, info$files)
 }
 
-load(picked$file)
-if (!exists("vis")) {
+input_bundle <- new.env(parent = baseenv())
+load(picked$file, envir = input_bundle)
+if (!exists("vis", envir = input_bundle, inherits = FALSE)) {
   stop(sprintf("Variable 'vis' not found in: %s", picked$file))
 }
 
-vis <- as.matrix(vis)
-if (is.null(rownames(vis))) {
-  rownames(vis) <- sprintf("cell_%05d", seq_len(nrow(vis)))
+plot_vis <- as.matrix(input_bundle$vis)
+if (is.null(rownames(plot_vis))) {
+  if (cluster_representation != "umap2d") stop("PCA/native graph comparison requires explicit observation IDs in the KODAMA visualization")
+  rownames(plot_vis) <- sprintf("cell_%05d", seq_len(nrow(plot_vis)))
 }
-if (nrow(vis) < 3L) {
-  stop(sprintf("Need at least 3 cells for clustering. Found: %d", nrow(vis)))
+if (nrow(plot_vis) < 3L) {
+  stop(sprintf("Need at least 3 cells for clustering. Found: %d", nrow(plot_vis)))
 }
-if (ncol(vis) < 2L) {
-  stop(sprintf("Expected 'vis' to have at least 2 columns. Found: %d", ncol(vis)))
+if (ncol(plot_vis) < 2L || !all(is.finite(plot_vis)) || anyDuplicated(rownames(plot_vis))) {
+  stop("Visualization requires >=2 finite columns and unique observation IDs")
 }
 
-input_vis_dims <- ncol(vis)
-vis <- vis[, seq_len(min(2L, ncol(vis))), drop = FALSE]
-actual_vis_dims <- ncol(vis)
-actual_k <- max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
-merge_min_size <- max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
+input_vis_dims <- ncol(plot_vis)
+plot_vis <- plot_vis[, seq_len(2L), drop = FALSE]
+representation_source <- picked$file
+representation_source_md5 <- unname(tools::md5sum(picked$file))
+visualization_source_md5 <- representation_source_md5
+native_graph_info <- native_graph_payload <- NULL
+if (native_graph_mode) {
+  metadata <- input_bundle$representation_metadata
+  if (!is.list(metadata) || !isTRUE(metadata$kodama_graph_available) ||
+      !identical(metadata$kodama_graph_file, "kodama_graph.rds") ||
+      !identical(metadata$kodama_graph_manifest_file, "kodama_graph.json") ||
+      !is.character(metadata$kodama_graph_sha256) || length(metadata$kodama_graph_sha256) != 1L ||
+      is.na(metadata$kodama_graph_sha256) || !grepl("^[0-9a-f]{64}$", metadata$kodama_graph_sha256)) {
+    stop("Native graph mode requires an explicitly bound producer representation_metadata graph receipt; legacy numeric IDs cannot establish graph provenance")
+  }
+  native_graph_payload <- load_portable_kodama_graph(kodama_dir, rownames(plot_vis),
+    expected_graph_sha256 = metadata$kodama_graph_sha256)
+  if (!identical(native_graph_payload$manifest$file, metadata$kodama_graph_file))
+    stop("Native graph filename differs from producer representation metadata")
+  native_graph_info <- prepare_kodama_affinity_graph(native_graph_payload, rownames(plot_vis))
+  representation_source <- file.path(kodama_dir, native_graph_payload$manifest$file)
+  representation_source_md5 <- unname(tools::md5sum(representation_source))
+  # Plot coordinates are display-only. Graph helpers never accept this matrix.
+  vis <- plot_vis
+} else if (cluster_representation == "pca") {
+  metadata <- input_bundle$representation_metadata
+  pca_name <- metadata$pca_file %||% paste0("pca_full_", picked$dim, ".RData")
+  if (basename(pca_name) != pca_name) stop("PCA sidecar must be inside the KODAMA output directory")
+  representation_source <- file.path(kodama_dir, pca_name)
+  if (!file.exists(representation_source)) stop(sprintf("Saved PCA scores missing: %s. Re-run the KODAMA stage to export a high-dimensional representation.", representation_source))
+  representation_source_md5 <- unname(tools::md5sum(representation_source))
+  if (!is.null(metadata$pca_file_md5) && !identical(as.character(metadata$pca_file_md5), representation_source_md5)) stop("PCA sidecar checksum differs from KODAMA representation metadata")
+  pca_bundle <- new.env(parent = baseenv())
+  load(representation_source, envir = pca_bundle)
+  if (!exists("pca", envir = pca_bundle, inherits = FALSE)) stop("PCA sidecar lacks variable pca")
+  pca_scores <- as.matrix(pca_bundle$pca)
+  if (is.null(rownames(pca_scores)) || anyDuplicated(rownames(pca_scores)) || !setequal(rownames(pca_scores), rownames(plot_vis))) stop("PCA and visualization observation IDs must match exactly; no intersection or imputation is allowed")
+  if (!all(is.finite(pca_scores))) stop("Saved PCA scores contain nonfinite values")
+  dimensions_to_use <- if (cluster_dimensions == 0L) ncol(pca_scores) else cluster_dimensions
+  if (dimensions_to_use < 3L || dimensions_to_use > ncol(pca_scores)) stop("Requested PCA clustering dimensions unavailable; require >=3 and <=saved dimensions")
+  vis <- pca_scores[rownames(plot_vis), seq_len(dimensions_to_use), drop = FALSE]
+  if (landmark_sample_strategy == "grid" && landmark_cells > 0L && nrow(vis) > landmark_cells) stop("Two-dimensional grid landmark sampling is not valid for PCA feature space; choose random or knn_inverse_distance")
+  rm(pca_bundle, pca_scores)
+} else {
+  vis <- plot_vis
+}
+actual_vis_dims <- if (native_graph_mode) 0L else ncol(vis)
+actual_k <- if (native_graph_mode) NA_integer_ else max(2L, min(as.integer(requested_k), nrow(vis) - 1L))
+merge_min_size <- if (native_graph_mode) NA_integer_ else max(merge_min_size_floor, ceiling(merge_min_size_fraction * nrow(vis)))
 resolution_grid_eval <- build_resolution_grid(resolution_grid, cluster_profile, fine_resolution_multiplier, fine_resolution_max)
 cat(sprintf(
-  "[INFO] Loaded KODAMA vis: cells=%d input_dims=%d clustering_dims=%d requested_k=%d actual_k=%d\n",
+  "[INFO] Loaded representation=%s: cells=%d visualization_dims=%d clustering_dims=%d requested_k=%d actual_k=%d\n",
+  cluster_representation,
   nrow(vis),
   input_vis_dims,
   actual_vis_dims,
@@ -1015,7 +1346,12 @@ cat(sprintf(
 ))
 flush.console()
 
-if (cluster_algorithm == "walktrap") {
+if (native_graph_mode) {
+  best <- run_native_kodama_leiden(native_graph_info, fixed_resolution, leiden_objective, clustering_seed)
+  cat(sprintf("[INFO] Native KODAMA dissimilarity graph: vertices=%d undirected_edges=%d isolated=%d components=%d; affinity=%s; not a physical-neighbourhood graph\n",
+    nrow(vis), igraph::ecount(native_graph_info$graph), sum(native_graph_info$degree == 0L),
+    native_graph_info$connected_components, native_graph_info$affinity_transform))
+} else if (cluster_algorithm == "walktrap") {
   best <- run_walktrap_fixed(
     vis,
     actual_k,
@@ -1028,7 +1364,7 @@ if (cluster_algorithm == "walktrap") {
     landmark_density_knn_k,
     landmark_density_power
   )
-  cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Clustering representation=%s dimensions=%d; visualization stored separately. --dim selected file: kodama_full_%d.RData\n", cluster_representation, actual_vis_dims, picked$dim))
   cat(sprintf("[INFO] Cluster algorithm: walktrap\n"))
   cat(sprintf("[INFO] Walktrap requested clusters=%d graph_cells=%d assignment=%s assign_k=%d final clusters=%d silhouette=%s modularity=%.4f\n",
     as.integer(walktrap_clusters),
@@ -1059,7 +1395,7 @@ if (cluster_algorithm == "walktrap") {
     landmark_density_knn_k,
     landmark_density_power
   )
-  cat(sprintf("[INFO] Clustering uses vis only (actual vis dims=%d). --dim selected file: kodama_full_%d.RData\n", actual_vis_dims, picked$dim))
+  cat(sprintf("[INFO] Clustering representation=%s dimensions=%d; visualization stored separately. --dim selected file: kodama_full_%d.RData\n", cluster_representation, actual_vis_dims, picked$dim))
   cat(sprintf("[INFO] Cluster algorithm: %s\n", cluster_algorithm))
   cat(sprintf(
     "[INFO] %s landmark resolution=%s graph_cells=%d assignment=%s assign_k=%d final clusters=%d silhouette=%s modularity=%.4f\n",
@@ -1075,7 +1411,7 @@ if (cluster_algorithm == "walktrap") {
 }
 
 raw_membership <- renumber_membership(best$membership)
-target_result <- collapse_clusters_to_target(
+target_result <- if (native_graph_mode) collapse_kodama_graph_to_target(native_graph_info, best$final_membership, target_clusters) else collapse_clusters_to_target(
   vis,
   best$final_membership,
   target_clusters
@@ -1086,42 +1422,191 @@ raw_cluster_count <- length(unique(raw_membership))
 final_cluster_count <- length(unique(final_membership))
 raw_cluster_sizes <- format_cluster_sizes(raw_membership)
 final_cluster_sizes <- format_cluster_sizes(final_membership)
+sample_id <- sub("_cluster$", "", tools::file_path_sans_ext(basename(out_csv)))
+
+native_graph_evidence <- if (native_graph_mode) kodama_graph_assignment_evidence(native_graph_info, final_membership) else NULL
+assignment_vote_fraction <- if (native_graph_mode) native_graph_evidence$own_community_affinity_fraction else as.numeric(best$assignment_vote_fraction %||% rep(1, nrow(vis)))
+assignment_vote_margin <- if (native_graph_mode) native_graph_evidence$affinity_margin else as.numeric(best$assignment_vote_margin %||% rep(1, nrow(vis)))
+assignment_is_exact <- identical(as.character(best$landmark_assignment_mode %||% ""), "exact")
+assignment_ambiguous <- if (native_graph_mode) !is.finite(assignment_vote_margin) | assignment_vote_margin < assignment_min_vote_margin else !assignment_is_exact & assignment_vote_margin < assignment_min_vote_margin
+assignment_status <- if (native_graph_mode) {
+  ifelse(native_graph_evidence$is_isolated, "unassigned_isolated_native_graph_vertex",
+    ifelse(assignment_ambiguous, "abstained_ambiguous_graph_affinity", "accepted_graph_affinity"))
+} else if (assignment_is_exact) {
+  rep("exact_graph_assignment", nrow(vis))
+} else ifelse(
+  assignment_vote_margin >= assignment_min_vote_margin,
+  "accepted_landmark_vote",
+  "abstained_ambiguous_landmark_vote"
+)
+
+stability_seeds <- clustering_seed + seq.int(0L, stability_runs - 1L)
+stability_agreement_count <- rep(1L, nrow(vis))
+stability_records <- list(data.frame(
+  seed = as.integer(clustering_seed),
+  cluster_count = as.integer(final_cluster_count),
+  adjusted_rand_index_vs_primary = 1,
+  stringsAsFactors = FALSE
+))
+if (stability_runs > 1L) {
+  cat(sprintf("[INFO] Measuring clustering stability across %d total seeds\n", stability_runs))
+  flush.console()
+  for (replicate_seed in stability_seeds[-1L]) {
+    cat(sprintf("[INFO] Stability replicate seed=%d\n", replicate_seed))
+    flush.console()
+    replicate_best <- run_selected_clustering(vis, replicate_seed)
+    replicate_target <- if (native_graph_mode) collapse_kodama_graph_to_target(native_graph_info, replicate_best$final_membership, target_clusters) else collapse_clusters_to_target(
+      vis,
+      replicate_best$final_membership,
+      target_clusters
+    )
+    replicate_membership <- renumber_membership(replicate_target$membership)
+    aligned_membership <- align_membership_to_reference(final_membership, replicate_membership)
+    stability_agreement_count <- stability_agreement_count + as.integer(aligned_membership == final_membership)
+    stability_records[[length(stability_records) + 1L]] <- data.frame(
+      seed = as.integer(replicate_seed),
+      cluster_count = as.integer(length(unique(replicate_membership))),
+      adjusted_rand_index_vs_primary = adjusted_rand_index(final_membership, replicate_membership),
+      stringsAsFactors = FALSE
+    )
+    rm(replicate_best, replicate_target, replicate_membership, aligned_membership)
+    gc(FALSE)
+  }
+}
+active_seed <- clustering_seed
+stability_df <- do.call(rbind, stability_records)
+stability_fraction <- as.numeric(stability_agreement_count / stability_runs)
+stability_status <- ifelse(
+  stability_fraction >= stability_min_fraction,
+  "stable_across_seeds",
+  "abstained_unstable_across_seeds"
+)
+uncertainty_reason <- ifelse(
+  assignment_ambiguous & stability_status == "abstained_unstable_across_seeds",
+  "ambiguous_assignment_and_seed_instability",
+  ifelse(
+    assignment_ambiguous,
+    "ambiguous_assignment",
+    ifelse(stability_status == "abstained_unstable_across_seeds", "seed_instability", "none")
+  )
+)
+if (native_graph_mode) uncertainty_reason[native_graph_evidence$is_isolated] <- "isolated_native_graph_vertex"
+interpretable_cluster <- as.integer(final_membership)
+if (isTRUE(abstain_uncertain)) {
+  interpretable_cluster[uncertainty_reason != "none"] <- NA_integer_
+}
+if (native_graph_mode) interpretable_cluster[native_graph_evidence$is_isolated] <- NA_integer_
+is_abstained <- is.na(interpretable_cluster)
+interpretation_status <- ifelse(
+  uncertainty_reason == "none",
+  "accepted",
+  paste0(ifelse(is_abstained, "abstained_", "flagged_"), uncertainty_reason)
+)
+forced_cluster_count_requested <- target_clusters > 0L
+cluster_analysis_role <- if (forced_cluster_count_requested) {
+  "sensitivity_forced_cluster_count"
+} else {
+  "graph_derived_primary_candidate"
+}
 
 cluster_df <- data.frame(
   label = rownames(vis),
+  cluster_representation = cluster_representation,
+  clustering_dimensions = actual_vis_dims,
+  representation_input_md5 = visualization_source_md5,
+  graph_affinity_rule = if (native_graph_mode) native_graph_info$affinity_transform else NA_character_,
+  graph_source_sha256 = if (native_graph_mode) native_graph_payload$manifest$file_sha256 else NA_character_,
+  graph_observation_scope = if (native_graph_mode) "feature_dissimilarity_not_physical_neighbourhood" else NA_character_,
+  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else "landmark_vote_or_exact_graph_assignment_not_probability",
+  graph_degree = if (native_graph_mode) native_graph_evidence$degree else NA_integer_,
+  graph_strength = if (native_graph_mode) native_graph_evidence$strength else NA_real_,
   cluster = as.integer(final_membership),
+  interpretable_cluster = interpretable_cluster,
+  assignment_vote_fraction = assignment_vote_fraction,
+  assignment_vote_margin = assignment_vote_margin,
+  assignment_status = assignment_status,
+  stability_fraction = stability_fraction,
+  stability_status = stability_status,
+  uncertainty_reason = uncertainty_reason,
+  is_abstained = is_abstained,
+  interpretation_status = interpretation_status,
+  cluster_analysis_role = cluster_analysis_role,
+  forced_cluster_count_requested = forced_cluster_count_requested,
+  forced_cluster_count_target = as.integer(target_clusters),
+  forced_cluster_count_applied = isTRUE(target_result$applied),
   stringsAsFactors = FALSE
 )
 write.csv(cluster_df, out_csv, row.names = FALSE, quote = FALSE)
 
-sample_id <- sub("_cluster$", "", tools::file_path_sans_ext(basename(out_csv)))
+stability_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_stability.csv"))
+write.csv(stability_df, stability_path, row.names = FALSE, quote = FALSE)
 summary_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_summary.csv"))
 summary_df <- data.frame(
   sample_id = sample_id,
   cluster_profile = cluster_profile,
-  vis_dims = actual_vis_dims,
+  vis_dims = ncol(plot_vis),
+  cluster_representation = cluster_representation,
+  clustering_dimensions = actual_vis_dims,
+  requested_clustering_dimensions = cluster_dimensions,
+  representation_source = basename(representation_source),
+  representation_source_md5 = representation_source_md5,
+  visualization_source = basename(picked$file),
+  visualization_source_md5 = visualization_source_md5,
+  graph_source_sha256 = if (native_graph_mode) native_graph_payload$manifest$file_sha256 else NA_character_,
+  graph_affinity_rule = if (native_graph_mode) native_graph_info$affinity_transform else NA_character_,
+  graph_observation_scope = if (native_graph_mode) "feature_dissimilarity_not_physical_neighbourhood" else NA_character_,
+  graph_connected_components = if (native_graph_mode) native_graph_info$connected_components else NA_integer_,
+  graph_isolated_observations = if (native_graph_mode) sum(native_graph_evidence$is_isolated) else NA_integer_,
+  graph_native_neighbors = if (native_graph_mode) native_graph_payload$metadata$native_neighbors else NA_integer_,
+  graph_stored_directed_edges = if (native_graph_mode) native_graph_payload$metadata$stored_edges else NA_integer_,
+  graph_source_pca_sha256 = if (native_graph_mode) native_graph_payload$metadata$pca_file_sha256 else NA_character_,
+  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else "landmark_vote_or_exact_graph_assignment_not_probability",
+  visualization_projected = if (is.null(input_bundle$representation_metadata$visualization_projected)) NA else isTRUE(input_bundle$representation_metadata$visualization_projected),
   requested_dim = as.integer(selected_file_dim),
   loaded_dim = as.integer(picked$dim),
-  requested_k = as.integer(requested_k),
+  requested_k = if (native_graph_mode) NA_integer_ else as.integer(requested_k),
   actual_k = as.integer(actual_k),
   cluster_algorithm = cluster_algorithm,
   leiden_objective = leiden_objective,
+  clustering_seed = as.integer(clustering_seed),
+  stability_runs = as.integer(stability_runs),
+  stability_mean_adjusted_rand_index = if (nrow(stability_df) > 1L) {
+    mean(stability_df$adjusted_rand_index_vs_primary[-1L], na.rm = TRUE)
+  } else {
+    1
+  },
+  stability_min_adjusted_rand_index = if (nrow(stability_df) > 1L) {
+    min(stability_df$adjusted_rand_index_vs_primary[-1L], na.rm = TRUE)
+  } else {
+    1
+  },
+  assignment_min_vote_margin = as.numeric(assignment_min_vote_margin),
+  stability_min_fraction = as.numeric(stability_min_fraction),
+  abstain_uncertain = isTRUE(abstain_uncertain),
+  ambiguous_assignment_count = as.integer(sum(assignment_ambiguous)),
+  unstable_observation_count = as.integer(sum(stability_status == "abstained_unstable_across_seeds")),
+  abstained_observation_count = as.integer(sum(is.na(interpretable_cluster))),
+  accepted_observation_fraction = as.numeric(mean(!is.na(interpretable_cluster))),
+  cluster_analysis_role = cluster_analysis_role,
+  claim_status = if (forced_cluster_count_requested) "sensitivity_only" else "independent_interpretation_required",
+  forced_cluster_count_requested = forced_cluster_count_requested,
+  forced_cluster_count_applied = isTRUE(target_result$applied),
   target_clusters = as.integer(target_clusters),
   target_applied = isTRUE(target_result$applied),
   target_strategy = if (target_clusters > 0L) {
-    "nearest_centroid_merge_in_kodama_space"
+    if (native_graph_mode) "maximum_total_cross_community_graph_affinity_supported_merges_only" else paste0("nearest_centroid_merge_in_", cluster_representation, "_space")
   } else {
     "disabled"
   },
   target_input_cluster_count = as.integer(target_result$initial_count),
   target_merge_history = target_result$merge_history,
   landmark_cells = as.integer(landmark_cells),
-  landmark_sample_strategy = landmark_sample_strategy,
-  landmark_density_knn_k = as.integer(landmark_density_knn_k),
-  landmark_density_power = as.numeric(landmark_density_power),
-  landmark_grid_bins = as.integer(landmark_grid_bins),
-  landmark_grid_max_per_bin = as.integer(landmark_grid_max_per_bin),
-  landmark_assign_k = as.integer(landmark_assign_k),
+  landmark_sample_strategy = if (native_graph_mode) "not_applicable_native_graph" else landmark_sample_strategy,
+  landmark_density_knn_k = if (native_graph_mode) NA_integer_ else as.integer(landmark_density_knn_k),
+  landmark_density_power = if (native_graph_mode) NA_real_ else as.numeric(landmark_density_power),
+  landmark_grid_bins = if (native_graph_mode) NA_integer_ else as.integer(landmark_grid_bins),
+  landmark_grid_max_per_bin = if (native_graph_mode) NA_integer_ else as.integer(landmark_grid_max_per_bin),
+  landmark_assign_k = if (native_graph_mode) NA_integer_ else as.integer(landmark_assign_k),
   landmark_algorithm = as.character(best$landmark_algorithm %||% cluster_algorithm),
   landmark_cells_used = as.integer(best$landmark_cells_used %||% NA_integer_),
   landmark_assignment_mode = as.character(best$landmark_assignment_mode %||% NA_character_),
@@ -1148,26 +1633,99 @@ summary_df <- data.frame(
 )
 write.csv(summary_df, summary_path, row.names = FALSE, quote = TRUE)
 
+if (!is.null(comparison_clusters)) {
+  reference <- read.csv(comparison_clusters, stringsAsFactors = FALSE, colClasses = c(label = "character"))
+  if (!all(c("label", "cluster") %in% names(reference)) || anyNA(reference$label) || anyDuplicated(reference$label)) {
+    stop("Comparison CSV needs unique label and cluster columns")
+  }
+  if (!setequal(reference$label, cluster_df$label)) {
+    stop("Representation comparison requires exactly matched observations; silent intersections are not allowed")
+  }
+  input_identity_verified <- FALSE
+  if ("representation_input_md5" %in% names(reference)) {
+    if (anyNA(reference$representation_input_md5) || !all(reference$representation_input_md5 == visualization_source_md5)) stop("Representation comparison inputs differ; matching numeric observation IDs alone is insufficient")
+    input_identity_verified <- TRUE
+  }
+  reference <- reference[match(cluster_df$label, reference$label), , drop = FALSE]
+  if (anyNA(reference$cluster)) stop("Comparison raw cluster labels must not be missing")
+  reference_interpretable <- if ("interpretable_cluster" %in% names(reference)) reference$interpretable_cluster else reference$cluster
+  joint <- !is.na(reference_interpretable) & !is.na(cluster_df$interpretable_cluster)
+  reference_representation <- if ("cluster_representation" %in% names(reference)) paste(sort(unique(reference$cluster_representation)), collapse = ";") else "unspecified_legacy"
+  comparison <- data.frame(
+    sample_id = sample_id,
+    current_representation = cluster_representation,
+    reference_representation = reference_representation,
+    current_dimensions = actual_vis_dims,
+    matched_observations = nrow(cluster_df),
+    input_bundle_identity_verified = input_identity_verified,
+    current_graph_affinity_rule = if (native_graph_mode) native_graph_info$affinity_transform else NA_character_,
+    current_graph_source_sha256 = if (native_graph_mode) native_graph_payload$manifest$file_sha256 else NA_character_,
+    reference_graph_affinity_rule = if ("graph_affinity_rule" %in% names(reference)) paste(unique(reference$graph_affinity_rule), collapse = ";") else NA_character_,
+    reference_graph_source_sha256 = if ("graph_source_sha256" %in% names(reference)) paste(unique(reference$graph_source_sha256), collapse = ";") else NA_character_,
+    adjusted_rand_index_raw = adjusted_rand_index(reference$cluster, cluster_df$cluster),
+    jointly_interpretable_observations = sum(joint),
+    jointly_interpretable_fraction = mean(joint),
+    adjusted_rand_index_jointly_interpretable = if (sum(joint) >= 2L) adjusted_rand_index(reference_interpretable[joint], cluster_df$interpretable_cluster[joint]) else NA_real_,
+    current_cluster_count = length(unique(cluster_df$cluster)),
+    reference_cluster_count = length(unique(reference$cluster)),
+    reference_file_md5 = unname(tools::md5sum(comparison_clusters)),
+    comparison_claim = "descriptive_partition_agreement_only_not_accuracy_or_biological_validation",
+    stringsAsFactors = FALSE
+  )
+  write.csv(comparison, file.path(dirname(out_csv), paste0(sample_id, "_representation_comparison.csv")), row.names = FALSE)
+}
+
 pdf_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.pdf"))
 pdf(pdf_path)
-cluster_colors <- cluster_plot_colors(vis, final_membership, cluster_algorithm)
+cluster_colors <- cluster_plot_colors(plot_vis, final_membership, cluster_algorithm)
+plot_analysis_label <- if (forced_cluster_count_requested) {
+  sprintf("SENSITIVITY ONLY: requested target=%d", target_clusters)
+} else {
+  "graph-derived count"
+}
 draw_membership_plot(
-  vis,
+  plot_vis,
   final_membership,
   cluster_colors,
   cluster_algorithm,
-  main = sprintf("%s | %s", sample_id, cluster_algorithm)
+  is_abstained = is_abstained,
+  main = sprintf("%s | %s | %s", sample_id, cluster_algorithm, plot_analysis_label)
 )
 dev.off()
 
 png_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_membership.png"))
 png(filename = png_path, width = 1800, height = 1400, res = 180)
 draw_membership_plot(
-  vis,
+  plot_vis,
   final_membership,
   cluster_colors,
   cluster_algorithm,
-  main = sprintf("%s | %s", sample_id, cluster_algorithm)
+  is_abstained = is_abstained,
+  main = sprintf("%s | %s | %s", sample_id, cluster_algorithm, plot_analysis_label)
+)
+dev.off()
+
+uncertainty_pdf_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_uncertainty.pdf"))
+pdf(uncertainty_pdf_path, width = 13, height = 6.5)
+draw_uncertainty_plot(
+  plot_vis,
+  uncertainty_reason,
+  is_abstained,
+  assignment_vote_margin,
+  stability_fraction,
+  main = sprintf("%s | uncertainty and abstention", sample_id)
+)
+dev.off()
+
+uncertainty_png_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_kodama_uncertainty.png"))
+png(filename = uncertainty_png_path, width = 2600, height = 1300, res = 180)
+draw_uncertainty_plot(
+  plot_vis,
+  uncertainty_reason,
+  is_abstained,
+  assignment_vote_margin,
+  stability_fraction,
+  main = sprintf("%s | uncertainty and abstention", sample_id)
 )
 dev.off()
 
@@ -1175,31 +1733,47 @@ cat(sprintf("[INFO] Requested --dim=%d loaded kodama_full_%d.RData\n", selected_
 if (!isTRUE(picked$exact)) {
   cat("[INFO] Requested dim file was not present; nearest lower available file was used.\n")
 }
-cat(sprintf("[INFO] Requested k=%d actual k=%d\n", requested_k, actual_k))
+if (!native_graph_mode) cat(sprintf("[INFO] Requested k=%d actual k=%d\n", requested_k, actual_k))
 cat(sprintf("[INFO] Cluster algorithm=%s\n", cluster_algorithm))
+cat(sprintf(
+  "[INFO] Stability runs=%d mean ARI=%s minimum ARI=%s unstable observations=%d\n",
+  stability_runs,
+  format_optional_number(summary_df$stability_mean_adjusted_rand_index, 4L),
+  format_optional_number(summary_df$stability_min_adjusted_rand_index, 4L),
+  summary_df$unstable_observation_count
+))
+cat(sprintf(
+  "[INFO] Assignment minimum vote margin=%.3f ambiguous observations=%d abstention=%s abstained observations=%d\n",
+  assignment_min_vote_margin,
+  summary_df$ambiguous_assignment_count,
+  ifelse(abstain_uncertain, "enabled", "disabled"),
+  summary_df$abstained_observation_count
+))
 if (target_clusters > 0L) {
+  cat("[WARN] Forced cluster count requested: this output is a sensitivity analysis and must not be presented as the graph-derived primary partition.\n")
   cat(sprintf(
     paste0(
       "[INFO] Target clusters=%d input clusters=%d final clusters=%d ",
-      "strategy=nearest_centroid_merge_in_kodama_space applied=%s\n"
+      "strategy=%s applied=%s\n"
     ),
     target_clusters,
     target_result$initial_count,
     final_cluster_count,
+    summary_df$target_strategy,
     ifelse(target_result$applied, "yes", "no")
   ))
   if (nzchar(target_result$merge_history)) {
     cat(sprintf("[INFO] Target merge history=%s\n", target_result$merge_history))
   }
 }
-cat(sprintf("[INFO] Landmark cells requested=%d used=%d strategy=%s assignment=%s assign_k=%d\n",
+if (!native_graph_mode) cat(sprintf("[INFO] Landmark cells requested=%d used=%d strategy=%s assignment=%s assign_k=%d\n",
   as.integer(landmark_cells),
   as.integer(best$landmark_cells_used %||% NA_integer_),
   landmark_sample_strategy,
   as.character(best$landmark_assignment_mode %||% NA_character_),
   as.integer(best$landmark_assign_k_used %||% NA_integer_)
 ))
-if (landmark_sample_strategy == "knn_inverse_distance") {
+if (!native_graph_mode && landmark_sample_strategy == "knn_inverse_distance") {
   cat(sprintf("[INFO] Inverse-distance landmarks density_k=%d p=%.3f median_mean_density_distance_all=%s selected=%s\n",
     as.integer(best$landmark_density_k_used %||% landmark_density_knn_k),
     as.numeric(best$landmark_density_power %||% landmark_density_power),
@@ -1225,5 +1799,6 @@ cat(sprintf("[INFO] Raw cluster sizes=%s\n", raw_cluster_sizes))
 cat(sprintf("[INFO] Final cluster sizes=%s\n", final_cluster_sizes))
 cat(sprintf("[INFO] Wrote: %s\n", out_csv))
 cat(sprintf("[INFO] Wrote: %s\n", summary_path))
+cat(sprintf("[INFO] Wrote: %s\n", stability_path))
 cat(sprintf("[INFO] Wrote: %s\n", pdf_path))
 cat(sprintf("[INFO] Wrote: %s\n", png_path))

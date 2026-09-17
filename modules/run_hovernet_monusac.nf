@@ -1,17 +1,20 @@
 process RUN_HOVERNET_MONUSAC {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'run_hovernet_monusac', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([crop_tif, shift_json, clean_tissue_mask]) }
     tag "${sample_id}"
     label 'compute_heavy'
     label 'gpu_capable'
 
     publishDir "${params.outdir_base}/03b_hovernet_monusac/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.hovernet_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.hovernet_memory_gb as int))} GB" }
+    cpus { TaskRuntime.cpus(runtime_plan, 'hovernet') }
+    memory { TaskRuntime.memory(runtime_plan, 'hovernet') }
     time { params.hovernet_time as String }
     containerOptions { (System.getenv('CELLPHENOTYPER_HOVERNET_CONTAINER_OPTIONS') ?: '').trim() }
-    maxForks 1
 
     input:
-    tuple val(sample_id), path(crop_tif), path(shift_json)
+    tuple val(sample_id), path(crop_tif), path(shift_json), path(clean_tissue_mask)
+    val(runtime_plan)
 
     output:
     tuple val(sample_id), path("hovernet_${sample_id}/hovernet_cells.json"), emit: cells_json
@@ -19,16 +22,26 @@ process RUN_HOVERNET_MONUSAC {
 
     script:
     def scriptPath = "${projectDir}/${params.hovernet_script}"
+    def codeFingerprint = PipelineHelpers.codeFingerprint([scriptPath, "${projectDir}/bin/grandqc_mask.py"])
     def predictionCacheArg = params.hovernet_prediction_cache?.toString()?.trim() ? "--prediction-cache \"${params.hovernet_prediction_cache}\"" : ""
-    def memoryBoundWorkers = Math.max(1, Math.floor(Math.min(params.max_memory_gb as double, params.hovernet_memory_gb as double) / 6.0) as int)
-    def requestedPostprocWorkers = params.hovernet_postproc_workers as int
-    def postprocWorkers = requestedPostprocWorkers > 0 ? Math.max(1, Math.min(requestedPostprocWorkers, memoryBoundWorkers)) : Math.min(task.cpus as int, memoryBoundWorkers)
+    def resolvedComputeDevice = TaskRuntime.device(runtime_plan)
+    def resolvedHardwareProfile = TaskRuntime.profile(runtime_plan)
+    def taskMemoryGb = task.memory.toBytes() / (1024.0d * 1024.0d * 1024.0d)
+    def memoryBoundWorkers = Math.max(1, Math.floor(taskMemoryGb / 6.0d) as int)
+    def requestedPostprocWorkers = TaskRuntime.setting(runtime_plan, 'hovernet_postproc_workers', params.hovernet_postproc_workers) as int
+    def postprocCap = Math.max(1, Math.min(task.cpus as int, memoryBoundWorkers))
+    def postprocWorkers = requestedPostprocWorkers > 0 ? Math.min(requestedPostprocWorkers, postprocCap) : postprocCap
     """
     set -euo pipefail
-    test "${params._resolved_compute_device ?: params.compute_device}" = "gpu" || { echo "HoVer-Net MoNuSAC requires a resolved GPU runtime" >&2; exit 2; }
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
+    echo "[INFO] HoVer-Net wrapper code fingerprint: ${codeFingerprint}"
+    test "${resolvedComputeDevice}" = "gpu" || { echo "HoVer-Net MoNuSAC requires a resolved GPU runtime" >&2; exit 2; }
+    echo "[INFO] HoVer-Net runtime plan: device=${resolvedComputeDevice}, profile=${resolvedHardwareProfile}, cpus=${task.cpus}, memory_gb=${taskMemoryGb}, postproc_workers=${postprocWorkers}"
     export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
     python "${scriptPath}" \
       --image "${crop_tif}" --shift "${shift_json}" --outdir "hovernet_${sample_id}" \
+      --clean-tissue-mask "${clean_tissue_mask}" \
       --repo "${params.hovernet_repo_dir}" --checkpoint "${params.hovernet_monusac_checkpoint}" \
       --target-mpp ${params.hovernet_target_mpp} --default-mpp ${params.hovernet_default_mpp} \
       --gpu ${params.hovernet_gpu} --batch-size ${params.hovernet_batch_size} \
@@ -38,7 +51,10 @@ process RUN_HOVERNET_MONUSAC {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "hovernet_${sample_id}"
     printf '{"model":"HoVer-Net","checkpoint":"MoNuSAC","cells":[]}' > "hovernet_${sample_id}/hovernet_cells.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "hovernet_${sample_id}/hovernet_metadata.json"
     """
 }

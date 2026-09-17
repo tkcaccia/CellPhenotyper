@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0.0",
+  "organ": "breast",
+  "prompts": [
+    {
+      "id": "tissue_tumor",
+      "text": "tissue-level tumor in breast pathology",
+      "structure": "tissue",
+      "object_type": "tumor"
+    },
+    {
+      "id": "tissue_stroma",
+      "text": "tissue-level stroma in breast pathology",
+      "structure": "tissue",
+      "object_type": "stroma"
+    },
+    {
+      "id": "nuclei_epithelial",
+      "text": "nuclei-level epithelial in breast pathology",
+      "structure": "nuclei",
+      "object_type": "epithelial"
+    },
+    {
+      "id": "nuclei_neoplastic",
+      "text": "nuclei-level neoplastic in breast pathology",
+      "structure": "nuclei",
+      "object_type": "neoplastic"
+    },
+    {
+      "id": "nuclei_lymphocyte",
+      "text": "nuclei-level lymphocyte in breast pathology",
+      "structure": "nuclei",
+      "object_type": "lymphocyte"
+    },
+    {
+      "id": "nuclei_fibroblast",
+      "text": "nuclei-level fibroblast in breast pathology",
+      "structure": "nuclei",
+      "object_type": "fibroblast"
+    }
+  ]
+}

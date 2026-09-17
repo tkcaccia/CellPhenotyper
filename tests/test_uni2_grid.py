@@ -15,6 +15,37 @@ SPEC.loader.exec_module(grid)
 
 
 class UNI2GridAssignmentTest(unittest.TestCase):
+    def test_spatial_grid_geometry_matches_scaled_inner_square(self):
+        context, inner, stride = grid.resolve_spatial_grid_geometry(
+            model_tile_size=224,
+            inner_square_size=90,
+            source_mpp=0.08706,
+            target_mpp=0.25,
+        )
+        self.assertEqual(context, 643)
+        self.assertEqual(inner, 258)
+        self.assertEqual(stride, 258)
+        self.assertEqual(context - stride, 385)
+
+    def test_spatial_grid_stride_can_be_decoupled_from_inner_square(self):
+        context, inner, stride = grid.resolve_spatial_grid_geometry(
+            model_tile_size=224,
+            inner_square_size=28,
+            grid_stride_size=56,
+            source_mpp=0.273774374855905,
+            target_mpp=0.25,
+        )
+        self.assertEqual((context, inner, stride), (205, 26, 51))
+
+    def test_centered_lattice_cores_are_adjacent_and_cover_axis(self):
+        for length in (1, 89, 90, 91, 180, 205, 1000):
+            centers, starts, ends = grid.centered_axis_lattice(length, 90)
+            self.assertTrue(np.all(centers >= 0))
+            self.assertTrue(np.all(centers < length))
+            self.assertLessEqual(int(starts[0]), 0)
+            self.assertGreaterEqual(int(ends[-1]), length)
+            np.testing.assert_array_equal(starts[1:], ends[:-1])
+
     def test_rounded_centroid_and_grid_assignment_use_same_coordinate(self):
         cx = np.asarray([511.4, 511.6, 1023.6])
         cy = np.asarray([511.6, 511.4, 1023.6])

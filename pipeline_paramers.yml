@@ -6,15 +6,23 @@
 # Multi-sample mode (recommended): set `folder_input` and keep image/roi null.
 # Single-sample mode: set `image_input` (and optionally `roi_geojson`).
 image_input: null
+vsi_series_index: 1  # Olympus VSI primary whole-slide series; these prostate scans use series 1
 roi_geojson: null
 folder_input: Data
 
 # Endpoint (outputs)
 outdir_base: results_full
+storage_preflight_mode: fail  # off | warn | fail; fail blocks expected demand, warning records restart risk
+storage_min_free_gib: 20.0
+storage_safety_factor: 1.25
+storage_restart_duplication_factor: 1.0
+storage_source_expansion_factor: 8.0  # fallback only when WSI dimensions cannot be probed
 
 # Pipeline mode
 run_full_pipeline: true
-tissue_mask_from_input: false
+analysis_intent: exploratory   # exploratory | cell_segmentation | cell_phenotyping | tissue_domain_discovery | virtual_staining | outcome_prediction
+study_manifest: ""             # optional JSON based on resources/study_manifest.template.json
+evidence_gate_mode: warn        # off | warn | fail; fail rejects incomplete declared study evidence
 compute_device: auto   # cpu | gpu | auto
 host_arch: auto        # auto | amd64 | arm64
 enable_gpu_on_arm64: false   # set true only when an arm64-compatible GPU container is available
@@ -24,15 +32,15 @@ docker_extra_run_options: ""  # optional site-specific bind mounts or Docker fla
 start_point: convert
 end_point: auto
 # Allowed stage names for start/end:
-# convert, grandqc, stardist, cell_consensus, tma, tissue_mask, cell_assignment, cytoplasm, gigatime,
-# marker_quantification, uni2, kodama, clustering, cluster_mask, grow_tissue, medsam_refine, cluster_geojson,
+# convert, grandqc, stardist, cell_consensus, tma, tissue_mask, pathsegmentor, cell_assignment, cytoplasm, gigatime,
+# marker_quantification, grid_tiles, uni2, kodama, clustering, cluster_mask, grow_tissue, medsam_refine, cluster_geojson,
 # neoplastic_section, titan, pathofmpred
 
 # Runtime image selection
 # In `runtime_image_mode: auto`, singularity tries local .sif first, then ORAS-hosted
 # prebuilt SIF tags in GHCR, then legacy release assets, then docker:// fallback.
-# On arm64 GPU requests, missing GPU assets fall back to CPU containers unless
-# `gpu_container_image` is explicitly provided.
+# On arm64, missing GPU assets permit only an explicitly selected CPU-compatible
+# route such as cell_detection_mode=stardist; consensus fails rather than changing detectors.
 # Keep image fields empty unless you intentionally force a manual image.
 container_repo: ghcr.io/tkcaccia/cellphenotyper
 container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime
@@ -61,9 +69,18 @@ singularity_image: ""
 docker_image: ""
 gpu_debug_diagnostics: false
 
-# Global resource caps
-max_cpus: 4
-max_memory_gb: 8
+# Pipeline-wide hardware policy. Auto mode detects the scheduler/container CPU
+# allowance, usable RAM, GPU count, and VRAM, then creates a per-stage plan.
+max_cpus: auto
+max_memory_gb: auto
+max_parallel_tasks: auto
+hardware_auto: true
+hardware_profile: auto   # auto | conservative | balanced | aggressive
+hardware_cpu_reserve: auto
+hardware_min_free_system_gb: 6.0
+hardware_max_auto_batch: 32       # safety ceiling; live RAM/VRAM can select less
+hardware_max_auto_block_size: 8192  # StarDist may use this; GigaTIME retains its lower derived cap
+hardware_max_auto_output_gib: 16.0
 
 # Input-resolution contract. The strict default rejects missing/invalid MPP,
 # anisotropic pixels, and source images coarser than 0.50 µm/px before conversion.
@@ -75,10 +92,19 @@ input_resolution_max_mpp: 0.50
 input_resolution_cell_target_mpp: 0.25
 input_resolution_max_anisotropy_fraction: 0.05
 input_resolution_max_conversion_drift_fraction: 0.02
+input_resolution_max_metadata_conflict_fraction: 0.02
 input_resolution_override_mpp: 0.0
+input_hash_enable: true
+input_require_rgb: true
+input_require_pyramid: true
+
+# ROI geometry is never repaired or clipped silently. Use warn only for
+# exploratory recovery of a known legacy annotation.
+roi_validation_mode: fail
+roi_bounds_tolerance_px2: 1.0e-6
 
 medsam_refine_memory_gb: 30
-medsam_refine_max_workers: 2
+medsam_refine_max_workers: 0   # 0 = hardware policy
 stardist_pythonpath: ""
 stardist_prob: 0.52
 stardist_nms: 0.28
@@ -93,18 +119,22 @@ full_format: zarr
 allow_huge_tif: false
 
 # Three-model nuclei segmentation and consensus. HoVer-Net MoNuSAC and
-# CellViT++ require the GPU image and run serially on the StarDist crop to cap VRAM.
+# CellViT++ require the GPU image. The scientific mode is explicit and never
+# changes automatically with hardware availability.
+cell_detection_mode: consensus   # consensus | stardist
+cell_consensus_min_agreement_score: 0.0   # 0 disables this extra score gate; broad_pair remains authoritative
+cell_consensus_fusion_acceptance_policy: broad_pair # StarDist + CellViT++; MoNuSAC remains scoped support
 cell_consensus_enable: true
 hovernet_target_mpp: 0.25
 hovernet_default_mpp: 0.25
-hovernet_batch_size: 0   # 0 = auto-scale from detected GPU VRAM
+hovernet_batch_size: 0   # 0 = auto-scale from live free VRAM on the assigned GPU
 hovernet_postproc_workers: 0
 hovernet_prediction_cache: ''
 hovernet_chunk_shape: 10000
 hovernet_tile_shape: 2048
 cellvit_model: HIPT
 cellvit_taxonomy: pannuke
-cellvit_batch_size: 0    # 0 = auto-scale from detected GPU VRAM
+cellvit_batch_size: 0    # 0 = auto-scale from live free VRAM on the assigned GPU
 cellvit_ray_workers: 1   # must be >=1 with CellViT++ 1.0.9
 cellvit_ray_worker_cpus: 0  # 0 = divide task CPUs across Ray workers
 cellvit_amp: true
@@ -133,8 +163,8 @@ pathofmpred_cancer: ""
 pathofmpred_library_dir: ../.cache/pathofmpred/R_library
 pathofmpred_report_format: html
 pathofmpred_include_limited_evidence: false
-tissue_auto_no_downsample_max_side: 1024
 expand_full_labels: true
+expand_um: 3.0  # physical ring; -1 selects legacy expand_px
 expand_mode: auto
 expand_tile_size: 2048
 expand_auto_threshold_mpix: 25.0
@@ -153,11 +183,39 @@ grandqc_cache_dir: .cache/grandqc
 grandqc_default_source_mpp: 0.25
 grandqc_artifact_mpp_model: auto
 grandqc_tissue_mpp_model: 10.0
+grandqc_tissue_probability_threshold: 0.5
+grandqc_clean_tissue_policy: tissue_minus_artifacts
 grandqc_patch_size: 512
 grandqc_artifact_tile_size: 0
 grandqc_artifact_overlap_fraction: 0.5
 grandqc_overlay_factor: 10
 grandqc_preview_max_side: 4096
+grandqc_crop_mask_memory_gb: 4
+grandqc_crop_mask_time: 2h
+prepare_crop_cpus: 4
+prepare_crop_memory_gb: 12
+prepare_crop_time: 6h
+
+# Pipeline-wide GPU admission. Every gpu_capable process reserves task and
+# memory-token locks on one device before CUDA_VISIBLE_DEVICES is assigned.
+gpu_scheduler_enable: true
+gpu_lock_dir: .gpu_locks
+gpu_memory_token_gb: 2.0
+gpu_memory_reserve_gb: 2.0
+gpu_default_task_memory_gb: 8.0
+gpu_max_tasks_per_device: 0   # 0 = derive from memory tokens
+gpu_scheduler_poll_seconds: 5
+gpu_scheduler_timeout_seconds: 172800
+grandqc_gpu_memory_gb: 6.0
+stardist_gpu_memory_gb: 8.0
+hovernet_gpu_memory_gb: 12.0
+cellvit_gpu_memory_gb: 12.0
+gigatime_gpu_memory_gb: 8.0
+uni2_gpu_memory_gb: 10.0
+medsam_gpu_memory_gb: 10.0
+kodama_gpu_memory_gb: 4.0
+titan_gpu_memory_gb: 12.0
+pathsegmentor_gpu_memory_gb: 14.0
 tma_enable: true
 tma_thumbnail_max_side: 2048
 tma_min_spots: 4
@@ -183,8 +241,8 @@ gigatime_enable: true
 gigatime_target_mpp: 0.25
 gigatime_strict_target_mpp: true
 gigatime_output_format: zarr
-gigatime_output_dtype: uint8
-gigatime_output_channels: DAPI,PD-1,CD3,CD8,PD-L1
+gigatime_output_dtype: float32
+gigatime_output_channels: ''  # complete model panel; selected uint8 exports are not equivalent restart inputs
 gigatime_output_pyramid: true
 gigatime_export_ometiff: true
 gigatime_export_channels: ''
@@ -203,12 +261,15 @@ gigatime_jpg_markers: DAPI,PD-1,CD3,CD8,PD-L1
 gigatime_jpg_quality: 75
 gigatime_jpg_preview_max_side: 4096
 gigatime_jpg_save_tiles: false
-gigatime_skip_background_blocks: true
+gigatime_skip_background_blocks: false
 gigatime_skip_background_downsample: 32
-gigatime_skip_background_min_fraction: 0.02
+gigatime_skip_background_min_fraction: 0.0
 gigatime_skip_background_close_radius: 8
 gigatime_skip_background_min_obj_area: 2048
 gigatime_skip_background_hole_area: 2048
+gigatime_seam_qc_mode: fail  # off | warn | fail
+gigatime_seam_qc_max_p95_excess: 0.10
+gigatime_seam_qc_min_affected_fraction: 0.05
 gigatime_max_output_gib: 8.0
 gigatime_disk_buffer_threshold_gib: 4.0
 marker_quantification_enable: true
@@ -218,12 +279,19 @@ marker_quantification_enable: true
 # parent-level shared cache so sibling pipeline clones reuse the same blobs.
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
+# `cells` preserves nucleus-centred sampling; `grid` uses overlapping context
+# tiles whose calibrated 90-pixel inner squares are adjacent without gaps.
+uni2_sampling_mode: cells # cells | grid | both (grid primary plus cell-centred comparison)
+uni2_grid_min_tissue_fraction: 0.05
+uni2_grid_preview_max_side: 2048
+uni2_grid_stride_px: 0 # model-input pixels; 0 follows uni2_inner_square_fixed_px
 uni2_include_nuclei: false
 uni2_include_cyto: false
 uni2_include_inner_square: true
 uni2_fuse_tile_inner_square: true
 uni2_force_full_image: false
 uni2_save_tiles: false
+uni2_embedding_storage: csv # csv | binary; binary stores numerical features without feature-CSV parsing
 uni2_target_mpp: 0.25
 uni2_default_source_mpp: 0.25
 uni2_mask_context_mode: label
@@ -232,17 +300,50 @@ uni2_inner_square_min_px: 32
 uni2_inner_square_max_px: 0
 uni2_inner_square_fixed_px: 90
 
+# Optional supervised PathSegmentor evidence. It never replaces KODAMA or the
+# default MedSAM output. Supply a pinned local source checkout, config and
+# checkpoint on Chiamaka; the pipeline never downloads these assets.
+pathsegmentor_enable: false
+pathsegmentor_repo: ""
+pathsegmentor_config: ""
+pathsegmentor_checkpoint: ""
+pathsegmentor_prompt_panel: resources/pathsegmentor_breast_prompts.json
+pathsegmentor_target_mpp: 0.25
+pathsegmentor_output_mpp: 2.0
+pathsegmentor_tile_size: 1024
+pathsegmentor_overlap_fraction: 0.25
+pathsegmentor_min_tissue_fraction: 0.01
+pathsegmentor_cell_window_um: 28.0
+# Sensitivity output only: compare against MedSAM after ground truth arrives.
+pathsegmentor_guided_refine_enable: false
+pathsegmentor_boundary_band_um: 16.0
+pathsegmentor_core_erosion_um: 24.0
+pathsegmentor_min_distance_improvement: 0.01
+pathsegmentor_assign_unlabeled_within_tissue: false
+pathsegmentor_refine_block_rows: 512
+
 # KODAMA embedding source:
 # tile | nuclei | cyto | inner_square | any comma-separated combination | all
 kodama_rscript: /opt/micromamba/envs/kodama-r/bin/Rscript
 kodama_r_library_dir: /opt/micromamba/envs/kodama-r/lib/R/library
 kodama_embedding_mode: tile,inner_square
-kodama_dims_to_run: 20
+kodama_dims_to_run: 50
 kodama_spark_top_features: 100
-kodama_landmarks: 1000
-kodama_n_cores: 4
+kodama_landmarks: 10000
+kodama_ncomp: 50   # KODAMA.matrix argument, distinct from PCA; not fitted PLS rank for native kNN
+kodama_save_selected_features: false
+kodama_export_native_graph: false  # also enabled automatically by cluster_representation: kodama_graph
+cluster_representation: umap2d   # compatibility baseline; compare with pca, keeping UMAP for plots
+cluster_representation_dimensions: 0  # all saved PCA dimensions; does not change KODAMA.matrix ncomp
+gigatime_kodama_enable: true
+kodama_n_cores: 0   # 0 = hardware policy
 kodama_backend: cpu
 kodama_gpu_device: 0
+
+# Grid-versus-cell comparison created when uni2_sampling_mode=both.
+uni2_route_compare_cpus: 4
+uni2_route_compare_memory_gb: 8
+uni2_route_compare_time: 2h
 
 # Clustering defaults (Louvain on KODAMA embedding)
 cluster_r_library_dir: /opt/micromamba/envs/stardist/lib/R/library
@@ -251,15 +352,34 @@ cluster_snn_k: 50
 cluster_algorithm: leiden
 # 0 keeps the graph-derived count; set >=2 to merge nearest communities exactly.
 cluster_target_clusters: 0
+# Must be true when cluster_target_clusters >=2; forced counts are sensitivity-only.
+cluster_forced_count_sensitivity_acknowledged: false
 cluster_landmark_cells: 10000
 cluster_landmark_assign_k: 50
 cluster_landmark_sample_strategy: knn_inverse_distance
 cluster_landmark_density_knn_k: 50
 cluster_landmark_density_power: 2.0
 cluster_resolution: 0.3
+cluster_seed: 1
+# Total runs including the primary result. Repeated seeds quantify cluster stability.
+cluster_stability_runs: 3
+cluster_assignment_min_vote_margin: 0.10
+cluster_stability_min_fraction: 0.67
+# Preserve the raw cluster but omit uncertain observations from interpretable masks.
+cluster_abstain_uncertain: true
 cluster_primary_variant: standard
 cluster_secondary_variant: none
 cluster_secondary_profile: fine
+
+# Descriptive spatial/marker evidence plus a blinded review packet for each variant.
+cluster_spatial_k: 15
+cluster_spatial_max_observations: 50000
+cluster_review_per_cluster: 20
+cluster_review_radius_px: 256
+cluster_assessment_seed: 1
+cluster_assessment_cpus: 4
+cluster_assessment_memory_gb: 8
+cluster_assessment_time: 2h
 
 # Cluster mask preview (overlay on crop_roi.tif)
 cluster_mask_compression: zlib
@@ -274,3 +394,53 @@ grow_preview_alpha: 0.45
 medsam_device: auto
 medsam_cluster_tile_size: 4096
 medsam_cluster_tile_overlap: 512
+medsam_pre_boundary_competition: true
+medsam_pre_boundary_radius: 64
+medsam_pre_boundary_downsample: 4
+medsam_pre_boundary_iterations: 16
+medsam_pre_boundary_initial_temperature: 2.0
+medsam_pre_boundary_final_temperature: 0.05
+medsam_pre_boundary_data_weight: 1.0
+medsam_pre_boundary_smoothness_weight: 0.3
+medsam_pre_boundary_edge_beta: 0.7
+medsam_pre_boundary_connectivity: 8
+medsam_image_guided_internal_refine: true
+medsam_internal_boundary_radius: 64
+medsam_internal_gradient_space: luminance
+medsam_internal_gradient_sigma_px: 0.0
+medsam_internal_watershed_compactness: 0.0
+medsam_internal_gradient_sigma_um: null
+medsam_appearance_refine: true    # automatic H&E appearance correction; abstains unless exactly two domains
+medsam_appearance_downsample: 8
+medsam_appearance_clusters: 24
+medsam_appearance_core_erosion_px: 32
+medsam_appearance_smooth_sigma_px: 24.0
+medsam_appearance_min_region_area_px: 640000
+medsam_appearance_sample_pixels: 250000
+medsam_appearance_random_seed: 1
+
+# Final vector refinement. This uses only the predicted coverage; expert
+# annotations are permitted only in the separate development benchmark.
+cluster_geojson_shared_boundary_simplify: true
+cluster_geojson_shared_boundary_smooth: true
+cluster_geojson_shared_boundary_smoothing_coefficient: 0.05
+cluster_geojson_shared_boundary_smoothing_passes: 1
+cluster_geojson_shared_boundary_minimum_turn_degrees: 45.0
+cluster_geojson_shared_boundary_minimum_adjacent_length: 16.0
+
+# Optional multi-specimen niche discovery from assembled profiles. This is a
+# separate derivative, not reference annotation or a replacement tissue K.
+cell_neighborhood_feature_groups: available
+cell_neighborhood_feature_weights: '{}'
+cell_neighborhood_feature_storage: table
+cell_neighborhood_row_batch_size: 4096
+cell_neighborhood_column_batch_size: 64
+cell_niche_fit_limit: 20000
+cohort_niches_enable: false
+cohort_niches_bundle: null  # Optional completed stage-25 bundle for source-bound SpatialData re-export; mutually exclusive with fitting.
+cohort_niches_max_k: 8
+cohort_niches_fixed_k: 0
+cohort_niches_seed: 17
+cohort_niches_repeats: 5
+cohort_niches_fit_limit: 20000
+cohort_niches_max_working_mb: 1024

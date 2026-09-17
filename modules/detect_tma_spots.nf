@@ -1,11 +1,14 @@
 process DETECT_TMA_SPOTS {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'detect_tma_spots', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([crop_tif, objects_csv, shift_json]) }
     tag "${sample_id}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/04_TMA/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.tma_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.tma_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.tma_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.tma_memory_gb as int))} GB" }
     time { params.tma_time as String }
 
     input:
@@ -21,6 +24,8 @@ process DETECT_TMA_SPOTS {
     def tma_script = "${projectDir}/${params.tma_script}"
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
 
     mkdir -p "tma_${sample_id}"
     python "${tma_script}" \
@@ -43,6 +48,8 @@ process DETECT_TMA_SPOTS {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "tma_${sample_id}"
     printf '{"sample_id":"%s","is_tma":false,"spot_count":0}\n' "${sample_id}" > "tma_${sample_id}/${sample_id}_tma_summary.json"
     printf '{"type":"FeatureCollection","features":[]}\n' > "tma_${sample_id}/${sample_id}_tma_spots.geojson"

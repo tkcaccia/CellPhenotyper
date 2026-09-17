@@ -40,5 +40,8 @@ jobs:
             bash -n "$script"
           done < <(git ls-files '*.sh')
 
+      - name: Validate pipeline parameter schema
+        run: python bin/validate_pipeline_params.py --params pipeline_paramers.yml
+
       - name: Run CPU test suite
         run: python -m pytest -q

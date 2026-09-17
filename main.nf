@@ -1,5 +1,6 @@
 import groovy.io.FileType
 import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 
 nextflow.enable.dsl = 2
 
@@ -7,6 +8,8 @@ include { PREPARE_INPUT_OMETIFF } from './modules/prepare_input_ometiff'
 include { RUN_GRANDQC_ARTIFACT_ANALYSIS } from './modules/run_grandqc_artifact_analysis'
 include { PREPARE_ROI_GEOJSON } from './modules/prepare_roi_geojson'
 include { PREPARE_STARDIST_AUTO_ROI } from './modules/prepare_stardist_auto_roi'
+include { PREPARE_ANALYSIS_CROP } from './modules/prepare_analysis_crop'
+include { CROP_GRANDQC_CLEAN_MASK } from './modules/crop_grandqc_clean_mask'
 include { RUN_STARDIST_ROI_SEGMENTATION } from './modules/run_stardist_roi_segmentation'
 include { RUN_HOVERNET_MONUSAC } from './modules/run_hovernet_monusac'
 include { RUN_CELLVITPP } from './modules/run_cellvitpp'
@@ -15,7 +18,6 @@ include { DETECT_TMA_SPOTS } from './modules/detect_tma_spots'
 include { RUN_GIGATIME_ON_CROP } from './modules/run_gigatime_on_crop'
 include { EXPORT_GIGATIME_OMETIFF } from './modules/export_gigatime_ometiff'
 include { ROI_GEOJSON_TO_MASK } from './modules/roi_geojson_to_mask'
-include { BUILD_TISSUE_MASK } from './modules/build_tissue_mask'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_PRIMARY } from './modules/expand_labels_to_cytoplasm'
 include { EXPAND_LABELS_TO_CYTOPLASM as EXPAND_LABELS_TO_CYTOPLASM_FULL } from './modules/expand_labels_to_cytoplasm'
@@ -23,15 +25,31 @@ include { QUANTIFY_GIGATIME_INTENSITY } from './modules/quantify_gigatime_intens
 include { EXTRACT_UNI2_EMBEDDINGS } from './modules/extract_uni2_embeddings'
 include { EXTRACT_UNI2_EMBEDDINGS_SHARED } from './modules/extract_uni2_embeddings_shared'
 include { RUN_KODAMA_ANALYSIS } from './modules/run_kodama_analysis'
+include { RUN_GIGATIME_KODAMA } from './modules/run_gigatime_kodama'
 include { RUN_RCODE_CLUSTERING } from './modules/run_rcode_clustering'
-include { LABELS_TO_CLUSTER_MASK } from './modules/labels_to_cluster_mask'
+include { ASSESS_CLUSTER_INTERPRETATION } from './modules/assess_cluster_interpretation'
 include { GROW_TO_TISSUE } from './modules/grow_to_tissue'
+include { PREPARE_UNI2_SPATIAL_GRID } from './subworkflows/prepare_uni2_spatial_grid'
+include { RUN_AUXILIARY_CELL_ROUTE } from './subworkflows/run_auxiliary_cell_route'
+include { BUILD_CLUSTER_MASK_OUTPUT } from './subworkflows/build_cluster_mask_output'
 include { POST_GROW_SPATIAL_OUTPUTS } from './subworkflows/post_grow_spatial_outputs'
 include { POST_CLUSTER_PATHOFM } from './subworkflows/post_cluster_pathofm'
+include { RUN_CELL_PROFILE_ATLAS } from './subworkflows/run_cell_profile_atlas'
+include { RUN_TISSUE_REGION_ATLAS } from './subworkflows/run_tissue_region_atlas'
+include { EXTRACT_PRIMARY_UNI2 } from './subworkflows/extract_primary_uni2'
+include { RUN_PATHSEGMENTOR_INFERENCE } from './subworkflows/run_pathsegmentor_inference'
+include { ANNOTATE_PATHSEGMENTOR_EVIDENCE } from './subworkflows/annotate_pathsegmentor_evidence'
+include { RUN_PATHSEGMENTOR_REFINEMENT } from './subworkflows/run_pathsegmentor_refinement'
 
 workflow {
+if (params.cell_measured_assays && !(params.cell_profiles_enable && params.cell_profiles_spatialdata))
+  error 'cell_measured_assays requires cell_profiles_enable=true and cell_profiles_spatialdata=true'
+if (params.cell_reference_atlas && !params.cell_profiles_enable)
+  error 'cell_reference_atlas requires cell_profiles_enable=true'
+PipelineHelpers.validateCohortOptions(params)
+if (params.region_reference_atlas && !params.tissue_hierarchy_enable)
+  error 'region_reference_atlas requires tissue_hierarchy_enable=true'
 def run_full_pipeline = params.run_full_pipeline as boolean
-def tissue_mask_from_input = params.tissue_mask_from_input as boolean
 def active_profiles = (workflow.profile ?: '')
 .split(',')
 .collect { it.trim().toLowerCase() }
@@ -42,83 +60,52 @@ if (runtime_profiles.size() > 1) {
 error "Select only one runtime profile: use either '-profile singularity' or '-profile docker' (not both)."
 }
 
-def normalize_arch = { raw_arch ->
-def value = (raw_arch ?: '').toString().trim().toLowerCase()
-if (value in ['x86_64', 'amd64', 'x64', 'x86-64']) return 'amd64'
-if (value in ['aarch64', 'arm64', 'arm64v8', 'arm64/v8', 'armv8', 'armv8l']) return 'arm64'
-if (value == 'auto') return 'auto'
-return value ?: 'unknown'
-}
-
-def command_output = { String cmd ->
-try {
-  def proc = ['bash', '-lc', cmd].execute()
-  def finished = proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-  if (!finished) {
-    proc.destroyForcibly()
-    return ''
-  }
-  if (proc.exitValue() != 0) return ''
-  return proc.in.text.trim()
-} catch (Throwable ignored) {
-  return ''
-}
-}
-
-def command_succeeds = { String cmd ->
-try {
-  def proc = ['bash', '-lc', cmd].execute()
-  def finished = proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-  if (!finished) {
-    proc.destroyForcibly()
-    return false
-  }
-  return proc.exitValue() == 0
-} catch (Throwable ignored) {
-  return false
-}
-}
-
-def parse_positive_int = { raw_value, fallback ->
-try {
-  def parsed = (raw_value ?: fallback).toString().trim().toInteger()
-  return parsed > 0 ? parsed : fallback
-} catch (Throwable ignored) {
-  return fallback
-}
-}
+def normalize_arch = { raw -> HostRuntime.normalizeArch(raw) }
+def command_output = { String cmd -> HostRuntime.commandOutput(cmd) }
+def command_succeeds = { String cmd -> HostRuntime.commandSucceeds(cmd) }
+def parse_positive_int = { raw, fallback -> HostRuntime.positiveInt(raw, fallback) }
 
 def paramOr = { String key, def fallback ->
 params.containsKey(key) ? params[key] : fallback
 }
 
-def configured_max_cpus = parse_positive_int(paramOr('max_cpus', 4), 4)
+def scheduler_cpu_raw = [
+System.getenv('SLURM_CPUS_PER_TASK'),
+System.getenv('NSLOTS'),
+System.getenv('PBS_NP'),
+System.getenv('LSB_DJOB_NUMPROC')
+].find { it && it.toString().trim() ==~ /\d+/ }
+def host_cpus = scheduler_cpu_raw
+? parse_positive_int(scheduler_cpu_raw, Runtime.runtime.availableProcessors())
+: Math.max(1, Runtime.runtime.availableProcessors())
+def raw_max_cpus = paramOr('max_cpus', 'auto')
+def raw_max_cpus_text = raw_max_cpus == null ? 'auto' : raw_max_cpus.toString().trim().toLowerCase()
+def cpu_reserve_raw = paramOr('hardware_cpu_reserve', 'auto')
+def cpu_reserve_text = cpu_reserve_raw == null ? 'auto' : cpu_reserve_raw.toString().trim().toLowerCase()
+def cpu_reserve = scheduler_cpu_raw ? 0 : ((cpu_reserve_text in ['', 'auto']) ? (host_cpus >= 24 ? 2 : (host_cpus > 4 ? 1 : 0)) : Math.max(0, parse_positive_int(cpu_reserve_raw, 0)))
+def usable_host_cpus = Math.max(1, host_cpus - cpu_reserve)
+def configured_max_cpus = (raw_max_cpus_text in ['', '0', 'auto'])
+? usable_host_cpus
+: Math.max(1, Math.min(parse_positive_int(raw_max_cpus, usable_host_cpus), usable_host_cpus))
 params.max_cpus = configured_max_cpus
 
-def detect_host_memory_gb = {
-def candidates = [
-  command_output('awk \'/MemTotal/ {printf "%d", int($2/1024/1024)}\' /proc/meminfo'),
-  command_output('free -g | awk \'/^Mem:/ {print $2}\''),
-  command_output('sysctl -n hw.memsize 2>/dev/null | awk \'{printf "%d", int($1/1024/1024/1024)}\'')
-].findAll { it && it ==~ /\d+/ }
-if (!candidates) return 8
+def host_memory_gb = HostRuntime.memoryGb()
+def requested_memory_reserve_gb = 6
 try {
-  return Math.max(1, candidates[0].toInteger())
-} catch (Throwable ignored) {
-  return 8
-}
-}
-def host_memory_gb = detect_host_memory_gb()
+requested_memory_reserve_gb = Math.max(1, Math.ceil((paramOr('hardware_min_free_system_gb', 6.0) as double)) as int)
+} catch (Throwable ignored) {}
+def memory_reserve_gb = Math.min(requested_memory_reserve_gb, Math.max(1, Math.floor(host_memory_gb * 0.15d) as int))
+def usable_host_memory_gb = Math.max(2, host_memory_gb - memory_reserve_gb)
 def raw_max_memory = paramOr('max_memory_gb', 'auto')
 def raw_max_memory_text = raw_max_memory == null ? 'auto' : raw_max_memory.toString().trim().toLowerCase()
 def configured_max_memory_gb = (raw_max_memory_text in ['', '0', 'auto'])
-? host_memory_gb
-: parse_positive_int(raw_max_memory, host_memory_gb)
-def effective_max_memory_gb = Math.max(2, Math.min(configured_max_memory_gb, host_memory_gb))
+? usable_host_memory_gb
+: parse_positive_int(raw_max_memory, usable_host_memory_gb)
+def effective_max_memory_gb = Math.max(2, Math.min(configured_max_memory_gb, usable_host_memory_gb))
 if (raw_max_memory_text in ['', '0', 'auto']) {
-println "Runtime resource auto-detection: max_memory_gb=${effective_max_memory_gb} (host total RAM: ${host_memory_gb} GB)."
+println "Runtime resource auto-detection: max_cpus=${configured_max_cpus}/${host_cpus}, max_memory_gb=${effective_max_memory_gb}/${host_memory_gb} (reserved CPUs=${cpu_reserve}, RAM=${memory_reserve_gb} GB)."
 } else if (effective_max_memory_gb != configured_max_memory_gb) {
-println "WARN: Reducing max_memory_gb from ${configured_max_memory_gb} to ${effective_max_memory_gb} (host total RAM: ${host_memory_gb} GB)."
+println "WARN: Reducing max_memory_gb from ${configured_max_memory_gb} to ${effective_max_memory_gb} to preserve ${memory_reserve_gb} GB for the host."
 }
 params.max_memory_gb = effective_max_memory_gb
 
@@ -175,256 +162,57 @@ log.warn "compute_device='gpu' enabled on arm64. GPU processes will run only if 
 }
 params._resolved_compute_device = resolved_compute_device
 
-def container_repo = (paramOr('container_repo', 'ghcr.io/tkcaccia/cellphenotyper') ?: 'ghcr.io/tkcaccia/cellphenotyper').toString().trim()
-if (!container_repo) {
-container_repo = 'ghcr.io/tkcaccia/cellphenotyper'
-}
-def container_gpu_repo = (paramOr('container_gpu_repo', 'ghcr.io/tkcaccia/cellphenotyper-runtime') ?: 'ghcr.io/tkcaccia/cellphenotyper-runtime').toString().trim()
-if (!container_gpu_repo) {
-container_gpu_repo = 'ghcr.io/tkcaccia/cellphenotyper-runtime'
-}
-def default_cpu_tag_generic = detected_arch == 'amd64' ? '2.2-amd64' : '0.2.0'
-def container_cpu_tag = (paramOr('container_cpu_tag', default_cpu_tag_generic) ?: default_cpu_tag_generic).toString().trim()
-if (!container_cpu_tag) {
-container_cpu_tag = default_cpu_tag_generic
-}
-def container_cpu_tag_amd64 = (paramOr('container_cpu_tag_amd64', '2.2-amd64') ?: '2.2-amd64').toString().trim()
-if (!container_cpu_tag_amd64) {
-container_cpu_tag_amd64 = '2.2-amd64'
-}
-def container_cpu_tag_arm64 = (paramOr('container_cpu_tag_arm64', '0.2.0') ?: '0.2.0').toString().trim()
-if (!container_cpu_tag_arm64) {
-container_cpu_tag_arm64 = '0.2.0'
-}
-def container_gpu_tag = (paramOr('container_gpu_tag', '2.7-gpu-amd64') ?: '2.7-gpu-amd64').toString().trim()
-if (!container_gpu_tag) {
-container_gpu_tag = '2.7-gpu-amd64'
-}
-
-def selected_cpu_tag = detected_arch == 'amd64' ? container_cpu_tag_amd64 : container_cpu_tag_arm64
-def auto_cpu_docker_image = "${container_repo}:${selected_cpu_tag}"
-def auto_gpu_docker_image = "${container_gpu_repo}:${container_gpu_tag}"
-def auto_docker_image = resolved_compute_device == 'gpu'
-? (detected_arch == 'amd64' ? auto_gpu_docker_image : auto_cpu_docker_image)
-: auto_cpu_docker_image
-def auto_docker_singularity_image = "docker://${auto_docker_image}"
-
-def singularity_image_source = (paramOr('singularity_image_source', 'auto') ?: 'auto').toString().trim().toLowerCase()
-if (!(singularity_image_source in ['auto', 'oras', 'release', 'docker'])) {
-singularity_image_source = 'auto'
-}
-def singularity_oras_repo = (paramOr('singularity_oras_repo', container_repo) ?: container_repo).toString().trim()
-def singularity_release_repo = (paramOr('singularity_release_repo', 'tkcaccia/CellPhenotyper') ?: 'tkcaccia/CellPhenotyper').toString().trim()
-def singularity_release_tag = (paramOr('singularity_release_tag', 'v2.2') ?: 'v2.2').toString().trim()
-def singularity_cpu_asset_amd64 = (paramOr('singularity_cpu_asset_amd64', 'cellphenotyper-2.2-amd64.sif') ?: 'cellphenotyper-2.2-amd64.sif').toString().trim()
-def singularity_cpu_asset_arm64 = (paramOr('singularity_cpu_asset_arm64', 'cellphenotyper-2.2-arm64.sif') ?: 'cellphenotyper-2.2-arm64.sif').toString().trim()
-def singularity_gpu_asset_amd64 = (paramOr('singularity_gpu_asset_amd64', 'cellphenotyper-2.2-gpu-amd64.sif') ?: 'cellphenotyper-2.2-gpu-amd64.sif').toString().trim()
-def singularity_gpu_asset_arm64 = (paramOr('singularity_gpu_asset_arm64', 'cellphenotyper-2.2-gpu-arm64.sif') ?: 'cellphenotyper-2.2-gpu-arm64.sif').toString().trim()
-def singularity_cpu_oras_tag_amd64 = (paramOr('singularity_cpu_oras_tag_amd64', '2.2-sif-amd64') ?: '2.2-sif-amd64').toString().trim()
-def singularity_cpu_oras_tag_arm64 = (paramOr('singularity_cpu_oras_tag_arm64', '2.2-sif-arm64') ?: '2.2-sif-arm64').toString().trim()
-def singularity_gpu_oras_tag_amd64 = (paramOr('singularity_gpu_oras_tag_amd64', '2.2-sif-gpu-amd64') ?: '2.2-sif-gpu-amd64').toString().trim()
-def singularity_gpu_oras_tag_arm64 = (paramOr('singularity_gpu_oras_tag_arm64', '2.2-sif-gpu-arm64') ?: '2.2-sif-gpu-arm64').toString().trim()
-def singularity_local_dir = (paramOr('singularity_local_dir', '') ?: '').toString().trim()
-def cpu_container_image = (paramOr('cpu_container_image', '') ?: '').toString().trim()
-def gpu_container_image = (paramOr('gpu_container_image', '') ?: '').toString().trim()
-
-def selected_release_asset = ''
-def selected_oras_tag = ''
-if (resolved_compute_device == 'gpu') {
-if (detected_arch == 'amd64') {
-  selected_release_asset = singularity_gpu_asset_amd64
-  selected_oras_tag = singularity_gpu_oras_tag_amd64
-} else if (detected_arch == 'arm64') {
-  selected_release_asset = singularity_gpu_asset_arm64 ?: ''
-  selected_oras_tag = singularity_gpu_oras_tag_arm64 ?: ''
-} else {
-  selected_release_asset = singularity_gpu_asset_amd64
-  selected_oras_tag = singularity_gpu_oras_tag_amd64
-}
-} else {
-selected_release_asset = (detected_arch == 'amd64' ? singularity_cpu_asset_amd64 : singularity_cpu_asset_arm64)
-selected_oras_tag = (detected_arch == 'amd64' ? singularity_cpu_oras_tag_amd64 : singularity_cpu_oras_tag_arm64)
-}
-def local_sif_candidates = []
-if (selected_release_asset) {
-if (singularity_local_dir) {
-  local_sif_candidates << new File(singularity_local_dir, selected_release_asset)
-}
-local_sif_candidates << new File(baseDir.toString(), selected_release_asset)
-local_sif_candidates << new File(baseDir.toString(), "singularity/${selected_release_asset}")
-}
-def local_sif_file = local_sif_candidates.find { it.exists() && it.isFile() }
-def auto_local_singularity_image = local_sif_file ? local_sif_file.absolutePath : ''
-def auto_oras_singularity_image = (singularity_oras_repo && selected_oras_tag)
-? "oras://${singularity_oras_repo}:${selected_oras_tag}"
-: ''
-def auto_release_singularity_image = (singularity_release_repo && singularity_release_tag && selected_release_asset)
-? "https://github.com/${singularity_release_repo}/releases/download/${singularity_release_tag}/${selected_release_asset}"
-: ''
-
-def release_asset_reachable = false
-if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image) {
-def escaped_release_url = auto_release_singularity_image.replace("'", "'\"'\"'")
-release_asset_reachable = command_succeeds("curl -fsIL --max-time 12 '${escaped_release_url}' >/dev/null 2>&1")
-}
-
-def auto_singularity_image = auto_docker_singularity_image
-def auto_singularity_origin = 'docker'
-if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras', 'release'] && auto_local_singularity_image) {
-auto_singularity_image = auto_local_singularity_image
-auto_singularity_origin = 'local'
-} else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras'] && auto_oras_singularity_image) {
-auto_singularity_image = auto_oras_singularity_image
-auto_singularity_origin = 'oras'
-} else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'release'] && auto_release_singularity_image && release_asset_reachable) {
-auto_singularity_image = auto_release_singularity_image
-auto_singularity_origin = 'release'
-} else if (runtime_profiles.contains('singularity') && singularity_image_source in ['auto', 'oras', 'release']) {
-auto_singularity_image = auto_docker_singularity_image
-auto_singularity_origin = 'docker'
-if (singularity_image_source == 'release') {
-  println "WARN: Release-hosted Singularity image is not reachable (${auto_release_singularity_image}); falling back to ${auto_docker_singularity_image}"
-} else if (singularity_image_source == 'oras') {
-  println "WARN: ORAS-hosted Singularity image is not configured; falling back to ${auto_docker_singularity_image}"
-}
-}
-if (resolved_compute_device == 'gpu' && detected_arch == 'arm64' && auto_singularity_origin == 'docker') {
-log.warn "No arm64 GPU Singularity asset was found/reachable. Auto-selected fallback container is CPU-oriented (${auto_singularity_image})."
-}
-
-def raw_singularity_image = (paramOr('singularity_image', '') ?: '').toString().trim()
-def resolved_singularity_image = raw_singularity_image
-if (runtime_image_mode == 'auto' || !raw_singularity_image) {
-if (resolved_compute_device == 'gpu' && gpu_container_image) {
-  resolved_singularity_image = gpu_container_image
-} else if (cpu_container_image) {
-  resolved_singularity_image = cpu_container_image
-} else {
-  resolved_singularity_image = auto_singularity_image
-}
-} else if (runtime_image_mode == 'manual' && resolved_compute_device == 'gpu' && gpu_container_image) {
-resolved_singularity_image = gpu_container_image
-} else if (runtime_image_mode == 'manual' && cpu_container_image) {
-resolved_singularity_image = cpu_container_image
-} else if (raw_singularity_image.startsWith('docker://')) {
-def ref = raw_singularity_image.replaceFirst('^docker://', '')
-if (!ref.contains('/') || ref.endsWith('.sif')) {
-  resolved_singularity_image = auto_singularity_image
-}
-} else if (raw_singularity_image.toLowerCase().endsWith('.sif') && !raw_singularity_image.contains('/')) {
-resolved_singularity_image = auto_singularity_image
-}
-
-def raw_docker_image = (paramOr('docker_image', '') ?: '').toString().trim()
-def resolved_docker_image = raw_docker_image
-if (runtime_image_mode == 'auto' || !raw_docker_image || raw_docker_image == 'cellphenotyper:full-cpu') {
-if (resolved_compute_device == 'gpu' && gpu_container_image) {
-  resolved_docker_image = gpu_container_image.replaceFirst('^docker://', '')
-} else if (cpu_container_image) {
-  resolved_docker_image = cpu_container_image.replaceFirst('^docker://', '')
-} else {
-  resolved_docker_image = auto_docker_image
-}
-}
-
-if (runtime_profiles.contains('singularity')) {
-def singularity_image = resolved_singularity_image
-if (!singularity_image) {
-  error "Parameter 'singularity_image' is empty. Use e.g. docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64"
-}
-
-if (singularity_image.startsWith('docker://')) {
-  def docker_ref = singularity_image.replaceFirst('^docker://', '')
-  def likely_invalid_ref = (!docker_ref.contains('/')) || docker_ref.endsWith('.sif')
-  if (likely_invalid_ref) {
-    error "Invalid singularity_image '${singularity_image}'. Use a valid OCI reference, e.g. docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64"
+def gpu_inventory = []
+if (detected_nvidia) {
+def gpu_query = command_output('nvidia-smi --query-gpu=index,memory.total,memory.free,name --format=csv,noheader,nounits 2>/dev/null')
+gpu_query.readLines().each { line ->
+  def fields = line.split(',', 4).collect { it.trim() }
+  if (fields.size() >= 4 && fields[0] ==~ /\d+/ && fields[1] ==~ /\d+/ && fields[2] ==~ /\d+/) {
+    gpu_inventory << [index: fields[0].toInteger(), total_memory_gb: fields[1].toDouble() / 1024.0d, free_memory_gb: fields[2].toDouble() / 1024.0d, name: fields[3]]
   }
 }
+}
+def largest_gpu_vram_gb = gpu_inventory ? (gpu_inventory.collect { it.total_memory_gb as double }.max() as double) : 0.0d
+def hardware_plan = HardwarePolicy.resolve(params, configured_max_cpus, effective_max_memory_gb, resolved_compute_device == 'gpu', largest_gpu_vram_gb)
+def runtime_plan = TaskRuntime.create(hardware_plan, resolved_compute_device)
+hardware_plan.updates.each { key, value -> params[key.toString()] = value }
+params.hardware_profile = hardware_plan.profile
+params._resolved_hardware_profile = hardware_plan.profile
+params._detected_host_cpus = host_cpus
+params._detected_host_memory_gb = host_memory_gb
+params._detected_gpu_count = gpu_inventory.size()
+params._detected_gpu_vram_gb = largest_gpu_vram_gb
 
-def resolved_arch = detected_arch
-def image_lc = singularity_image.toLowerCase()
-if (resolved_arch == 'amd64' && image_lc.contains('arm64')) {
-  error "Detected host architecture amd64 but singularity_image appears arm64: ${singularity_image}. Set --host_arch amd64 and/or override --singularity_image."
-}
-if (resolved_arch == 'arm64' && (image_lc.contains('amd64') || image_lc.contains('x86_64'))) {
-  error "Detected host architecture arm64 but singularity_image appears amd64/x86_64: ${singularity_image}. Set --host_arch arm64 and/or override --singularity_image."
-}
-}
-
-def stage_aliases = [
-convert         : 'convert',
-image_conversion: 'convert',
-prepare_input   : 'convert',
-grandqc         : 'grandqc',
-qc              : 'grandqc',
-artifact        : 'grandqc',
-artifacts       : 'grandqc',
-stardist        : 'stardist',
-startdist       : 'stardist',
-hovernet        : 'cell_consensus',
-hover_net       : 'cell_consensus',
-hovernet_monusac: 'cell_consensus',
-cellvit         : 'cell_consensus',
-cellvitpp       : 'cell_consensus',
-'cellvit++'     : 'cell_consensus',
-consensus       : 'cell_consensus',
-cell_consensus  : 'cell_consensus',
-tma             : 'tma',
-tma_spots       : 'tma',
-tissue_microarray: 'tma',
-gigatime        : 'gigatime',
-virtual_mif     : 'gigatime',
-mif             : 'gigatime',
-tissue_mask     : 'tissue_mask',
-mask_tissue     : 'tissue_mask',
-tissue_geojson  : 'tissue_mask',
-geojson         : 'cluster_geojson',
-cell_assignment : 'cell_assignment',
-assign          : 'cell_assignment',
-cytoplasm       : 'cytoplasm',
-quantification  : 'marker_quantification',
-marker_quantification: 'marker_quantification',
-marker_intensity : 'marker_quantification',
-gigatime_quantification: 'marker_quantification',
-uni2            : 'uni2',
-uni_2           : 'uni2',
-'uni-2'         : 'uni2',
-embeddings      : 'uni2',
-kodama          : 'kodama',
-clustering      : 'clustering',
-rcode_clustering: 'clustering',
-cluster_mask    : 'cluster_mask',
-labels_to_cluster_mask: 'cluster_mask',
-grow_tissue     : 'grow_tissue',
-grow_to_tissue  : 'grow_tissue',
-medsam          : 'medsam_refine',
-medsam_refine   : 'medsam_refine',
-medsam_refine_tissue: 'medsam_refine',
-refine_tissue   : 'medsam_refine',
-cluster_geojson : 'cluster_geojson',
-mask_to_geojson : 'cluster_geojson',
-final_geojson   : 'cluster_geojson',
-neoplastic_section: 'neoplastic_section',
-tumor_section  : 'neoplastic_section',
-tumour_section : 'neoplastic_section',
-titan           : 'titan',
-titan_embedding : 'titan',
-pathofmpred     : 'pathofmpred',
-pathofm         : 'pathofmpred'
+def hardware_plan_document = [
+schema_version: 1,
+detected: [architecture: detected_arch, host_cpus: host_cpus, host_memory_gb: host_memory_gb, gpus: gpu_inventory],
+reserved: [cpus: cpu_reserve, memory_gb: memory_reserve_gb],
+policy: hardware_plan,
+task_runtime_plan: runtime_plan
 ]
-def stage_order = ['convert', 'grandqc', 'stardist', 'cell_consensus', 'tma', 'tissue_mask', 'cell_assignment', 'cytoplasm', 'gigatime', 'marker_quantification', 'uni2', 'kodama', 'clustering', 'cluster_mask', 'grow_tissue', 'medsam_refine', 'cluster_geojson', 'neoplastic_section', 'titan', 'pathofmpred']
+println "Hardware policy: enabled=${hardware_plan.enabled}, profile=${hardware_plan.profile}, CPU budget=${hardware_plan.cpu_budget}, RAM budget=${hardware_plan.memory_budget_gb} GB, GPUs=${gpu_inventory.size()}, max GPU VRAM=${String.format('%.1f', largest_gpu_vram_gb)} GB."
+println "Hardware stage plan: " + hardware_plan.stages.collect { name, resource -> "${name}=${resource.cpus}c/${resource.memory_gb}GB" }.join(', ')
+try {
+  def outputRoot = (params.outdir_base ?: '').toString()
+  if (outputRoot && !outputRoot.contains('://')) {
+    def executionDir = new File(outputRoot, '00_execution')
+    executionDir.mkdirs()
+    def hardwarePlanFile = new File(executionDir, 'hardware_plan.json')
+    hardwarePlanFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(hardware_plan_document)) + System.lineSeparator()
+    params._hardware_plan_file = hardwarePlanFile.absolutePath
+  }
+} catch (Throwable exc) {
+  log.warn "Could not write hardware_plan.json: ${exc.message}"
+}
+
+def resolved_singularity_image = (paramOr("singularity_image", "") ?: "").toString().trim()
+def resolved_docker_image = (paramOr("docker_image", "") ?: "").toString().trim()
+
+def stage_order = PipelineInputs.STAGES
 def stage_index = stage_order.withIndex().collectEntries { stage_name, idx -> [(stage_name): idx] }
 
 def normalize_stage = { raw_value, fallback_value ->
-def key = (raw_value ?: fallback_value).toString().trim().toLowerCase()
-if (key == 'auto') {
-  key = fallback_value
-}
-key = stage_aliases.getOrDefault(key, key)
-if (!stage_index.containsKey(key)) {
-  error "Invalid stage '${raw_value}'. Allowed stages: ${stage_order.join(', ')}"
-}
-key
+PipelineInputs.normalizeStage(raw_value, fallback_value)
 }
 
 def titan_requested = (((params.titan_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
@@ -458,36 +246,112 @@ def idx = stage_index[stage_name]
 idx >= stage_index[start_point] && idx <= stage_index[end_point]
 }
 
+def requireStageOutput = { String stage_name, source_ch ->
+source_ch
+  .ifEmpty { error "Stage '${stage_name}' emitted no outputs; check joins." }
+  .view { value -> "[OK] Stage output contract satisfied: ${stage_name}" }
+}
+
 def gigatime_enabled = (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def marker_quantification_enabled = (((params.marker_quantification_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def gigatime_kodama_enabled = ((((params.gigatime_kodama_enable == null) ? true : params.gigatime_kodama_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def grandqc_enabled = (((params.grandqc_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def pathsegmentor_enabled = (((params.pathsegmentor_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def pathsegmentor_refine_enabled = (((params.pathsegmentor_guided_refine_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+if (pathsegmentor_refine_enabled && !pathsegmentor_enabled) {
+error 'pathsegmentor_guided_refine_enable requires pathsegmentor_enable=true'
+}
 def tma_enabled = ((((params.tma_enable == null) ? true : params.tma_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
-def cell_consensus_requested = ((((params.cell_consensus_enable == null) ? true : params.cell_consensus_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
-def cell_consensus_enabled = cell_consensus_requested && resolved_compute_device == 'gpu'
-if (cell_consensus_requested && !cell_consensus_enabled) {
-println "WARN: Multi-model cell consensus requires GPU execution; downstream stages will use StarDist outputs."
+def legacy_consensus_enabled = ((((params.cell_consensus_enable == null) ? true : params.cell_consensus_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def cell_detection_mode = (params.cell_detection_mode ?: (legacy_consensus_enabled ? 'consensus' : 'stardist')).toString().trim().toLowerCase()
+if (!(cell_detection_mode in ['consensus', 'stardist'])) {
+error "Invalid --cell_detection_mode '${params.cell_detection_mode}'. Use consensus or stardist."
+}
+def cell_consensus_enabled = cell_detection_mode == 'consensus'
+params._resolved_cell_detection_mode = cell_detection_mode
+if (cell_consensus_enabled && resolved_compute_device != 'gpu') {
+error "cell_detection_mode=consensus requires GPU execution. Use --compute_device gpu, or explicitly choose --cell_detection_mode stardist; the pipeline will not change the scientific cell set based on hardware."
+}
+if (!grandqc_enabled && stage_index[end_point] >= stage_index['grandqc']) {
+error "GrandQC is a mandatory upstream stage. Remove --grandqc_enable false or restrict the run to --end_point convert."
 }
 def uni2_reuse_existing = (((params.uni2_reuse_existing ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def uni2_sampling_mode = (params.uni2_sampling_mode ?: 'cells').toString().trim().toLowerCase()
+if (uni2_sampling_mode in ['cell', 'cell_centered', 'cell-centred', 'cell-centered']) uni2_sampling_mode = 'cells'
+if (!(uni2_sampling_mode in ['cells', 'grid', 'both'])) {
+error "Invalid --uni2_sampling_mode '${params.uni2_sampling_mode}'. Use cells, grid, or both."
+}
+def uni2_grid_mode = uni2_sampling_mode in ['grid', 'both']
+if (params.tissue_hierarchy_enable && !uni2_grid_mode)
+  error 'tissue_hierarchy_enable requires the grid or both UNI-2 sampling route'
+def uni2_cell_auxiliary_mode = uni2_sampling_mode == 'both'
+params._resolved_uni2_sampling_mode = uni2_sampling_mode
+def analysis_contract = ScientificContract.resolve(
+  params.analysis_intent,
+  uni2_sampling_mode,
+  cell_detection_mode,
+  gigatime_enabled,
+  titan_requested,
+  pathofmpred_requested,
+  start_point,
+  end_point,
+)
+def analysis_intent = analysis_contract.analysis_intent
+params._resolved_analysis_intent = analysis_intent
+def validation_readiness = StudyEvidence.resolve(
+  params.study_manifest,
+  params.evidence_gate_mode,
+  analysis_intent,
+)
+analysis_contract.validation_readiness = validation_readiness
+try {
+  params._analysis_contract_file = StudyEvidence.writeReports(analysis_contract, validation_readiness, params.outdir_base)
+} catch (Throwable exc) {
+  log.warn "Could not write scientific contract reports: ${exc.message}"
+}
+println "Scientific analysis contract: intent=${analysis_intent}, observation_unit=${analysis_contract.observation_unit}, UNI-2 route=${uni2_sampling_mode}, cell detection=${cell_detection_mode}."
+if (!validation_readiness.gate_passed) {
+  def message = StudyEvidence.gateMessage(validation_readiness)
+  if (validation_readiness.gate_mode == 'fail') error message
+  if (validation_readiness.gate_mode == 'warn') log.warn message
+}
 def run_convert = should_run_stage('convert')
-def run_grandqc = should_run_stage('grandqc') && grandqc_enabled
+def run_grandqc = should_run_stage('grandqc')
 def run_stardist = should_run_stage('stardist')
 def run_cell_consensus = should_run_stage('cell_consensus') && cell_consensus_enabled
 def run_tma = should_run_stage('tma') && tma_enabled
 def run_gigatime = should_run_stage('gigatime') && gigatime_enabled
 def run_tissue_mask = should_run_stage('tissue_mask')
+def run_pathsegmentor = should_run_stage('pathsegmentor') && pathsegmentor_enabled
 def run_cell_assignment = should_run_stage('cell_assignment')
 def run_cytoplasm = should_run_stage('cytoplasm')
 def run_marker_quantification = should_run_stage('marker_quantification') && gigatime_enabled && marker_quantification_enabled
+def run_grid_tiles = should_run_stage('grid_tiles') && uni2_grid_mode
 def run_uni2 = should_run_stage('uni2') && !uni2_reuse_existing
 def run_kodama = should_run_stage('kodama')
+def run_gigatime_kodama = run_kodama && gigatime_enabled && gigatime_kodama_enabled
+if (run_gigatime_kodama && !(params.gigatime_integrated_quantification as boolean)) {
+error "GigaTIME KODAMA requires --gigatime_integrated_quantification true."
+}
 def run_clustering = should_run_stage('clustering')
+if ((params.cluster_target_clusters as int) > 0 && !((params.cluster_forced_count_sensitivity_acknowledged ?: false) as boolean)) {
+error "A forced cluster count is sensitivity-only. Set --cluster_forced_count_sensitivity_acknowledged true or restore --cluster_target_clusters 0."
+}
 def run_cluster_mask = should_run_stage('cluster_mask')
-def run_grow_tissue = should_run_stage('grow_tissue')
+def grow_tissue_requested = should_run_stage('grow_tissue')
+def run_grow_tissue = grow_tissue_requested && !uni2_grid_mode
+def run_auxiliary_cell_grow_tissue = grow_tissue_requested && uni2_cell_auxiliary_mode
 def run_medsam_refine = should_run_stage('medsam_refine')
+def run_pathsegmentor_refine = should_run_stage('medsam_refine') && pathsegmentor_refine_enabled
 def run_cluster_geojson = should_run_stage('cluster_geojson')
 def run_neoplastic_section = should_run_stage('neoplastic_section') && titan_requested
 def run_titan = should_run_stage('titan') && titan_requested
 def run_pathofmpred = should_run_stage('pathofmpred') && pathofmpred_requested
+if (grow_tissue_requested && uni2_grid_mode) {
+println uni2_cell_auxiliary_mode
+  ? "Both UNI-2 routes: the dense grid mask bypasses grow_tissue, while the sparse cell-centred mask runs grow_tissue before MedSAM."
+  : "Grid UNI-2 route: grow_tissue is not applicable because adjacent grid cores already form a dense cluster mask; downstream MedSAM, when requested, receives the grid mask directly."
+}
 if (should_run_stage('neoplastic_section') && !titan_requested) {
 error "The neoplastic_section stage requires --titan_enable true or --pathofmpred_enable true."
 }
@@ -500,62 +364,39 @@ error "The pathofmpred stage requires --pathofmpred_enable true."
 if ((run_titan || run_pathofmpred) && resolved_compute_device != 'gpu') {
 error "TITAN/PathoFMPred execution requires --compute_device gpu."
 }
+if (run_pathsegmentor && resolved_compute_device != 'gpu') {
+error 'PathSegmentor execution requires --compute_device gpu.'
+}
+if (run_pathsegmentor) {
+  ['pathsegmentor_repo', 'pathsegmentor_config', 'pathsegmentor_checkpoint'].each { key ->
+    if (!(params[key] ?: '').toString().trim()) error "PathSegmentor requires --${key}"
+  }
+}
 if (run_pathofmpred && !(params.pathofmpred_cancer ?: '').toString().trim()) {
 error "PathoFMPred requires --pathofmpred_cancer with the intended TCGA cancer code (for example BRCA)."
 }
 if (run_neoplastic_section && !cell_consensus_enabled) {
-error "Neoplastic-section selection requires GPU CellViT++ consensus output; enable --cell_consensus_enable true."
+error "Neoplastic-section selection requires --cell_detection_mode consensus."
 }
-def resolveKodamaModes = { rawValue ->
-def raw = (rawValue == null ? '' : rawValue.toString()).trim().toLowerCase()
-if (!raw || raw in ['all', 'default']) {
-  return ['tile', 'inner_square']
-}
-if (raw in ['full', 'all4', 'all_four', 'full_stack']) {
-  return ['tile', 'nuclei', 'cyto', 'inner_square']
-}
-def mapped = raw
-  .replace('+', ',')
-  .split(',')
-  .collect { it.trim() }
-  .findAll { it }
-  .collect { token ->
-    switch (token) {
-      case 'tile':
-      case 'full':
-      case 'full_tile':
-      case 'full-tile':
-        return 'tile'
-      case 'nuclei':
-      case 'nucleus':
-      case 'nuclear':
-      case 'label':
-      case 'labels':
-        return 'nuclei'
-      case 'cyto':
-      case 'cytoplasm':
-        return 'cyto'
-      case 'inner':
-      case 'inner_square':
-      case 'inner-square':
-      case 'square':
-        return 'inner_square'
-      default:
-        error "Unknown KODAMA embedding mode token: ${token}"
-    }
-  }
-  .unique()
-if (!mapped) {
-  error "KODAMA embedding mode resolved to an empty set."
-}
-return mapped
-}
-def kodama_requested_modes = resolveKodamaModes(params.kodama_embedding_mode)
+def kodama_requested_modes = PipelineHelpers.resolveKodamaModes(params.kodama_embedding_mode)
 def include_uni2_nuclei = params.uni2_include_nuclei == null ? kodama_requested_modes.contains('nuclei') : (params.uni2_include_nuclei as boolean)
 def include_uni2_cyto = params.uni2_include_cyto == null ? kodama_requested_modes.contains('cyto') : (params.uni2_include_cyto as boolean)
 def include_uni2_inner_square = params.uni2_include_inner_square == null ? kodama_requested_modes.contains('inner_square') : (params.uni2_include_inner_square as boolean)
 def use_roi_crop_for_uni2 = params.uni2_use_roi_crop == null ? true : (params.uni2_use_roi_crop as boolean)
 def fuse_tile_inner_square_uni2 = params.uni2_fuse_tile_inner_square == null ? true : (params.uni2_fuse_tile_inner_square as boolean)
+if (uni2_grid_mode) {
+if (!use_roi_crop_for_uni2) error "Grid sampling currently requires --uni2_use_roi_crop true."
+if (!fuse_tile_inner_square_uni2 || !include_uni2_inner_square) {
+  error "Grid sampling requires fused tile+inner-square UNI2."
+}
+if (include_uni2_nuclei || include_uni2_cyto || kodama_requested_modes.any { it in ['nuclei', 'cyto'] }) {
+  error "Grid sampling supports only tile and inner_square modes."
+}
+def supported_grid_encoders = ['uni2-h', 'virchow', 'virchow2', 'phikon-v2'] as Set
+if (!supported_grid_encoders.contains(params.uni2_encoder?.toString()?.toLowerCase())) {
+  error "Grid sampling requires a registered foundation encoder: ${supported_grid_encoders.sort().join(', ')}."
+}
+}
 if (should_run_stage('uni2') && uni2_reuse_existing) {
 println "UNI-2 stage is inside the requested window, but --uni2_reuse_existing=true; published 09_embeddings will be used instead of recomputing UNI-2."
 }
@@ -569,65 +410,15 @@ if (missingKodamaModes) {
 }
 }
 
-println "Runtime auto-selection: runtime_image_mode=${runtime_image_mode}, requested_arch=${requested_arch_raw ?: 'auto'}, detected_arch=${detected_arch}, arch_candidates=${detected_arch_candidates.join(',')}, requested_compute_device=${requested_compute_device}, resolved_compute_device=${resolved_compute_device}, enable_gpu_on_arm64=${enable_gpu_on_arm64}, enable_stardist_gpu_on_arm64=${enable_stardist_gpu_on_arm64}, singularity_image_source=${singularity_image_source}, singularity_origin=${auto_singularity_origin}, singularity_oras_tag=${selected_oras_tag ?: 'none'}, singularity_asset=${selected_release_asset ?: 'none'}, cpu_container_image=${cpu_container_image ?: 'auto'}, gpu_container_image=${gpu_container_image ?: 'auto'}, singularity_image=${resolved_singularity_image}, docker_image=${resolved_docker_image}"
+println "Runtime: arch=${detected_arch}, device=${resolved_compute_device}, image_mode=${runtime_image_mode}."
 println "Pipeline stage window: ${start_point} -> ${end_point}"
 
-def supported_image_suffixes = [
-[suffix: '.ome.tif',  priority: 80],
-[suffix: '.ome.tiff', priority: 75],
-[suffix: '.btf',      priority: 70],
-[suffix: '.czi',      priority: 69],
-[suffix: '.svs',      priority: 68],
-[suffix: '.ndpi',     priority: 67],
-[suffix: '.scn',      priority: 66],
-[suffix: '.mrxs',     priority: 65],
-[suffix: '.vms',      priority: 64],
-[suffix: '.vmu',      priority: 63],
-[suffix: '.tif',      priority: 60],
-[suffix: '.tiff',     priority: 55],
-[suffix: '.png',      priority: 50],
-[suffix: '.jpg',      priority: 45],
-[suffix: '.jpeg',     priority: 40]
-]
-
-def detectImageSuffix = { String fileName ->
-def lower = (fileName ?: '').toLowerCase()
-def hit = supported_image_suffixes.find { lower.endsWith(it.suffix as String) }
-hit?.suffix ?: ''
-}
-
-def imageSuffixPriority = { String suffix ->
-def hit = supported_image_suffixes.find { it.suffix == suffix }
-(hit?.priority ?: 0) as int
-}
-
-def deriveSampleId = { imageFile ->
-def fileObj = imageFile instanceof File ? imageFile : new File(imageFile.toString())
-def name = fileObj.name
-def suffix = detectImageSuffix(name)
-if (suffix) {
-  return name.substring(0, name.length() - suffix.length())
-}
-def dot = name.lastIndexOf('.')
-dot > 0 ? name.substring(0, dot) : name
-}
-
-def extractCziRegionLabel = { String rawName ->
-def matcher = ((rawName ?: '') =~ /(?i)(ScanRegion\d+)/)
-matcher.find() ? matcher.group(1) : ''
-}
-
-def extractCziRegionOrder = { String rawName ->
-def matcher = ((rawName ?: '') =~ /(?i)ScanRegion(\d+)/)
-if (!matcher.find()) {
-  return Integer.MAX_VALUE
-}
-try {
-  return matcher.group(1).toInteger()
-} catch (Throwable ignored) {
-  return Integer.MAX_VALUE
-}
-}
+def supported_image_suffixes = PipelineInputs.IMAGE_SUFFIXES
+def detectImageSuffix = { String fileName -> PipelineInputs.imageSuffix(fileName) }
+def imageSuffixPriority = { String suffix -> PipelineInputs.imageSuffixPriority(suffix) }
+def deriveSampleId = { imageFile -> PipelineInputs.sampleId(imageFile) }
+def extractCziRegionLabel = { String rawName -> PipelineInputs.cziRegionLabel(rawName) }
+def extractCziRegionOrder = { String rawName -> PipelineInputs.cziRegionOrder(rawName) }
 
 def buildSampleId = { imageFile, String regionLabel = '' ->
 def baseId = deriveSampleId(imageFile)
@@ -662,7 +453,7 @@ input_dir.eachFile(FileType.FILES) { File f ->
   }
 }
 if (!candidates) {
-  error "No supported image files found in --folder_input ${input_dir}. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
+  error "No supported images found in --folder_input ${input_dir}."
 }
 
 def sample_map = [:]
@@ -680,6 +471,7 @@ candidates.each { def candidate ->
 sample_map.keySet().sort().each { sample_id ->
   def image_file = sample_map[sample_id].file as File
   def suffix = detectImageSuffix(image_file.name)
+  def input_support = file(PipelineInputs.inputSupport(image_file, baseDir), checkIfExists: true)
   if (suffix == '.czi') {
     def czi_geojsons = []
     input_dir.eachFile(FileType.FILES) { File roiFile ->
@@ -709,7 +501,8 @@ sample_map.keySet().sort().each { sample_id ->
             file(image_file.absolutePath, checkIfExists: true),
             region_label,
             roi_file.name,
-            roi_file.bytes.encodeBase64().toString()
+            roi_file.bytes.encodeBase64().toString(),
+            input_support
           )
         }
       return
@@ -729,7 +522,7 @@ sample_map.keySet().sort().each { sample_id ->
   }
   def roi_hint_name = roi_candidate.exists() ? roi_candidate.name : ''
   def roi_hint_b64 = roi_candidate.exists() ? roi_candidate.bytes.encodeBase64().toString() : ''
-  sample_rows << tuple(buildSampleId(image_file), file(image_file.absolutePath, checkIfExists: true), '', roi_hint_name, roi_hint_b64)
+  sample_rows << tuple(buildSampleId(image_file), file(image_file.absolutePath, checkIfExists: true), '', roi_hint_name, roi_hint_b64, input_support)
 }
 } else {
 if (!image_input_param) {
@@ -768,7 +561,8 @@ if (roi_geojson_param) {
   }
 }
 def sample_id = buildSampleId(image_file, input_region)
-sample_rows << tuple(sample_id, image_file, input_region, roi_hint_name, roi_hint_b64)
+def input_support = file(PipelineInputs.inputSupport(image_file, baseDir), checkIfExists: true)
+sample_rows << tuple(sample_id, image_file, input_region, roi_hint_name, roi_hint_b64, input_support)
 }
 
 if (!sample_rows) {
@@ -776,22 +570,24 @@ error "No input samples were resolved."
 }
 println "Resolved input samples (${sample_rows.size()}): ${sample_rows.collect { it[0] }.join(', ')}"
 
+StoragePreflight.run(params, sample_rows.collect { it[1].toString() }, baseDir, workflow.workDir, workflow.profile)
+
 Channel
 .fromList(sample_rows)
 .set { input_spec_ch }
 
 def convert_input_ch = input_spec_ch
-.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
-  tuple(sample_id, image_file, input_region ?: '')
+.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64, input_support ->
+  tuple(sample_id, image_file, input_region ?: '', input_support)
 }
 
 def image_input_ch = input_spec_ch
-.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
+.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64, input_support ->
   tuple(sample_id, image_file)
 }
 
 def roi_hint_ch = input_spec_ch
-.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64 ->
+.map { sample_id, image_file, input_region, roi_hint_name, roi_hint_b64, input_support ->
   tuple(sample_id, roi_hint_name ?: '', roi_hint_b64 ?: '')
 }
 def roi_provided_ch = roi_hint_ch
@@ -800,37 +596,44 @@ def roi_provided_ch = roi_hint_ch
 }
 
 def ome_tif_ch
+def converted_resolution_report_ch
 if (run_convert) {
 PREPARE_INPUT_OMETIFF(convert_input_ch)
-ome_tif_ch = PREPARE_INPUT_OMETIFF.out.ome_tif
+ome_tif_ch = requireStageOutput('convert', PREPARE_INPUT_OMETIFF.out.ome_tif)
+converted_resolution_report_ch = requireStageOutput('convert', PREPARE_INPUT_OMETIFF.out.converted_resolution_report)
 } else {
-ome_tif_ch = convert_input_ch.map { sample_id, image_file, input_region ->
+ome_tif_ch = convert_input_ch.map { sample_id, image_file, input_region, input_support ->
   def is_ome = image_file.name.toLowerCase().endsWith('.ome.tif')
   def ome_tif = is_ome
     ? image_file
     : file("${params.outdir_base}/01_input/${sample_id}/${sample_id}.ome.tif", checkIfExists: true)
   tuple(sample_id, ome_tif)
 }
+converted_resolution_report_ch = convert_input_ch.map { sample_id, image_file, input_region, input_support ->
+  tuple(sample_id, file("${params.outdir_base}/01_input/${sample_id}/${sample_id}.converted_resolution.json", checkIfExists: true))
+}
 }
 
 def grandqc_dir_ch = Channel.empty()
 def grandqc_clean_tissue_mask_ch = Channel.empty()
-def grandqc_artifact_mask_ch = Channel.empty()
-def grandqc_geojson_ch = Channel.empty()
 if (run_grandqc) {
-RUN_GRANDQC_ARTIFACT_ANALYSIS(ome_tif_ch)
+RUN_GRANDQC_ARTIFACT_ANALYSIS(ome_tif_ch, runtime_plan)
 grandqc_dir_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.grandqc_dir
-grandqc_clean_tissue_mask_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.clean_tissue_mask
-grandqc_artifact_mask_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.artifact_mask
-grandqc_geojson_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.artifact_geojson
+grandqc_clean_tissue_mask_ch = requireStageOutput('grandqc', RUN_GRANDQC_ARTIFACT_ANALYSIS.out.clean_tissue_mask)
+} else if (stage_index[end_point] > stage_index['grandqc']) {
+grandqc_clean_tissue_mask_ch = image_input_ch.map { sample_id, _image_input ->
+  tuple(sample_id, file("${params.outdir_base}/02_grandqc/${sample_id}/grandqc_${sample_id}/${sample_id}_grandqc_clean_tissue_mask.tif", checkIfExists: true))
+}
 }
 
 def roi_geojson_ch = Channel.empty()
 if (run_stardist) {
 def roi_prepare_input_ch = ome_tif_ch
+  .join(grandqc_clean_tissue_mask_ch)
   .join(roi_hint_ch)
-  .map { sample_id, ome_tif, roi_hint_name, roi_hint_b64 ->
-    tuple(sample_id, ome_tif, roi_hint_name ?: '', roi_hint_b64 ?: '')
+  .join(converted_resolution_report_ch)
+  .map { sample_id, ome_tif, _clean_tissue_mask, roi_hint_name, roi_hint_b64, image_qc_report ->
+    tuple(sample_id, ome_tif, image_qc_report, roi_hint_name ?: '', roi_hint_b64 ?: '')
   }
 PREPARE_ROI_GEOJSON(roi_prepare_input_ch)
 roi_geojson_ch = PREPARE_ROI_GEOJSON.out.roi_geojson
@@ -841,24 +644,8 @@ roi_geojson_ch = image_input_ch.map { sample_id, _image_input ->
 }
 
 def stardist_roi_geojson_ch = roi_geojson_ch
-if (run_stardist && (params.stardist_auto_roi_from_tissue as boolean)) {
-def provided_roi_for_stardist_ch = roi_geojson_ch
-  .join(roi_provided_ch)
-  .filter { sample_id, roi_geojson, roi_provided -> roi_provided }
-  .map { sample_id, roi_geojson, roi_provided ->
-    tuple(sample_id, roi_geojson)
-  }
-def auto_roi_input_ch = image_input_ch
-  .join(roi_provided_ch)
-  .filter { sample_id, image_input, roi_provided -> !roi_provided }
-  .map { sample_id, image_input, roi_provided ->
-    tuple(sample_id, image_input)
-  }
-PREPARE_STARDIST_AUTO_ROI(auto_roi_input_ch)
-stardist_roi_geojson_ch = provided_roi_for_stardist_ch.mix(PREPARE_STARDIST_AUTO_ROI.out.roi_geojson)
-}
 
-def need_stardist_outputs = run_stardist || run_cell_consensus || run_tma || (!tissue_mask_from_input && run_tissue_mask) || run_cell_assignment || run_cytoplasm || run_uni2 || run_grow_tissue || run_medsam_refine || run_neoplastic_section
+def need_stardist_outputs = run_stardist || run_cell_consensus || run_tma || run_tissue_mask || pathsegmentor_enabled || run_cell_assignment || run_cytoplasm || run_gigatime || run_marker_quantification || run_grid_tiles || run_uni2 || run_cluster_mask || run_grow_tissue || run_auxiliary_cell_grow_tissue || run_medsam_refine || run_neoplastic_section || params.cell_profiles_enable || params.tissue_hierarchy_enable
 
 def crop_roi_ch = Channel.empty()
 def labels_tif_ch = Channel.empty()
@@ -866,29 +653,26 @@ def labels_full_ch = Channel.empty()
 def objects_csv_ch = Channel.empty()
 def roi_crop_geojson_ch = Channel.empty()
 def shift_json_ch = Channel.empty()
+def tissue_mask_ch = Channel.empty()
+def pathsegmentor_bundle_ch = Channel.empty()
 
 if (need_stardist_outputs) {
+def require_labels_full = (!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2)
 if (run_stardist) {
-  def require_labels_full = (!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2)
-  params._resolved_stardist_write_full_labels = require_labels_full
-  params._resolved_stardist_full_format = require_labels_full ? (params.full_format ?: 'tif') : (params.full_format ?: 'tif')
-  params._resolved_allow_huge_tif = require_labels_full ? (params.allow_huge_tif as boolean) : false
-  def stardist_input_ch = ome_tif_ch
+  def crop_input_ch = ome_tif_ch
     .join(stardist_roi_geojson_ch)
-    .map { sample_id, ome_tif, stardist_roi_geojson ->
-      tuple(sample_id, ome_tif, stardist_roi_geojson)
+    .join(grandqc_clean_tissue_mask_ch)
+    .join(converted_resolution_report_ch)
+    .map { sample_id, ome_tif, stardist_roi_geojson, clean_tissue_mask, resolution_json ->
+      tuple(sample_id, ome_tif, stardist_roi_geojson, clean_tissue_mask, resolution_json)
     }
-  RUN_STARDIST_ROI_SEGMENTATION(stardist_input_ch)
-  crop_roi_ch = RUN_STARDIST_ROI_SEGMENTATION.out.crop_roi
-  labels_tif_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_tif
-  labels_full_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_full
-  objects_csv_ch = RUN_STARDIST_ROI_SEGMENTATION.out.objects_csv
-  roi_crop_geojson_ch = RUN_STARDIST_ROI_SEGMENTATION.out.roi_crop_geojson
-  shift_json_ch = RUN_STARDIST_ROI_SEGMENTATION.out.shift_json
+  PREPARE_ANALYSIS_CROP(crop_input_ch)
+  crop_roi_ch = requireStageOutput('analysis_crop', PREPARE_ANALYSIS_CROP.out.crop_roi)
+  roi_crop_geojson_ch = PREPARE_ANALYSIS_CROP.out.roi_crop_geojson
+  shift_json_ch = PREPARE_ANALYSIS_CROP.out.shift_json
 } else {
-  def require_labels_full = (!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2)
   crop_roi_ch = image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/crop_roi.tif", checkIfExists: true))
   }
   labels_tif_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
@@ -897,10 +681,10 @@ if (run_stardist) {
     tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
   }
   roi_crop_geojson_ch = image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/roi_all_crop.geojson", checkIfExists: true))
   }
   shift_json_ch = image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/shift.json", checkIfExists: true))
   }
   labels_full_ch = require_labels_full
     ? image_input_ch.map { sample_id, _image_input ->
@@ -908,20 +692,66 @@ if (run_stardist) {
     }
     : Channel.empty()
 }
+
+if (run_stardist || run_tissue_mask) {
+  def crop_clean_mask_input_ch = grandqc_clean_tissue_mask_ch
+    .join(shift_json_ch)
+    .join(roi_crop_geojson_ch)
+    .map { sample_id, clean_tissue_mask, shift_json, roi_crop_geojson -> tuple(sample_id, clean_tissue_mask, shift_json, roi_crop_geojson) }
+  CROP_GRANDQC_CLEAN_MASK(crop_clean_mask_input_ch)
+  tissue_mask_ch = requireStageOutput('tissue_mask', CROP_GRANDQC_CLEAN_MASK.out.tissue_mask)
+} else {
+  tissue_mask_ch = image_input_ch.map { sample_id, _image_input ->
+    tuple(sample_id, file("${params.outdir_base}/04_tissue_mask/${sample_id}/${sample_id}_tissue_mask.tif", checkIfExists: true))
+  }
 }
 
+if (pathsegmentor_enabled && stage_index[end_point] >= stage_index['pathsegmentor']) {
+  def pathsegmentor_input_ch = crop_roi_ch
+    .join(tissue_mask_ch, failOnMismatch: true, failOnDuplicate: true)
+    .join(converted_resolution_report_ch, failOnMismatch: true, failOnDuplicate: true)
+    .map { sample_id, image_tif, tissue_mask_tif, resolution_json ->
+      tuple(sample_id, image_tif, tissue_mask_tif, resolution_json)
+    }
+  RUN_PATHSEGMENTOR_INFERENCE(pathsegmentor_input_ch, run_pathsegmentor, runtime_plan)
+  pathsegmentor_bundle_ch = run_pathsegmentor
+    ? requireStageOutput('pathsegmentor', RUN_PATHSEGMENTOR_INFERENCE.out.bundle)
+    : RUN_PATHSEGMENTOR_INFERENCE.out.bundle
+}
+
+if (run_stardist) {
+  params._resolved_stardist_write_full_labels = require_labels_full
+  params._resolved_stardist_full_format = params.full_format ?: 'tif'
+  params._resolved_allow_huge_tif = require_labels_full ? (params.allow_huge_tif as boolean) : false
+  def stardist_input_ch = crop_roi_ch
+    .join(roi_crop_geojson_ch)
+    .join(shift_json_ch)
+    .join(tissue_mask_ch)
+    .map { sample_id, crop_tif, roi_crop_geojson, source_shift_json, clean_tissue_mask ->
+      tuple(sample_id, crop_tif, roi_crop_geojson, source_shift_json, clean_tissue_mask)
+    }
+  RUN_STARDIST_ROI_SEGMENTATION(stardist_input_ch, runtime_plan)
+  labels_tif_ch = requireStageOutput('stardist', RUN_STARDIST_ROI_SEGMENTATION.out.labels_tif)
+  labels_full_ch = RUN_STARDIST_ROI_SEGMENTATION.out.labels_full
+  objects_csv_ch = requireStageOutput('stardist_objects', RUN_STARDIST_ROI_SEGMENTATION.out.objects_csv)
+}
+}
+
+def cell_profile_cellvit_ch = Channel.empty()
 if (cell_consensus_enabled) {
 if (run_cell_consensus) {
   def hovernet_input_ch = crop_roi_ch
     .join(shift_json_ch)
-    .map { sample_id, crop_tif, shift_json -> tuple(sample_id, crop_tif, shift_json) }
-  RUN_HOVERNET_MONUSAC(hovernet_input_ch)
-  def hovernet_complete_ch = RUN_HOVERNET_MONUSAC.out.cells_json.collect().map { true }
+    .join(tissue_mask_ch)
+    .map { sample_id, crop_tif, shift_json, clean_tissue_mask -> tuple(sample_id, crop_tif, shift_json, clean_tissue_mask) }
+  RUN_HOVERNET_MONUSAC(hovernet_input_ch, runtime_plan)
   def cellvit_input_ch = crop_roi_ch
-    .join(shift_json_ch)
-    .combine(hovernet_complete_ch)
-    .map { sample_id, crop_tif, shift_json, ignored -> tuple(sample_id, crop_tif, shift_json) }
-  RUN_CELLVITPP(cellvit_input_ch)
+    .join(shift_json_ch, failOnDuplicate: true, failOnMismatch: true)
+    .join(tissue_mask_ch, failOnDuplicate: true, failOnMismatch: true)
+    .join(converted_resolution_report_ch, failOnDuplicate: true, failOnMismatch: true)
+    .map { sample_id, crop_tif, shift_json, clean_tissue_mask, resolution -> tuple(sample_id, crop_tif, shift_json, clean_tissue_mask, resolution) }
+  RUN_CELLVITPP(cellvit_input_ch, runtime_plan)
+  cell_profile_cellvit_ch = RUN_CELLVITPP.out.cellvit_dir
 
   def consensus_input_ch = objects_csv_ch
     .join(RUN_HOVERNET_MONUSAC.out.cells_json)
@@ -932,8 +762,8 @@ if (run_cell_consensus) {
       tuple(sample_id, stardist_objects, hovernet_cells, cellvit_cells, crop_tif, shift_json)
     }
   BUILD_CELL_CONSENSUS(consensus_input_ch)
-  labels_tif_ch = BUILD_CELL_CONSENSUS.out.labels_tif
-  objects_csv_ch = BUILD_CELL_CONSENSUS.out.objects_csv
+  labels_tif_ch = requireStageOutput('cell_consensus', BUILD_CELL_CONSENSUS.out.labels_tif)
+  objects_csv_ch = requireStageOutput('cell_consensus_objects', BUILD_CELL_CONSENSUS.out.objects_csv)
 } else if (stage_index[end_point] >= stage_index['cell_consensus']) {
   labels_tif_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/03d_cell_consensus/${sample_id}/consensus_${sample_id}/labels.tif", checkIfExists: true))
@@ -954,7 +784,7 @@ def tma_input_ch = crop_roi_ch
     tuple(sample_id, crop_tif, objects_csv, shift_json)
   }
 DETECT_TMA_SPOTS(tma_input_ch)
-objects_for_assignment_ch = DETECT_TMA_SPOTS.out.objects_tma_assigned
+objects_for_assignment_ch = requireStageOutput('tma', DETECT_TMA_SPOTS.out.objects_tma_assigned)
 } else if (tma_outputs_available && run_cell_assignment) {
 objects_for_assignment_ch = image_input_ch.map { sample_id, _image_input ->
   tuple(sample_id, file("${params.outdir_base}/04_TMA/${sample_id}/tma_${sample_id}/${sample_id}_objects_tma_assigned.csv", checkIfExists: true))
@@ -965,27 +795,27 @@ def crop_roi_for_masks_ch = (run_gigatime || run_cell_assignment)
 ? (run_stardist
   ? crop_roi_ch
   : image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/crop_roi.tif", checkIfExists: true))
   })
 : Channel.empty()
 def roi_crop_geojson_for_masks_ch = run_cell_assignment
 ? (run_stardist
   ? roi_crop_geojson_ch
   : image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/roi_all_crop.geojson", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/roi_all_crop.geojson", checkIfExists: true))
   })
 : Channel.empty()
 def shift_json_for_masks_ch = run_gigatime
 ? (run_stardist
   ? shift_json_ch
   : image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/shift.json", checkIfExists: true))
+    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/shift.json", checkIfExists: true))
   })
 : Channel.empty()
 def gigatime_image_ch = Channel.empty()
 def gigatime_quant_dir_ch = Channel.empty()
 
-if (!run_gigatime && run_marker_quantification) {
+if (!run_gigatime && (run_marker_quantification || run_gigatime_kodama)) {
   gigatime_image_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/05_gigatime/${sample_id}/gigatime_${sample_id}", checkIfExists: true))
   }
@@ -1004,19 +834,8 @@ def roi_mask_input_ch = roi_crop_geojson_for_masks_ch
 ROI_GEOJSON_TO_MASK(roi_mask_input_ch)
 }
 
-def tissue_mask_ch = Channel.empty()
-if (run_tissue_mask) {
-def tissue_mask_input_ch = tissue_mask_from_input ? ome_tif_ch : crop_roi_ch
-BUILD_TISSUE_MASK(tissue_mask_input_ch)
-tissue_mask_ch = BUILD_TISSUE_MASK.out.tissue_mask
-} else if (run_grow_tissue) {
-tissue_mask_ch = image_input_ch.map { sample_id, _image_input ->
-  tuple(sample_id, file("${params.outdir_base}/04_tissue_mask/${sample_id}/${sample_id}_tissue_mask.tif", checkIfExists: true))
-}
-}
-
 def final_cluster_geojson_ch = Channel.empty()
-if (run_cell_assignment || run_cytoplasm || run_gigatime || run_marker_quantification || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_medsam_refine || run_cluster_geojson) {
+if (run_cell_assignment || run_cytoplasm || run_gigatime || run_marker_quantification || run_grid_tiles || run_uni2 || run_kodama || run_clustering || run_cluster_mask || run_grow_tissue || run_auxiliary_cell_grow_tissue || run_medsam_refine || run_cluster_geojson || params.cell_profiles_enable || params.tissue_hierarchy_enable) {
 def objects_assigned_ch = Channel.empty()
 if (run_cell_assignment) {
   def assign_input_ch = objects_for_assignment_ch
@@ -1026,8 +845,8 @@ if (run_cell_assignment) {
       tuple(sample_id, objects_csv, roi_geojson, shift_json)
     }
   MAP_CELLS_TO_ROI_POLYGONS(assign_input_ch)
-  objects_assigned_ch = MAP_CELLS_TO_ROI_POLYGONS.out.objects_assigned
-} else if (run_kodama || run_clustering) {
+  objects_assigned_ch = requireStageOutput('cell_assignment', MAP_CELLS_TO_ROI_POLYGONS.out.objects_assigned)
+} else if ((run_kodama || run_clustering) && (!uni2_grid_mode || uni2_cell_auxiliary_mode)) {
   objects_assigned_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/07_cell_assignments/${sample_id}/${sample_id}_objects_assigned.csv", checkIfExists: true))
   }
@@ -1039,14 +858,15 @@ def nuclei_mask_for_quant_ch = labels_tif_ch
 if (run_cytoplasm) {
   def expand_primary_ch = labels_tif_ch
     .join(crop_roi_ch)
-    .map { sample_id, labels_tif, preview_background_tif ->
-      tuple(sample_id, labels_tif, 'labels_cyto', preview_background_tif.toString())
+    .join(shift_json_ch).join(converted_resolution_report_ch).join(tissue_mask_ch)
+    .map { sample_id, labels_tif, preview_background_tif, shift, resolution, tissue ->
+      tuple(sample_id, labels_tif, 'labels_cyto', preview_background_tif.toString(), shift, resolution, tissue, 'crop')
     }
   EXPAND_LABELS_TO_CYTOPLASM_PRIMARY(expand_primary_ch)
 
   if ((params.expand_full_labels as boolean) && !(run_uni2 && use_roi_crop_for_uni2)) {
-    def expand_full_ch = labels_full_ch.map { sample_id, labels_full_path ->
-      tuple(sample_id, labels_full_path, 'labels_full_cyto', '')
+    def expand_full_ch = labels_full_ch.join(shift_json_ch).join(converted_resolution_report_ch).join(grandqc_clean_tissue_mask_ch).map { sample_id, labels_full_path, shift, resolution, tissue ->
+      tuple(sample_id, labels_full_path, 'labels_full_cyto', '', shift, resolution, tissue, 'original')
     }
     EXPAND_LABELS_TO_CYTOPLASM_FULL(expand_full_ch)
     cyto_mask_full_ch = EXPAND_LABELS_TO_CYTOPLASM_FULL.out.expanded_labels
@@ -1059,7 +879,8 @@ if (run_cytoplasm) {
   cyto_mask_ch = EXPAND_LABELS_TO_CYTOPLASM_PRIMARY.out.expanded_labels
     .filter { sample_id, expanded_mask, label_kind -> label_kind == 'labels_cyto' }
     .map { sample_id, expanded_mask, label_kind -> tuple(sample_id, expanded_mask) }
-} else if (run_uni2) {
+  cyto_mask_ch = requireStageOutput('cytoplasm', cyto_mask_ch)
+} else if (run_uni2 && !uni2_grid_mode) {
   cyto_mask_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/08_cytoplasm/${sample_id}/${sample_id}_labels_cyto.tif", checkIfExists: true))
   }
@@ -1071,7 +892,13 @@ if (run_cytoplasm) {
 }
 
 def cyto_mask_for_quant_ch = Channel.empty()
+def ring_mask_for_quant_ch = image_input_ch.map { id, _image -> tuple(id, file("${projectDir}/resources/empty_embeddings_placeholder", checkIfExists: true)) }
+def marker_quant_output_ch = Channel.empty()
 if (run_gigatime || run_marker_quantification) {
+  if ((params.expand_um as double) >= 0) {
+    ring_mask_for_quant_ch = run_cytoplasm ? EXPAND_LABELS_TO_CYTOPLASM_PRIMARY.out.ring_labels.map { id, mask, kind -> tuple(id, mask) }
+      : image_input_ch.map { id, _image -> tuple(id, file("${params.outdir_base}/08_cytoplasm/${id}/${id}_labels_cyto_compartments/labels_perinuclear_ring.tif", checkIfExists: true)) }
+  }
   cyto_mask_for_quant_ch = run_cytoplasm
     ? cyto_mask_ch
     : image_input_ch.map { sample_id, _image_input ->
@@ -1084,12 +911,14 @@ if (run_gigatime) {
     .join(shift_json_for_masks_ch)
     .join(nuclei_mask_for_quant_ch)
     .join(cyto_mask_for_quant_ch)
-    .map { sample_id, crop_roi_tif, shift_json, nuclei_mask_tif, cyto_mask_tif ->
-      tuple(sample_id, crop_roi_tif, shift_json, nuclei_mask_tif, cyto_mask_tif)
-    }
-  RUN_GIGATIME_ON_CROP(gigatime_input_ch)
-  gigatime_image_ch = RUN_GIGATIME_ON_CROP.out.gigatime_dir
+    .join(tissue_mask_ch)
+    .join(ring_mask_for_quant_ch)
+  RUN_GIGATIME_ON_CROP(gigatime_input_ch, runtime_plan)
+  gigatime_image_ch = requireStageOutput('gigatime', RUN_GIGATIME_ON_CROP.out.gigatime_dir)
   gigatime_quant_dir_ch = RUN_GIGATIME_ON_CROP.out.quant_dir
+  if (run_marker_quantification) {
+    marker_quant_output_ch = requireStageOutput('marker_quantification', gigatime_quant_dir_ch)
+  }
   if (params.gigatime_export_ometiff as boolean) {
     EXPORT_GIGATIME_OMETIFF(gigatime_image_ch)
   }
@@ -1107,92 +936,50 @@ if (run_marker_quantification && !run_gigatime) {
       tuple(sample_id, gigatime_input, cyto_mask_tif, 'cyto')
     }
 
-  QUANTIFY_GIGATIME_INTENSITY(nuclei_quant_input_ch.mix(cyto_quant_input_ch))
+  def quantInputs = nuclei_quant_input_ch.mix(cyto_quant_input_ch)
+  if ((params.expand_um as double) >= 0) {
+    quantInputs = quantInputs.mix(gigatime_image_ch.join(ring_mask_for_quant_ch).map { id, image, mask -> tuple(id, image, mask, 'ring') })
+  }
+  QUANTIFY_GIGATIME_INTENSITY(quantInputs)
+  marker_quant_output_ch = requireStageOutput('marker_quantification', QUANTIFY_GIGATIME_INTENSITY.out.quant_csv)
 }
+
+def grid_objects_ch = Channel.empty()
+def grid_metadata_ch = Channel.empty()
+def grid_artifacts_needed = uni2_grid_mode && (run_grid_tiles || run_uni2 || run_kodama || run_clustering || run_cluster_mask || params.tissue_hierarchy_enable)
+PREPARE_UNI2_SPATIAL_GRID(image_input_ch, crop_roi_ch, tissue_mask_ch, converted_resolution_report_ch, run_grid_tiles, grid_artifacts_needed)
+grid_objects_ch = PREPARE_UNI2_SPATIAL_GRID.out.grid_objects
+grid_metadata_ch = PREPARE_UNI2_SPATIAL_GRID.out.grid_metadata
+if (run_grid_tiles) {
+  grid_metadata_ch = requireStageOutput('grid_tiles', grid_metadata_ch)
+}
+
+def analysis_objects_ch = uni2_grid_mode ? grid_objects_ch : objects_assigned_ch
 
 def tile_embeddings_ch = Channel.empty()
 def nuclei_embeddings_ch = Channel.empty()
 def cyto_embeddings_ch = Channel.empty()
 def inner_square_embeddings_ch = Channel.empty()
 def placeholder_embeddings_dir = file("${projectDir}/resources/empty_embeddings_placeholder", checkIfExists: true)
+def placeholder_observations_file = file("${projectDir}/resources/empty_uni2_observations.csv", checkIfExists: true)
+def placeholder_resolution_file = file("${projectDir}/resources/empty_uni2_resolution.json", checkIfExists: true)
 def placeholder_embeddings_ch = image_input_ch.map { sample_id, _image_input ->
   tuple(sample_id, placeholder_embeddings_dir)
 }
+def published_gigatime_quant_dir_ch = (!run_gigatime && !run_marker_quantification && !run_gigatime_kodama && (gigatime_enabled || marker_quantification_enabled))
+  ? image_input_ch.map { sample_id, _image_input ->
+    tuple(sample_id, file("${params.outdir_base}/05_gigatime/${sample_id}/quantification_${sample_id}", checkIfExists: true))
+  }
+  : placeholder_embeddings_ch
 if (run_uni2) {
-  def uni2_image_ch = use_roi_crop_for_uni2 ? crop_roi_ch : ome_tif_ch
-  def uni2_label_mask_ch = use_roi_crop_for_uni2 ? labels_tif_ch : labels_full_ch
-  def uni2_cyto_mask_source_ch = use_roi_crop_for_uni2 ? cyto_mask_ch : cyto_mask_full_ch
-  def canFuseTileInnerSquare = fuse_tile_inner_square_uni2 &&
-    include_uni2_inner_square &&
-    (params.uni2_encoder?.toString()?.toLowerCase() == 'uni2-h')
-
-  def uni2_input_ch = Channel.empty()
-  def haveSeparateUni2Inputs = false
-  if (canFuseTileInnerSquare) {
-    def uni2_shared_input_ch = uni2_image_ch
-      .join(uni2_label_mask_ch)
-      .map { sample_id, image_tif, labels_tif ->
-        tuple(sample_id, image_tif, labels_tif)
-      }
-    EXTRACT_UNI2_EMBEDDINGS_SHARED(uni2_shared_input_ch)
-    tile_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS_SHARED.out.tile_embeddings_dir
-      .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-    inner_square_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS_SHARED.out.inner_square_embeddings_dir
-      .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-  } else {
-    def uni2_tile_input_ch = uni2_image_ch
-      .join(uni2_label_mask_ch)
-      .map { sample_id, image_tif, labels_tif ->
-        tuple(sample_id, image_tif, labels_tif, 'tile', false, 'none', 255)
-      }
-    uni2_input_ch = uni2_tile_input_ch
-    haveSeparateUni2Inputs = true
-  }
-  if (include_uni2_cyto) {
-    def uni2_cyto_input_ch = uni2_image_ch
-      .join(uni2_cyto_mask_source_ch)
-      .map { sample_id, image_tif, cyto_mask_tif ->
-        tuple(sample_id, image_tif, cyto_mask_tif, 'cyto', true, 'label', 255)
-      }
-    uni2_input_ch = haveSeparateUni2Inputs ? uni2_input_ch.mix(uni2_cyto_input_ch) : uni2_cyto_input_ch
-    haveSeparateUni2Inputs = true
-  }
-  if (include_uni2_inner_square && !canFuseTileInnerSquare) {
-    def uni2_inner_square_input_ch = uni2_image_ch
-      .join(uni2_cyto_mask_source_ch)
-      .map { sample_id, image_tif, cyto_mask_tif ->
-        tuple(sample_id, image_tif, cyto_mask_tif, 'inner_square', true, 'inner_square', 255)
-      }
-    uni2_input_ch = haveSeparateUni2Inputs ? uni2_input_ch.mix(uni2_inner_square_input_ch) : uni2_inner_square_input_ch
-    haveSeparateUni2Inputs = true
-  }
-  if (include_uni2_nuclei) {
-    def uni2_nuclei_input_ch = uni2_image_ch
-      .join(uni2_label_mask_ch)
-      .map { sample_id, image_tif, labels_tif ->
-        tuple(sample_id, image_tif, labels_tif, 'nuclei', true, 'label', 255)
-      }
-    uni2_input_ch = haveSeparateUni2Inputs ? uni2_input_ch.mix(uni2_nuclei_input_ch) : uni2_nuclei_input_ch
-    haveSeparateUni2Inputs = true
-  }
-
-  if (haveSeparateUni2Inputs) {
-    EXTRACT_UNI2_EMBEDDINGS(uni2_input_ch)
-    if (!canFuseTileInnerSquare) {
-      tile_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
-        .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'tile' }
-        .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-      inner_square_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
-        .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'inner_square' }
-        .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-    }
-    nuclei_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
-      .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'nuclei' }
-      .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-    cyto_embeddings_ch = EXTRACT_UNI2_EMBEDDINGS.out.embeddings_dir
-      .filter { sample_id, embedding_mode, embeddings_dir -> embedding_mode == 'cyto' }
-      .map { sample_id, embedding_mode, embeddings_dir -> tuple(sample_id, embeddings_dir) }
-  }
+  EXTRACT_PRIMARY_UNI2(crop_roi_ch, ome_tif_ch, labels_tif_ch, labels_full_ch, tissue_mask_ch,
+    cyto_mask_ch, cyto_mask_full_ch, grid_objects_ch, grid_metadata_ch, converted_resolution_report_ch,
+    [use_crop: use_roi_crop_for_uni2, grid: uni2_grid_mode, fuse: fuse_tile_inner_square_uni2,
+     inner: include_uni2_inner_square, cyto: include_uni2_cyto, nuclei: include_uni2_nuclei], runtime_plan)
+  tile_embeddings_ch = requireStageOutput('uni2', EXTRACT_PRIMARY_UNI2.out.tile)
+  inner_square_embeddings_ch = EXTRACT_PRIMARY_UNI2.out.local
+  nuclei_embeddings_ch = EXTRACT_PRIMARY_UNI2.out.nuclei
+  cyto_embeddings_ch = EXTRACT_PRIMARY_UNI2.out.cyto
 } else if (run_kodama) {
   tile_embeddings_ch = image_input_ch.map { sample_id, _image_input ->
     def embedding_dir = kodama_requested_modes.contains('tile')
@@ -1220,6 +1007,9 @@ if (run_uni2) {
   }
 }
 
+// Retain actual extraction outputs before KODAMA applies its own mode selection.
+def profile_primary_tile_ch = tile_embeddings_ch
+def profile_primary_local_ch = inner_square_embeddings_ch
 if (run_kodama) {
   if (!kodama_requested_modes.contains('tile')) {
     tile_embeddings_ch = placeholder_embeddings_ch
@@ -1246,16 +1036,39 @@ if (run_kodama) {
     }
 
   def kodama_input_ch = embedding_quad_ch
-    .join(objects_assigned_ch)
-    .map { sample_id, tile_embeddings_dir, nuclei_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, objects_assigned ->
-      tuple(sample_id, tile_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, nuclei_embeddings_dir, objects_assigned)
+    .join(analysis_objects_ch)
+    .map { sample_id, tile_embeddings_dir, nuclei_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, analysis_objects ->
+      tuple(sample_id, tile_embeddings_dir, cyto_embeddings_dir, inner_square_embeddings_dir, nuclei_embeddings_dir, analysis_objects)
     }
-  RUN_KODAMA_ANALYSIS(kodama_input_ch)
-  kodama_dir_ch = RUN_KODAMA_ANALYSIS.out.kodama_dir
+  RUN_KODAMA_ANALYSIS(kodama_input_ch, runtime_plan)
+  kodama_dir_ch = requireStageOutput('kodama', RUN_KODAMA_ANALYSIS.out.kodama_dir)
+  if (run_gigatime_kodama) {
+    RUN_GIGATIME_KODAMA(gigatime_quant_dir_ch, runtime_plan)
+  }
 } else if (run_clustering) {
   kodama_dir_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/10_kodama/${sample_id}/kodama_output", checkIfExists: true))
   }
+}
+
+def profile_aux_tile_ch = Channel.empty()
+def profile_aux_local_ch = Channel.empty()
+if (uni2_cell_auxiliary_mode) {
+  def auxiliary_flags = [
+    run_uni2: run_uni2, run_kodama: run_kodama, run_clustering: run_clustering,
+    run_cluster_mask: run_cluster_mask, run_grow_tissue: run_auxiliary_cell_grow_tissue,
+    run_medsam_refine: run_medsam_refine, run_cluster_geojson: run_cluster_geojson,
+    run_cytoplasm: run_cytoplasm,
+    use_current_markers: run_gigatime || run_marker_quantification || run_gigatime_kodama,
+    markers_configured: gigatime_enabled || marker_quantification_enabled,
+  ]
+  RUN_AUXILIARY_CELL_ROUTE(
+    image_input_ch, crop_roi_ch, labels_tif_ch, objects_assigned_ch, tile_embeddings_ch,
+    kodama_dir_ch, grid_objects_ch, tissue_mask_ch, shift_json_ch, converted_resolution_report_ch, cyto_mask_ch,
+    gigatime_quant_dir_ch, auxiliary_flags, runtime_plan,
+  )
+  profile_aux_tile_ch = RUN_AUXILIARY_CELL_ROUTE.out.tile_embeddings
+  profile_aux_local_ch = RUN_AUXILIARY_CELL_ROUTE.out.inner_embeddings
 }
 
 def cluster_primary_variant = (params.cluster_primary_variant ?: 'standard').toString().trim()
@@ -1273,20 +1086,13 @@ if (cluster_secondary_variant && !(cluster_secondary_variant.toLowerCase() in ['
   }
   cluster_variant_defs << [variant: cluster_secondary_variant, profile: cluster_secondary_profile ?: 'fine', resolution: cluster_resolution_value]
 }
-def cluster_variant_request_ch = image_input_ch.flatMap { sample_id, _image_input ->
-  cluster_variant_defs.collect { spec ->
-    def sample_key = "${sample_id}::${spec.variant}"
-    tuple(sample_id, sample_key, spec.variant, spec.profile, spec.resolution)
-  }
-}
-
 def cluster_csv_ch = Channel.empty()
 def cluster_kodama_png_ch = Channel.empty()
 if (run_clustering) {
   def clustering_base_ch = kodama_dir_ch
-    .join(objects_assigned_ch)
-    .map { sample_id, kodama_dir, objects_assigned_csv ->
-      tuple(sample_id, kodama_dir, objects_assigned_csv)
+    .join(analysis_objects_ch)
+    .map { sample_id, kodama_dir, analysis_objects_csv ->
+      tuple(sample_id, kodama_dir, analysis_objects_csv)
     }
   def clustering_input_ch = clustering_base_ch
     .flatMap { sample_id, kodama_dir, objects_assigned_csv ->
@@ -1296,8 +1102,27 @@ if (run_clustering) {
       }
     }
   RUN_RCODE_CLUSTERING(clustering_input_ch)
-  cluster_csv_ch = RUN_RCODE_CLUSTERING.out.cluster_csv
+  cluster_csv_ch = requireStageOutput('clustering', RUN_RCODE_CLUSTERING.out.cluster_csv)
   cluster_kodama_png_ch = RUN_RCODE_CLUSTERING.out.membership_png
+
+  def marker_quant_for_cluster_assessment_ch = (run_gigatime || run_marker_quantification || run_gigatime_kodama)
+    ? gigatime_quant_dir_ch
+    : ((gigatime_enabled || marker_quantification_enabled)
+      ? published_gigatime_quant_dir_ch
+      : image_input_ch.map { sample_id, _image -> tuple(sample_id, placeholder_embeddings_dir) })
+  def cluster_assessment_context_ch = analysis_objects_ch
+    .join(marker_quant_for_cluster_assessment_ch)
+    .flatMap { sample_id, analysis_objects_csv, marker_quant_dir ->
+      cluster_variant_defs.collect { spec ->
+        tuple("${sample_id}::${spec.variant}", analysis_objects_csv, marker_quant_dir)
+      }
+    }
+  def cluster_assessment_input_ch = cluster_csv_ch
+    .join(cluster_assessment_context_ch)
+    .map { sample_key, sample_id, cluster_variant, cluster_csv, analysis_objects_csv, marker_quant_dir ->
+      tuple(sample_key, sample_id, cluster_variant, cluster_csv, analysis_objects_csv, marker_quant_dir)
+    }
+  ASSESS_CLUSTER_INTERPRETATION(cluster_assessment_input_ch)
 } else if (run_cluster_mask || run_grow_tissue || run_medsam_refine) {
   cluster_csv_ch = image_input_ch.flatMap { sample_id, _image_input ->
     cluster_variant_defs.collect { spec ->
@@ -1313,8 +1138,16 @@ if (run_clustering) {
   }
 }
 
+def pathsegmentor_annotations_ch = Channel.empty()
+def have_cluster_outputs = run_clustering || run_cluster_mask || run_grow_tissue || run_medsam_refine || run_cluster_geojson
+if (pathsegmentor_enabled && have_cluster_outputs) {
+  ANNOTATE_PATHSEGMENTOR_EVIDENCE(pathsegmentor_bundle_ch, analysis_objects_ch, objects_assigned_ch,
+    cluster_csv_ch, cluster_variant_defs, uni2_grid_mode, placeholder_observations_file)
+  pathsegmentor_annotations_ch = ANNOTATE_PATHSEGMENTOR_EVIDENCE.out.annotations
+}
+
 def labels_for_cluster_ch = Channel.empty()
-if (run_cluster_mask || run_grow_tissue) {
+if ((run_cluster_mask || run_grow_tissue) && !uni2_grid_mode) {
   labels_for_cluster_ch = run_cytoplasm
     ? cyto_mask_ch
     : image_input_ch.map { sample_id, _image_input ->
@@ -1323,43 +1156,20 @@ if (run_cluster_mask || run_grow_tissue) {
 }
 
 def cluster_mask_ch = Channel.empty()
+def cluster_uncertainty_ch = Channel.empty()
 if (run_cluster_mask) {
-  def preview_image_for_cluster_mask_ch = run_stardist
-    ? crop_roi_ch
-    : image_input_ch.map { sample_id, _image_input ->
-      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
-    }
-
-  def labels_for_cluster_variant_ch = labels_for_cluster_ch
-    .flatMap { sample_id, labels_tif ->
-      cluster_variant_defs.collect { spec ->
-        def sample_key = "${sample_id}::${spec.variant}"
-        tuple(sample_key, labels_tif)
-      }
-    }
-
-  def preview_image_for_cluster_variant_ch = preview_image_for_cluster_mask_ch
-    .flatMap { sample_id, preview_tif ->
-      cluster_variant_defs.collect { spec ->
-        def sample_key = "${sample_id}::${spec.variant}"
-        tuple(sample_key, preview_tif)
-      }
-    }
-
-  def cluster_mask_input_ch = cluster_csv_ch
-    .join(labels_for_cluster_variant_ch)
-    .join(preview_image_for_cluster_variant_ch)
-    .map { sample_key, sample_id, cluster_variant, cluster_csv, labels_tif, preview_tif ->
-      tuple(sample_key, sample_id, cluster_variant, labels_tif, cluster_csv, preview_tif)
-    }
-  LABELS_TO_CLUSTER_MASK(cluster_mask_input_ch)
-  cluster_mask_ch = LABELS_TO_CLUSTER_MASK.out.cluster_mask
-} else if (run_grow_tissue || run_medsam_refine) {
+  BUILD_CLUSTER_MASK_OUTPUT(image_input_ch, crop_roi_ch, cluster_csv_ch, labels_for_cluster_ch, grid_objects_ch, grid_metadata_ch, run_stardist, uni2_grid_mode)
+  cluster_mask_ch = requireStageOutput('cluster_mask', BUILD_CLUSTER_MASK_OUTPUT.out.cluster_mask)
+  cluster_uncertainty_ch = BUILD_CLUSTER_MASK_OUTPUT.out.uncertainty_mask
+} else if (run_grow_tissue || run_medsam_refine || (run_cluster_geojson && uni2_grid_mode)) {
   cluster_mask_ch = image_input_ch.flatMap { sample_id, _image_input ->
     cluster_variant_defs.collect { spec ->
       def sample_key = "${sample_id}::${spec.variant}"
       tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/12_cluster_mask/${sample_id}/${sample_id}_${spec.variant}_cluster_mask.tif", checkIfExists: true))
     }
+  }
+  cluster_uncertainty_ch = cluster_mask_ch.map { key, id, variant, mask ->
+    tuple(key, id, variant, file("${params.outdir_base}/12_cluster_mask/${id}/${id}_${variant}_cluster_uncertainty_mask.tif", checkIfExists: true))
   }
 }
 
@@ -1370,7 +1180,7 @@ if (run_grow_tissue || run_medsam_refine) {
   def image_for_growth_ch = run_stardist
     ? crop_roi_ch
     : image_input_ch.map { sample_id, _image_input ->
-      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
+      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/crop_roi.tif", checkIfExists: true))
     }
 
   image_for_growth_variant_ch = image_for_growth_ch
@@ -1398,7 +1208,7 @@ if (run_grow_tissue || run_medsam_refine) {
     }
 }
 
-def grown_mask_ch = Channel.empty()
+def spatial_baseline_mask_ch = Channel.empty()
 def grown_refine_method = (params.grown_tissue_refine_method ?: 'medsam_border_refine').toString().trim().toLowerCase()
 if (run_grow_tissue) {
   def grow_input_ch = cluster_mask_ch
@@ -1409,9 +1219,11 @@ if (run_grow_tissue) {
       tuple(sample_key, sample_id, cluster_variant, image_tif, cluster_mask_tif, tissue_mask_tif, resolution_json)
     }
   GROW_TO_TISSUE(grow_input_ch)
-  grown_mask_ch = GROW_TO_TISSUE.out.grown_mask
+  spatial_baseline_mask_ch = requireStageOutput('grow_tissue', GROW_TO_TISSUE.out.grown_mask)
+} else if (uni2_grid_mode && (run_medsam_refine || run_cluster_geojson)) {
+  spatial_baseline_mask_ch = cluster_mask_ch
 } else if (run_medsam_refine || (run_cluster_geojson && grown_refine_method in ['none', ''])) {
-  grown_mask_ch = image_input_ch.flatMap { sample_id, _image_input ->
+  spatial_baseline_mask_ch = image_input_ch.flatMap { sample_id, _image_input ->
     cluster_variant_defs.collect { spec ->
       def sample_key = "${sample_id}::${spec.variant}"
       tuple(sample_key, sample_id, spec.variant, file("${params.outdir_base}/13_grown_tissue/${sample_id}/${sample_id}_${spec.variant}_grown_mask.ome.tif", checkIfExists: true))
@@ -1419,19 +1231,65 @@ if (run_grow_tissue) {
   }
 }
 
+def pathsegmentor_refined_mask_ch = Channel.empty()
+if (run_pathsegmentor_refine) {
+  RUN_PATHSEGMENTOR_REFINEMENT(pathsegmentor_bundle_ch, spatial_baseline_mask_ch,
+    tissue_mask_variant_ch, cluster_variant_defs)
+  pathsegmentor_refined_mask_ch = RUN_PATHSEGMENTOR_REFINEMENT.out.refined_mask
+}
+
+def profile_final_domain_ch = Channel.empty()
+def profile_final_uncertainty_ch = Channel.empty()
 if (run_medsam_refine || run_cluster_geojson) {
   POST_GROW_SPATIAL_OUTPUTS(
     image_input_ch,
-    grown_mask_ch,
+    spatial_baseline_mask_ch,
     image_for_growth_variant_ch,
     cluster_mask_ch,
+    cluster_uncertainty_ch,
+    tissue_mask_variant_ch,
     cluster_kodama_png_ch,
     resolution_for_growth_variant_ch,
     run_medsam_refine,
     run_cluster_geojson,
+    runtime_plan,
   )
-  final_cluster_geojson_ch = POST_GROW_SPATIAL_OUTPUTS.out.cluster_geojson
+  if (run_medsam_refine) {
+    requireStageOutput('medsam_refine', POST_GROW_SPATIAL_OUTPUTS.out.refined_masks)
+  }
+  final_cluster_geojson_ch = run_cluster_geojson
+    ? requireStageOutput('cluster_geojson', POST_GROW_SPATIAL_OUTPUTS.out.cluster_geojson)
+    : POST_GROW_SPATIAL_OUTPUTS.out.cluster_geojson
+  profile_final_domain_ch = POST_GROW_SPATIAL_OUTPUTS.out.final_masks
+  profile_final_uncertainty_ch = POST_GROW_SPATIAL_OUTPUTS.out.final_uncertainty
 }
+
+def cell_profile_hierarchy_ch = Channel.empty()
+def cell_profile_region_reference_ch = Channel.empty()
+if (params.tissue_hierarchy_enable) {
+  RUN_TISSUE_REGION_ATLAS(image_input_ch, crop_roi_ch, grid_objects_ch, grid_metadata_ch, tissue_mask_ch,
+    shift_json_ch, converted_resolution_report_ch, profile_final_domain_ch, profile_final_uncertainty_ch,
+    run_medsam_refine || run_cluster_geojson, runtime_plan)
+  cell_profile_hierarchy_ch = RUN_TISSUE_REGION_ATLAS.out.hierarchy
+  cell_profile_region_reference_ch = RUN_TISSUE_REGION_ATLAS.out.reference_mapping_bundles
+}
+
+if (params.cell_profiles_enable) {
+  RUN_CELL_PROFILE_ATLAS(image_input_ch, crop_roi_ch, labels_tif_ch, objects_csv_ch,
+    shift_json_ch, converted_resolution_report_ch, tissue_mask_ch, profile_final_domain_ch, cluster_mask_ch,
+    profile_final_uncertainty_ch, cluster_uncertainty_ch,
+    run_cytoplasm ? EXPAND_LABELS_TO_CYTOPLASM_PRIMARY.out.compartments : Channel.empty(), final_cluster_geojson_ch,
+    run_gigatime ? gigatime_quant_dir_ch : (run_marker_quantification ? QUANTIFY_GIGATIME_INTENSITY.out.profile_bundle : Channel.empty()),
+    cell_profile_cellvit_ch, profile_primary_tile_ch, profile_primary_local_ch, profile_aux_tile_ch, profile_aux_local_ch, cell_profile_hierarchy_ch, cell_profile_region_reference_ch,
+    [grid: uni2_grid_mode, both: uni2_cell_auxiliary_mode, run_uni2: run_uni2,
+     uni2: params.cell_profiles_uni2_enable, markers: params.cell_profiles_markers_enable,
+     cellvit: params.cellvit_export_embeddings, consensus: cell_consensus_enabled, run_consensus: run_cell_consensus,
+     run_gigatime: run_gigatime, run_marker_quantification: run_marker_quantification,
+     have_final_domains: run_medsam_refine || run_cluster_geojson, run_cluster_mask: run_cluster_mask,
+     run_cytoplasm: run_cytoplasm, run_cluster_geojson: run_cluster_geojson, hierarchy: params.tissue_hierarchy_enable,
+     primary_variant: cluster_primary_variant], runtime_plan)
+}
+
 }
 
 if (run_neoplastic_section || run_titan || run_pathofmpred) {
@@ -1441,7 +1299,11 @@ if (run_neoplastic_section || run_titan || run_pathofmpred) {
     objects_csv_ch,
     crop_roi_ch,
     shift_json_ch,
+    runtime_plan,
   )
+  if (run_neoplastic_section) requireStageOutput('neoplastic_section', POST_CLUSTER_PATHOFM.out.selected_sections)
+  if (run_titan) requireStageOutput('titan', POST_CLUSTER_PATHOFM.out.titan_embeddings)
+  if (run_pathofmpred) requireStageOutput('pathofmpred', POST_CLUSTER_PATHOFM.out.predictions)
 }
 }
 
@@ -1450,16 +1312,40 @@ def outdir = params.outdir_base ?: 'results'
 def executionDir = new File("${outdir}/00_execution")
 executionDir.mkdirs()
 def reporterScript = new File("${baseDir}/bin/write_pipeline_execution_reports.py").canonicalPath
+def analysisContractFile = new File(executionDir, 'analysis_contract.json')
+def analysisContractReport = [:]
+try {
+  if (analysisContractFile.exists()) {
+    analysisContractReport = (Map) new JsonSlurper().parse(analysisContractFile)
+  }
+} catch (Throwable t) {
+  println "WARN: failed to read analysis contract for execution report: ${t.message}"
+}
+def scientificRouteReport = (analysisContractReport.scientific_route instanceof Map)
+  ? analysisContractReport.scientific_route
+  : [:]
+def stageWindowReport = (analysisContractReport.stage_window instanceof Map)
+  ? analysisContractReport.stage_window
+  : [:]
+def reportStartPoint = (stageWindowReport.start ?: params.start_point ?: 'convert').toString()
+def reportEndPoint = (stageWindowReport.end ?: params.end_point ?: 'cluster_geojson').toString()
+def reportCellDetectionMode = (scientificRouteReport.cell_detection_mode ?: params.cell_detection_mode ?: 'not_applicable').toString()
+def reportAnalysisIntent = (analysisContractReport.analysis_intent ?: params.analysis_intent ?: 'exploratory').toString()
+def reportUni2SamplingMode = (scientificRouteReport.uni2_sampling_mode ?: params.uni2_sampling_mode ?: 'cells').toString()
 def cmd = [
 'python3',
 reporterScript,
 '--outdir', new File(outdir).canonicalPath,
 '--run-name', workflow.runName,
 '--success', workflow.success.toString(),
-'--start-point', (params._resolved_start_point ?: 'convert').toString(),
-'--end-point', (params._resolved_end_point ?: 'cluster_geojson').toString(),
+'--start-point', reportStartPoint,
+'--end-point', reportEndPoint,
 '--image-input', (params.image_input ?: '').toString(),
-'--roi-geojson', (params.roi_geojson ?: '').toString()
+'--roi-geojson', (params.roi_geojson ?: '').toString(),
+'--cell-detection-mode', reportCellDetectionMode,
+'--analysis-intent', reportAnalysisIntent,
+'--uni2-sampling-mode', reportUni2SamplingMode,
+'--analysis-contract', analysisContractFile.exists() ? analysisContractFile.canonicalPath : ''
 ]
 try {
 def pb = new ProcessBuilder(cmd)
@@ -1478,8 +1364,8 @@ println "WARN: failed to write execution reports: ${t.message}"
 }
 if (workflow.success) {
 println "PIPELINE COMPLETED SUCCESSFULLY"
-println "Stage window: ${params._resolved_start_point ?: 'convert'} -> ${params._resolved_end_point ?: 'cluster_geojson'}"
-if ((params._resolved_end_point ?: '') in ['cluster_geojson', 'neoplastic_section', 'titan', 'pathofmpred']) {
+println "Stage window: ${reportStartPoint} -> ${reportEndPoint}"
+if (reportEndPoint in ['cluster_geojson', 'neoplastic_section', 'titan', 'pathofmpred']) {
   println "Cluster GeoJSON output dir: ${params.outdir_base}/15_cluster_geojson"
 }
 }

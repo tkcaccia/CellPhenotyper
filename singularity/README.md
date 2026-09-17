@@ -4,6 +4,7 @@ This folder contains:
 
 - `cellphenotyper_full_cpu.def`: CPU definition
 - `cellphenotyper_full_gpu.def`: GPU definition (amd64 + NVIDIA)
+- `cellphenotyper_atlas.def`: optional isolated atlas overlay on an explicit full-runtime Docker base
 - `publish_sif_release_asset.sh`: build/publish helper
 
 Important:
@@ -11,6 +12,16 @@ Important:
 - Do **not** commit `.sif` files to git.
 - Publish `.sif` files to GHCR over `oras://`; small files may also be mirrored as GitHub Release assets.
 - Pipeline users pull automatically with `-profile singularity`.
+
+## Optional atlas runtime
+
+The profile/hierarchy/SpatialData stack can be added in a separate Python 3.12
+environment using `cellphenotyper_atlas.def`, without replacing the model
+environment. This is an explicit source-build option, not a change to published
+defaults or the release helper. Build commands, interpreter selection, checks,
+and compatibility limits are in [Optional isolated atlas container runtime](../docs/ATLAS_CONTAINER_RUNTIME.md).
+The local functional tests pass; no atlas-enabled Docker/SIF image has yet been
+built or published by this implementation.
 
 ## Naming Convention
 

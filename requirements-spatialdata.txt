@@ -1,0 +1,18 @@
+# Optional standalone SpatialData export runtime: Python 3.12 or newer.
+# Install separately from the Python 3.11 segmentation/model environments.
+# Verified on macOS arm64 with real SpatialData.write/SpatialData.read round trips.
+spatialdata==0.8.0
+anndata==0.13.3.post0
+zarr==3.3.0
+dask==2026.8.0
+distributed==2026.8.0
+numpy==2.4.6
+pandas==3.0.5
+scipy==1.18.1
+geopandas==1.1.4
+shapely==2.1.2
+tifffile==2026.8.23
+imagecodecs==2026.8.16
+pyarrow==25.0.1
+ome-zarr==0.19.1
+xarray==2026.7.0

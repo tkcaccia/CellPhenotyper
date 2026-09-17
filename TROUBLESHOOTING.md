@@ -135,20 +135,40 @@ Error:
 TiffFileError: missing data offset
 ```
 
-Cause: an internal tissue mask written as a pyramidal TIFF can be unreadable for
-later `tifffile`-based steps, especially on small crops.
+Cause: an incomplete or stale crop-aligned GrandQC clean-tissue mask can be
+unreadable for later `tifffile`-based steps.
 
 Fix:
 
-- Use the current pipeline version, where `bin/build_tissue_mask.py` writes a
-  standard compressed TIFF for the intermediate tissue mask.
-- If recovering a partially completed run, regenerate the failed tissue mask in
-  its work directory and then rerun with `-resume`.
+- Use the current pipeline version, where `bin/crop_grandqc_clean_mask.py` writes
+  a standard zlib-compressed TIFF from the GrandQC normal-tissue class.
+- If recovering a partially completed run, rerun `--start_point tissue_mask
+  --end_point tissue_mask`, then continue the later stage with `-resume`.
 
 Why this is safe:
 
-- the tissue mask is an internal pipeline artifact
+- the crop-aligned mask is derived directly from the published GrandQC output
 - downstream reliability matters more than pyramidal storage for this file
+
+## 4c) A consensus run stops before launching detectors on CPU
+
+Cause: `cell_detection_mode=consensus` is a scientific three-detector contract and requires the GPU runtime. CellPhenotyper no longer substitutes StarDist based on hardware.
+
+Fix:
+
+- run with `--compute_device gpu` on a supported NVIDIA host, or
+- explicitly use `--cell_detection_mode stardist` when a single-detector analysis is intended.
+
+## 4d) A GPU stage waits before launch
+
+Cause: the pipeline-wide GPU admission layer could not obtain both a task slot and enough VRAM tokens while retaining `gpu_memory_reserve_gb` free.
+
+Fix:
+
+- inspect `nvidia-smi` for non-pipeline consumers
+- adjust only the stage-specific `*_gpu_memory_gb` value after measuring that model's peak allocation
+- increase `gpu_scheduler_timeout_seconds` for a busy multi-GPU host
+- do not disable the scheduler merely to force simultaneous high-memory models
 
 ## 5) UNI-2 fails with 401 / gated model
 

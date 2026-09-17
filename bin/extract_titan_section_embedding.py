@@ -10,9 +10,14 @@ import math
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hardware_runtime import auto_batch_from_free_vram
+from model_provenance import hf_model_provenance
 
 
 def source_patch_size(source_mpp: float, target_mpp: float, patch_size: int) -> int:
@@ -97,26 +102,12 @@ def read_source_mpp(path: Path, fallback: float) -> float:
 
 
 def auto_batch_size(requested: int, gpu: int) -> int:
-    if requested > 0:
-        return requested
-    try:
-        import subprocess
-
-        memory_mib = int(subprocess.check_output(
-            ["nvidia-smi", "-i", str(gpu), "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            text=True,
-        ).strip().splitlines()[0])
-    except Exception:
-        return 8
-    if memory_mib >= 70 * 1024:
-        return 128
-    if memory_mib >= 40 * 1024:
-        return 64
-    if memory_mib >= 20 * 1024:
-        return 24
-    if memory_mib >= 14 * 1024:
-        return 12
-    return 4
+    return auto_batch_from_free_vram(
+        requested,
+        gpu,
+        tiers=((68 * 1024, 128), (38 * 1024, 64), (18 * 1024, 24), (12 * 1024, 12)),
+        fallback=4,
+    )
 
 
 def unwrap_patch_features(output):
@@ -263,8 +254,22 @@ def main() -> None:
     source_tile = source_patch_size(mpp, args.target_mpp, args.patch_size)
     batch_size = auto_batch_size(args.batch_size, args.gpu)
     local_model_dir = install_local_titan_file_resolver(args.model)
+    if local_model_dir is None:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(
+            repo_id=args.model,
+            revision=args.revision,
+            local_files_only=args.offline,
+        )
+        local_model_dir = install_local_titan_file_resolver(snapshot)
 
     model_source = str(local_model_dir) if local_model_dir else args.model
+    model_provenance = hf_model_provenance(
+        "MahmoodLab/TITAN",
+        model_source,
+        requested_revision=args.revision,
+    )
     model = AutoModel.from_pretrained(
         model_source, revision=args.revision, trust_remote_code=True,
         local_files_only=args.offline,
@@ -341,6 +346,9 @@ def main() -> None:
         "hf_home": os.environ.get("HF_HOME", ""),
         "local_model_snapshot": str(local_model_dir) if local_model_dir else "",
         "huggingface_hub_version": huggingface_hub.__version__,
+        "resolved_revision": model_provenance.get("resolved_revision"),
+        "checkpoints": model_provenance.get("checkpoints", []),
+        "model_provenance": model_provenance,
     }
     (outdir / "titan_metadata.json").write_text(json.dumps(metadata, indent=2))
 

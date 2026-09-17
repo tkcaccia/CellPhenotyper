@@ -1,16 +1,20 @@
 process RUN_STARDIST_ROI_SEGMENTATION {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'run_stardist_roi_segmentation', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([shared_crop_tif, roi_crop_geojson, source_shift_json, clean_tissue_mask]) }
     tag "${sample_id}"
     label 'compute_heavy'
     label 'gpu_capable'
 
     publishDir "${params.outdir_base}/03_stardist/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))} GB" }
+    cpus { TaskRuntime.cpus(runtime_plan, 'stardist') }
+    memory { TaskRuntime.memory(runtime_plan, 'stardist') }
     time { params.stardist_time as String }
 
     input:
-    tuple val(sample_id), path(ome_tif), path(roi_geojson)
+    tuple val(sample_id), path(shared_crop_tif), path(roi_crop_geojson), path(source_shift_json), path(clean_tissue_mask)
+    val(runtime_plan)
 
     output:
     tuple val(sample_id), path("stardist_out/crop_roi.tif"), emit: crop_roi
@@ -35,9 +39,14 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def allow_huge_flag = resolvedAllowHugeTif ? '--allow-huge-tif' : ''
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
-    def memoryBudgetGb = Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))
-    def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
-    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def codeFingerprint = PipelineHelpers.codeFingerprint([stardist_script, "${projectDir}/bin/grandqc_mask.py"])
+    def memoryBudgetGb = task.memory.toBytes() / (1024.0d * 1024.0d * 1024.0d)
+    def hardwareProfile = TaskRuntime.profile(runtime_plan)
+    def resolvedComputeDevice = TaskRuntime.device(runtime_plan)
+    def hostArch = HostRuntime.normalizeArch(params.host_arch ?: 'auto')
+    if (hostArch == 'auto') hostArch = HostRuntime.normalizeArch(System.getProperty('os.arch'))
+    def enableStardistGpuArm64 = (params.enable_stardist_gpu_on_arm64 ?: false).toString().trim().toLowerCase() in ['true', '1', 'yes', 'y', 'on']
+    if (hostArch == 'arm64' && !enableStardistGpuArm64) resolvedComputeDevice = 'cpu'
     def stardistAutoHardware = (params.hardware_auto as boolean) && (params.stardist_auto_hardware as boolean) && resolvedComputeDevice == 'gpu'
     def resolvedTilesX = Math.max(1, params.stardist_tiles_x as int)
     def resolvedTilesY = Math.max(1, params.stardist_tiles_y as int)
@@ -66,6 +75,10 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     }
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
+    echo "[INFO] StarDist wrapper code fingerprint: ${codeFingerprint}"
+    if [[ "${resolvedComputeDevice}" != "gpu" ]]; then export CUDA_VISIBLE_DEVICES=""; fi
 
     export OMP_NUM_THREADS=1
     export MKL_NUM_THREADS=1
@@ -234,9 +247,9 @@ PY
     fi
 
     mkdir -p stardist_out
-    echo "[INFO] StarDist runtime tune: profile=${hardwareProfile}, auto_hardware=${stardistAutoHardware}, memory_budget_gb=${memoryBudgetGb}, tiles=${resolvedTilesY}x${resolvedTilesX}, big_block_size=${resolvedBigBlockSize}, big_tiles=${resolvedBigTilesY}x${resolvedBigTilesX}"
+    echo "[INFO] StarDist runtime tune: device=${resolvedComputeDevice}, profile=${hardwareProfile}, auto_hardware=${stardistAutoHardware}, memory_budget_gb=${memoryBudgetGb}, tiles=${resolvedTilesY}x${resolvedTilesX}, big_block_size=${resolvedBigBlockSize}, big_tiles=${resolvedBigTilesY}x${resolvedBigTilesX}"
 
-    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${resolvedComputeDevice}" == "gpu" ]]; then
       echo "[DEBUG] StarDist GPU diagnostics"
       nvidia-smi -L || true
       python - <<'PY'
@@ -257,10 +270,13 @@ PY
     fi
 
     python "${stardist_script}" \\
-      --in "${ome_tif}" \\
-      --roi "${roi_geojson}" \\
+      --in "${shared_crop_tif}" \\
+      --roi "${roi_crop_geojson}" \\
       --outdir stardist_out \\
+      --source-shift "${source_shift_json}" \\
+      --clean-tissue-mask "${clean_tissue_mask}" \\
       --model "${params.stardist_model}" \\
+      --device "${resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'}" \\
       --prob ${params.stardist_prob} \\
       --nms ${params.stardist_nms} \\
       \${MIN_AREA_FLAG} \\
@@ -290,12 +306,15 @@ PY
       ? params.get('_resolved_stardist_full_format').toString()
       : (params.full_format ?: 'tif').toString()
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p stardist_out
     touch stardist_out/crop_roi.tif
     touch stardist_out/labels.tif
     touch stardist_out/objects.csv
     touch stardist_out/roi_all_crop.geojson
     touch stardist_out/shift.json
+    printf '{"pipeline_model_provenance":{"used_model":false}}\n' > stardist_out/stardist_details.json
     if [[ "${stubWriteFullLabels}" == "true" ]]; then
       if [[ "${stubFullFormat}" == "zarr" ]]; then
         mkdir -p stardist_out/labels_full.zarr

@@ -1,11 +1,14 @@
 process ROI_GEOJSON_TO_MASK {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'roi_geojson_to_mask', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([roi_geojson, reference_tif]) }
     tag "${sample_id}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/06_roi/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.input_roi_mask_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.input_roi_mask_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.input_roi_mask_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.input_roi_mask_memory_gb as int))} GB" }
     time { params.input_roi_mask_time as String }
 
     input:
@@ -20,6 +23,8 @@ process ROI_GEOJSON_TO_MASK {
     def rasterize_script = "${projectDir}/${params.geojson_to_mask_script}"
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
 
     python "${rasterize_script}" \
       --geojson "${roi_geojson}" \
@@ -41,6 +46,8 @@ process ROI_GEOJSON_TO_MASK {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     touch "${sample_id}_input_roi_mask.tif"
     touch "${sample_id}_input_roi_mask_preview.png"
     touch "${sample_id}_input_roi_mask_labels.json"

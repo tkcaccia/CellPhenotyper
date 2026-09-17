@@ -48,62 +48,16 @@ selected_modes <- normalize_modes(embedding_mode)
 
 library(data.table)
 
-fread_embedding <- function(file_path, ...) {
-  if (grepl("\\.gz$", file_path, ignore.case = TRUE)) {
-    # data.table otherwise requires the optional R.utils package for gzip files.
-    gzip_cmd <- sprintf("gzip -dc -- %s", shQuote(normalizePath(file_path, mustWork = TRUE)))
-    return(fread(cmd = gzip_cmd, ...))
-  }
-  fread(file_path, ...)
-}
-
-read_embedding_header <- function(file_path) {
-  fread_embedding(file_path, nrows = 0L, showProgress = FALSE)
-}
-
-embedding_feature_columns <- function(files, mode_name) {
-  header <- read_embedding_header(files[[1L]])
-  feat_cols <- grep("^feat", colnames(header), value = TRUE)
-  if (length(feat_cols) == 0L) {
-    stop(paste("Embedding table for mode", mode_name, "has no feature columns starting with 'feat'"))
-  }
-  feat_cols
-}
-
-select_top_variance_features <- function(files, feat_cols, top_n, mode_name) {
-  if (length(feat_cols) <= top_n) {
-    return(feat_cols)
-  }
-
-  sums <- numeric(length(feat_cols))
-  sums_sq <- numeric(length(feat_cols))
-  counts <- numeric(length(feat_cols))
-  names(sums) <- feat_cols
-  names(sums_sq) <- feat_cols
-  names(counts) <- feat_cols
-
-  for (fp in files) {
-    dt <- fread_embedding(fp, select = feat_cols, showProgress = FALSE)
-    mat <- as.matrix(dt)
-    storage.mode(mat) <- "double"
-    ok <- !is.na(mat)
-    vals <- mat
-    vals[!ok] <- 0
-    sums <- sums + colSums(vals)
-    sums_sq <- sums_sq + colSums(vals * vals)
-    counts <- counts + colSums(ok)
-    rm(dt, mat, ok, vals)
-    gc(FALSE)
-  }
-
-  means <- sums / pmax(counts, 1)
-  variances <- (sums_sq / pmax(counts, 1)) - (means * means)
-  variances[!is.finite(variances)] <- -Inf
-  ordered <- names(sort(variances, decreasing = TRUE))
-  keep <- ordered[seq_len(min(top_n, length(ordered)))]
-  cat(sprintf("[INFO] mode=%s preselected_top_variance_features=%d of %d\n", mode_name, length(keep), length(feat_cols)))
-  keep
-}
+script_argument <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(script_argument) != 1L) stop("Cannot locate the UNI2 binary reader helper")
+source(file.path(dirname(normalizePath(sub("^--file=", "", script_argument))), "uni2_embedding_io.R"))
+mode_dirs <- list(tile = tile_dir, nuclei = nuclei_dir, cyto = cyto_dir, inner_square = inner_square_dir)
+available_modes <- c("tile", "nuclei", "cyto", "inner_square")
+input_inventory <- lapply(mode_dirs[selected_modes], discover_uni2_embedding_input)
+input_formats <- unique(vapply(input_inventory, `[[`, character(1), "storage"))
+if (length(input_formats) != 1L) stop("Mixed legacy CSV and binary UNI2 sources across selected modes are not allowed")
+binary_input <- identical(input_formats, "binary")
+embedding_input_provenance <- NULL
 
 load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
   if (!required) {
@@ -114,56 +68,17 @@ load_embedding_matrix <- function(dir_path, mode_name, required = TRUE) {
   if (!dir.exists(dir_path)) {
     stop(paste("Embedding directory does not exist for mode", mode_name, ":", dir_path))
   }
-
-  files <- list.files(
-    dir_path,
-    recursive = TRUE,
-    full.names = TRUE,
-    pattern = "\\.csv(\\.gz)?$"
-  )
-  if (length(files) == 0L) {
-    stop(paste("No embedding CSV files found for mode", mode_name, "in", dir_path))
-  }
-  files <- sort(files)
-
-  feat_cols_all <- embedding_feature_columns(files, mode_name)
-  feat_cols <- select_top_variance_features(
-    files,
-    feat_cols_all,
-    top_features_per_mode,
-    mode_name
-  )
-  read_cols <- c("cell_id", feat_cols)
-  dt <- rbindlist(
-    lapply(files, function(fp) fread_embedding(fp, select = read_cols, showProgress = FALSE)),
-    fill = TRUE,
-    use.names = TRUE
-  )
-  if (!("cell_id" %in% colnames(dt))) {
-    stop(paste("Embedding table for mode", mode_name, "is missing 'cell_id' column"))
-  }
-
-  dt <- dt[, c("cell_id", feat_cols), with = FALSE]
-  dt[, cell_id := as.character(cell_id)]
-  dt <- dt[!is.na(cell_id) & nzchar(cell_id)]
-  dt <- dt[!duplicated(cell_id)]
-
-  mat <- as.matrix(dt[, ..feat_cols])
-  storage.mode(mat) <- "double"
-  rownames(mat) <- dt$cell_id
-
-  list(
-    matrix = mat,
-    n_cells = nrow(mat),
-    n_features = ncol(mat)
-  )
+  if (binary_input) return(load_uni2_binary_mode(dir_path, mode_name, top_features_per_mode))
+  load_uni2_csv_mode(dir_path, mode_name, top_features_per_mode)
 }
 
 if (!file.exists(annot_csv)) {
   stop(paste("Annotation CSV does not exist:", annot_csv))
 }
 
-ann <- read.csv(annot_csv, stringsAsFactors = FALSE)
+annotation_sha256_before <- uni2_io_sha256(annot_csv)
+ann <- as.data.frame(uni2_csv_read(annot_csv, colClasses = list(character = "label")))
+uni2_csv_names(names(ann), "annotation column names")
 if (!("label" %in% colnames(ann))) {
   stop("Annotation CSV must contain a 'label' column")
 }
@@ -172,24 +87,17 @@ if (!all(c("x", "y") %in% colnames(ann))) {
 }
 
 ann$label <- as.character(ann$label)
+uni2_csv_names(ann$label, "annotation labels")
+if (!is.numeric(ann$x) || !is.numeric(ann$y) || any(!is.finite(ann$x)) || any(!is.finite(ann$y)))
+  stop("UNI2 annotations require numeric finite x/y coordinates")
 ann$x <- as.numeric(ann$x)
 ann$y <- as.numeric(ann$y)
-ann <- ann[!is.na(ann$label) & nzchar(ann$label), , drop = FALSE]
-ann <- ann[!duplicated(ann$label), , drop = FALSE]
 rownames(ann) <- ann$label
 
 if (!("polygon_label" %in% colnames(ann))) {
   ann$polygon_label <- "unknown"
 }
 
-mode_dirs <- list(
-  tile = tile_dir,
-  nuclei = nuclei_dir,
-  cyto = cyto_dir,
-  inner_square = inner_square_dir
-)
-
-available_modes <- c("tile", "nuclei", "cyto", "inner_square")
 cat(sprintf("[INFO] Loading embedding families: %s\n", paste(available_modes, collapse = ",")))
 cat(sprintf("[INFO] Selected embedding families: %s\n", paste(selected_modes, collapse = ",")))
 cat(sprintf("[INFO] Top features per selected family: %d\n", top_features_per_mode))
@@ -201,6 +109,44 @@ for (m in available_modes) {
   if (!is.null(loaded[[m]])) {
     cat(sprintf("[INFO] mode=%s cells=%d features=%d\n", m, loaded[[m]]$n_cells, loaded[[m]]$n_features))
   }
+}
+
+{
+  analysis_ids <- sort(ann$label)
+  source_orders <- list()
+  for (mode in selected_modes) {
+    source_ids <- rownames(loaded[[mode]]$matrix)
+    if (!setequal(source_ids, ann$label)) {
+      missing_ids <- setdiff(ann$label, source_ids)
+      foreign_ids <- setdiff(source_ids, ann$label)
+      stop("UNI2 rows and annotation IDs must match exactly for mode ", mode,
+        "; no intersections or foreign IDs are allowed. Missing (", length(missing_ids), "): ",
+        paste(head(missing_ids, 10L), collapse = ","), "; foreign (", length(foreign_ids), "): ",
+        paste(head(foreign_ids, 10L), collapse = ","))
+    }
+    metadata_rows <- loaded[[mode]]$rows
+    # x/y, when supplied under the same names, are exact source coordinates.
+    # Production cx/cy are rounded/clipped extraction centers and are not
+    # silently treated as equivalent to floating-point annotation centroids.
+    for (coordinate in intersect(c("x", "y"), names(metadata_rows))) {
+      values <- suppressWarnings(as.numeric(metadata_rows[[coordinate]]))
+      expected <- ann[source_ids, coordinate]
+      if (any(!is.finite(values)) || !identical(values, as.numeric(expected)))
+        stop("UNI2 row/annotation coordinate mismatch: ", mode, "/", coordinate)
+    }
+    source_orders[[mode]] <- list(source_observation_ids = source_ids,
+      analysis_row_from_source = match(analysis_ids, source_ids))
+    loaded[[mode]]$matrix <- loaded[[mode]]$matrix[analysis_ids, , drop = FALSE]
+  }
+  ann <- ann[analysis_ids, , drop = FALSE]
+  if (!identical(uni2_io_sha256(annot_csv), annotation_sha256_before)) stop("Annotation source changed while loading UNI2")
+  embedding_input_provenance <- list(format = if (binary_input) "cellphenotyper_uni2_binary_input" else "cellphenotyper_uni2_csv_input", schema_version = "1.0.0",
+    storage_integrity = "validated_exact_sizes_sha256_finite_features_and_complete_ids",
+    encoder_binding_status = "storage_integrity_does_not_establish_encoder_provenance",
+    annotation_path = normalizePath(annot_csv), annotation_sha256 = annotation_sha256_before,
+    analysis_observation_ids = analysis_ids, selected_modes = selected_modes,
+    analysis_order = "lexical_ID_order_matching_legacy_CSV_policy_without_numeric_ID_coercion",
+    source_to_analysis = source_orders, modes = lapply(loaded[selected_modes], `[[`, "provenance"))
 }
 
 ann_ids <- sort(unique(ann$label))
@@ -233,12 +179,8 @@ cat(
   )
 )
 
-# Backward-compatible object: global intersection across all loaded modes.
-common_ids <- Reduce(
-  intersect,
-  c(list(ann_ids), lapply(selected_modes, function(m) rownames(embeddings_raw[[m]])))
-)
-common_ids <- sort(unique(common_ids))
+# Compatibility name; selected modes have already passed exact population checks.
+common_ids <- ann_ids
 
 if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
@@ -248,9 +190,12 @@ rawdata_path <- file.path(output_dir, "rawdata.RData")
 save(
   ann_ids, common_ids, ann, xy, available_modes, selected_modes,
   embeddings_raw, mode_overlap_with_annotations,
+  embedding_input_provenance,
   file = rawdata_path,
   compress = FALSE
 )
+jsonlite::write_json(embedding_input_provenance,
+  file.path(output_dir, "embedding_input_provenance.json"), auto_unbox = TRUE, pretty = TRUE, null = "null", digits = NA)
 
 # Keep a backward-compatible filename without serializing a second multi-GB copy.
 legacy_path <- file.path(output_dir, "raw_data.RData")

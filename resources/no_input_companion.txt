@@ -1,0 +1,1 @@
+This placeholder keeps the converter input tuple uniform for self-contained images.

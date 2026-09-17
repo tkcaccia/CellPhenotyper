@@ -1,0 +1,32 @@
+#!/bin/bash
+# Preserve script-directory imports while excluding host/user Python packages.
+set -euo pipefail
+atlas_prefix="${CELLPHENOTYPER_ATLAS_PREFIX:-/opt/micromamba/envs/cellphenotyper-atlas}"
+if [[ "$atlas_prefix" != /* || ! -x "$atlas_prefix/bin/python" ]]; then
+    echo "The isolated atlas Python is unavailable at $atlas_prefix/bin/python; use an atlas-enabled image or explicitly configure CELLPHENOTYPER_ATLAS_PREFIX." >&2
+    exit 78
+fi
+unset PYTHONHOME PYTHONPATH PYTHONUSERBASE VIRTUAL_ENV CONDA_PREFIX CONDA_DEFAULT_ENV
+unset LD_PRELOAD DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+export LD_LIBRARY_PATH="$atlas_prefix/lib"
+export PATH="$atlas_prefix/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PYTHONNOUSERSITE=1
+# -E deliberately ignores PYTHON* environment variables. Forward only the
+# validated task-private, no-write cache contract as literal interpreter flags.
+source_cache_flags=(-E -s)
+if [[ "${CELLPHENOTYPER_SOURCE_PYCACHEPREFIX+x}" || "${PYTHONPYCACHEPREFIX+x}" ]]; then
+    source_cache_prefix="${CELLPHENOTYPER_SOURCE_PYCACHEPREFIX:-}"
+    if [[ "$source_cache_prefix" != "$PWD"/.cellphenotyper-pycache.* ||
+          "${PYTHONPYCACHEPREFIX:-}" != "$source_cache_prefix" ||
+          "${PYTHONDONTWRITEBYTECODE:-}" != 1 ||
+          ! -d "$source_cache_prefix" || -L "$source_cache_prefix" ]]; then
+        echo 'Invalid or missing task-private Python cache isolation; source activate_source_python.sh in this task first.' >&2
+        exit 78
+    fi
+    if [[ -n "$(find "$source_cache_prefix" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+        echo 'Task-private Python cache prefix is not empty; refusing possible stale bytecode.' >&2
+        exit 78
+    fi
+    source_cache_flags+=(-B -X "pycache_prefix=$source_cache_prefix")
+fi
+exec "$atlas_prefix/bin/python" "${source_cache_flags[@]}" "$@"

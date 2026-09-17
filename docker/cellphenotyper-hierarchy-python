@@ -1,0 +1,55 @@
+#!/bin/bash
+# One existing Nextflow parameter drives two deliberately separate runtimes.
+set -euo pipefail
+if [[ "$#" -lt 1 ]]; then
+    echo 'Hierarchy Python requires prepare_hierarchy_features.py or discover_tissue_hierarchy.py.' >&2
+    exit 64
+fi
+case "${1##*/}" in
+    prepare_hierarchy_features.py)
+        ml_python="${CELLPHENOTYPER_ML_PYTHON:-/opt/micromamba/envs/stardist/bin/python}"
+        if [[ "$ml_python" != /* || ! -x "$ml_python" ]]; then
+            echo "The existing model Python is unavailable at $ml_python; no atlas fallback is permitted for UNI2 inference." >&2
+            exit 78
+        fi
+        unset PYTHONHOME PYTHONPATH PYTHONUSERBASE VIRTUAL_ENV CONDA_PREFIX CONDA_DEFAULT_ENV
+        export PYTHONNOUSERSITE=1
+        # Preserve -E isolation while explicitly forwarding the no-write task
+        # cache contract; ordinary PYTHON* settings must not silently bypass it.
+        source_cache_flags=(-E -s)
+        if [[ "${CELLPHENOTYPER_SOURCE_PYCACHEPREFIX+x}" || "${PYTHONPYCACHEPREFIX+x}" ]]; then
+            source_cache_prefix="${CELLPHENOTYPER_SOURCE_PYCACHEPREFIX:-}"
+            if [[ "$source_cache_prefix" != "$PWD"/.cellphenotyper-pycache.* ||
+                  "${PYTHONPYCACHEPREFIX:-}" != "$source_cache_prefix" ||
+                  "${PYTHONDONTWRITEBYTECODE:-}" != 1 ||
+                  ! -d "$source_cache_prefix" || -L "$source_cache_prefix" ]]; then
+                echo 'Invalid or missing task-private Python cache isolation; source activate_source_python.sh in this task first.' >&2
+                exit 78
+            fi
+            if [[ -n "$(find "$source_cache_prefix" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+                echo 'Task-private Python cache prefix is not empty; refusing possible stale bytecode.' >&2
+                exit 78
+            fi
+            source_cache_flags+=(-B -X "pycache_prefix=$source_cache_prefix")
+        fi
+        exec "$ml_python" "${source_cache_flags[@]}" "$@"
+        ;;
+    discover_tissue_hierarchy.py)
+        # Atlas Python intentionally resets PATH. Preserve the independently
+        # selected native R executable explicitly; never fall back to a host R.
+        hierarchy_rscript="${CELLPHENOTYPER_HIERARCHY_RSCRIPT-/opt/micromamba/envs/kodama-r/bin/Rscript}"
+        if [[ "$hierarchy_rscript" != /* || ! -f "$hierarchy_rscript" || ! -x "$hierarchy_rscript" ||
+              "$hierarchy_rscript" =~ ^[[:space:]] || "$hierarchy_rscript" =~ [[:space:]]$ ||
+              "$hierarchy_rscript" =~ [[:cntrl:]] ]]; then
+            echo "The native hierarchy Rscript must be an absolute executable file without edge whitespace/control characters: $hierarchy_rscript; no fallback is permitted." >&2
+            exit 78
+        fi
+        export CELLPHENOTYPER_HIERARCHY_RSCRIPT="$hierarchy_rscript"
+        runtime_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+        exec "$runtime_dir/cellphenotyper-atlas-python" "$@"
+        ;;
+    *)
+        echo "Unsupported hierarchy entry point: $1. Explicit feature/discovery routing is required." >&2
+        exit 64
+        ;;
+esac

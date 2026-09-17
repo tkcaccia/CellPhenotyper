@@ -9,6 +9,7 @@ workflow POST_CLUSTER_PATHOFM {
     objects_csv_ch
     crop_roi_ch
     shift_json_ch
+    runtime_plan
 
     main:
     def stageOrder = ['cluster_geojson', 'neoplastic_section', 'titan', 'pathofmpred']
@@ -119,7 +120,7 @@ workflow POST_CLUSTER_PATHOFM {
                    ignored_sample_id_3, ignored_variant_3, selected_summary ->
                 tuple(sample_key, sample_id, cluster_variant, selected_image, selected_mask, selected_shift, selected_summary)
             }
-        EXTRACT_TITAN_SECTION_EMBEDDING(titanInputCh)
+        EXTRACT_TITAN_SECTION_EMBEDDING(titanInputCh, runtime_plan)
         titanEmbeddingCh = EXTRACT_TITAN_SECTION_EMBEDDING.out.embedding_csv
     } else if (runPathoFMPred) {
         titanEmbeddingCh = image_input_ch.flatMap { sample_id, _image_input ->

@@ -1,11 +1,14 @@
 process PREPARE_STARDIST_AUTO_ROI {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'prepare_stardist_auto_roi', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([image_path]) }
     tag "${sample_id}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/03_stardist/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_auto_roi_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_auto_roi_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.stardist_auto_roi_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.stardist_auto_roi_memory_gb as int))} GB" }
     time { params.stardist_auto_roi_time as String }
 
     input:
@@ -22,6 +25,8 @@ process PREPARE_STARDIST_AUTO_ROI {
     def fill_holes_flag = params.stardist_auto_roi_fill_holes ? '--fill-holes' : ''
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
 
       python "${auto_roi_script}" \\
       --image "${staged_image_name}" \\
@@ -40,6 +45,8 @@ process PREPARE_STARDIST_AUTO_ROI {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     printf '{"type":"FeatureCollection","features":[]}\n' > "${sample_id}.stardist_auto_roi.geojson"
     touch "${sample_id}.stardist_auto_roi_preview.png"
     """

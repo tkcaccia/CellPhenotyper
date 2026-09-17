@@ -58,7 +58,7 @@ def test_singularity_gpu_roles_use_the_verified_oci_runtime() -> None:
 
 def test_docker_gpu_roles_use_the_separate_gpu_repository() -> None:
     assert CONFIG.count('"${gpuRepo}:${gpuTag}"') >= 2
-    assert 'def auto_gpu_docker_image = "${container_gpu_repo}:${container_gpu_tag}"' in MAIN
+    assert "default_container_gpu_repo = 'ghcr.io/tkcaccia/cellphenotyper-runtime'" in CONFIG
 
 
 def test_auto_device_is_pipeline_wide_default() -> None:
@@ -67,15 +67,17 @@ def test_auto_device_is_pipeline_wide_default() -> None:
     assert "uni2_device_auto" not in CONFIG
     assert "uni2_device_auto" not in PARAMETERS
     assert "def configured_gpu_runtime" in CONFIG
-    assert "singularityBaseRunOptions = configured_gpu_runtime ? '--nv' : ''" in CONFIG
-    assert "dockerGpuOptions = configured_gpu_runtime ? '--gpus all --shm-size=3g' : ''" in CONFIG
+    assert "gpu_task_container_options.call(params, task.process.toString(), explicitPlan, 'singularity')" in CONFIG
+    assert "gpu_task_container_options.call(params, task.process.toString(), explicitPlan, 'docker')" in CONFIG
+    assert "docker.runOptions = dockerExtraOptions" in CONFIG
 
 
 def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
-    assert "kodama_landmarks: 1000" in PARAMETERS
+    assert "kodama_landmarks: 10000" in PARAMETERS
     assert "cluster_snn_k: 50" in PARAMETERS
     assert "cluster_algorithm: leiden" in PARAMETERS
     assert "cluster_target_clusters: 0" in PARAMETERS
+    assert "cluster_forced_count_sensitivity_acknowledged: false" in PARAMETERS
     assert "cluster_landmark_cells: 10000" in PARAMETERS
     assert "cluster_landmark_assign_k: 50" in PARAMETERS
     assert "cluster_landmark_sample_strategy: knn_inverse_distance" in PARAMETERS
@@ -90,12 +92,34 @@ def test_target_cluster_count_is_wired_to_clustering() -> None:
     assert 'flag == "--target-clusters"' in script
     assert "collapse_clusters_to_target" in script
     assert "nearest_centroid_merge_in_kodama_space" in script
+    assert "cluster_forced_count_sensitivity_acknowledged" in module
+    assert "sensitivity_forced_cluster_count" in script
+    assert "SENSITIVITY ONLY" in script
+    assert "A forced cluster count is sensitivity-only" in MAIN
 
 
 def test_gpu_modules_consume_the_resolved_device() -> None:
-    for module_name in GPU_MODULES:
+    explicit_runtime_modules = {
+        "extract_uni2_embeddings.nf",
+        "extract_uni2_embeddings_shared.nf",
+        "run_gigatime_on_crop.nf",
+        "run_cellvitpp.nf",
+        "run_grandqc_artifact_analysis.nf",
+        "run_stardist_roi_segmentation.nf",
+        "run_hovernet_monusac.nf",
+        "run_grandqc_artifact_analysis.nf",
+        "run_stardist_roi_segmentation.nf",
+        "run_hovernet_monusac.nf",
+        "refine_grown_tissue_medsam.nf",
+        "extract_titan_section_embedding.nf",
+    }
+    for module_name in set(GPU_MODULES) | explicit_runtime_modules:
         module = (ROOT / "modules" / module_name).read_text(encoding="utf-8")
-        assert "params._resolved_compute_device ?: params.compute_device" in module, module_name
+        if module_name in explicit_runtime_modules:
+            assert "TaskRuntime.device(runtime_plan)" in module, module_name
+            assert "val(runtime_plan)" in module, module_name
+        else:
+            assert "params._resolved_compute_device ?: params.compute_device" in module, module_name
 
 
 def test_medsam_auto_device_and_retry_follow_pipeline_policy() -> None:
@@ -104,3 +128,20 @@ def test_medsam_auto_device_and_retry_follow_pipeline_policy() -> None:
     assert "medsam_device: auto" in PARAMETERS
     assert "label 'compute_heavy'" in module
     assert "requestedMedsamDevice == 'auto'" in module
+
+
+def test_consensus_mode_is_explicit_and_does_not_change_with_hardware() -> None:
+    assert "cell_detection_mode           = 'consensus'" in CONFIG
+    assert "cell_detection_mode: consensus" in PARAMETERS
+    assert "cell_detection_mode=consensus requires GPU execution" in MAIN
+    assert "falling back to StarDist-only" not in MAIN
+
+
+def test_gpu_scheduler_has_memory_aware_admission_for_all_gpu_stages() -> None:
+    helper = (ROOT / "bin" / "acquire_gpu_slot.sh").read_text(encoding="utf-8")
+    assert "CUDA_VISIBLE_DEVICES" in helper
+    assert "memory.total,memory.free" in helper
+    assert "gpu_memory_token" in CONFIG
+    assert "withLabel: gpu_capable" in CONFIG
+    for role in ("grandqc", "stardist", "hovernet", "cellvit", "gigatime", "uni2", "medsam", "kodama", "titan"):
+        assert f"{role}_gpu_memory_gb" in CONFIG

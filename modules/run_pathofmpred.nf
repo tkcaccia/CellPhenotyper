@@ -1,11 +1,14 @@
 process RUN_PATHOFMPRED {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'run_pathofmpred', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([titan_embedding]) }
     tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
     label 'gpu_capable'
 
     publishDir "${params.outdir_base}/18_pathofmpred/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.pathofmpred_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.pathofmpred_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.pathofmpred_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(4, params.pathofmpred_memory_gb as int)))} GB" }
     time { params.pathofmpred_time as String }
 
     input:
@@ -17,9 +20,12 @@ process RUN_PATHOFMPRED {
 
     script:
     def scriptPath = "${projectDir}/${params.pathofmpred_script}"
+    def provenanceScript = "${projectDir}/bin/record_pathofmpred_provenance.py"
     def rscriptPath = params.pathofmpred_rscript as String
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     test -d "${params.pathofmpred_library_dir}" || { echo "Protected PathoFMPred R library is missing: ${params.pathofmpred_library_dir}" >&2; exit 2; }
     export R_LIBS_USER="${params.pathofmpred_library_dir}"
     export R_ENVIRON_USER=/dev/null
@@ -33,11 +39,17 @@ process RUN_PATHOFMPRED {
       --patient-id "${sample_id}" --outdir "pathofmpred_${sample_id}_${cluster_variant}" \
       --report-format "${params.pathofmpred_report_format}" \
       --include-limited-evidence "${params.pathofmpred_include_limited_evidence}"
+    python "${provenanceScript}" \
+      --library-dir "${params.pathofmpred_library_dir}" \
+      --outdir "pathofmpred_${sample_id}_${cluster_variant}"
     """
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "pathofmpred_${sample_id}_${cluster_variant}"
     touch "pathofmpred_${sample_id}_${cluster_variant}/pathofmpred_predictions.csv"
+    echo '{"model_provenance": {"used_model": false, "source_repository": null, "resolved_revision": null, "cache_path": null, "checkpoints": []}}' > "pathofmpred_${sample_id}_${cluster_variant}/pathofmpred_model_provenance.json"
     """
 }

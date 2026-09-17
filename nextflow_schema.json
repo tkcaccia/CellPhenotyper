@@ -1,0 +1,531 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/tkcaccia/CellPhenotyper/main/nextflow_schema.json",
+  "title": "CellPhenotyper pipeline parameters",
+  "description": "Schema for scientific-route, validation, input-QC, hardware, uncertainty and publication-critical parameters. Advanced stage resource overrides remain accepted and are documented in PARAMETERS.md.",
+  "type": "object",
+  "additionalProperties": true,
+  "definitions": {
+    "cell_atlas_options": {
+      "title": "Linked cell profiles and neighbourhoods",
+      "type": "object",
+      "properties": {
+        "cell_profiles_enable": {"type": "boolean", "default": false},
+        "cell_profile_samples": {"type": ["string", "null"], "default": null},
+        "cell_profiles_uni2_enable": {"type": "boolean", "default": true},
+        "cell_profiles_markers_enable": {"type": "boolean", "default": true},
+        "cellvit_export_embeddings": {"type": "boolean", "default": false},
+        "cell_profiles_domain_source": {"type": "string", "enum": ["refined", "cluster", "none"], "default": "refined"},
+        "cell_atlas_python": {"type": "string", "minLength": 1, "default": "python"},
+        "cell_profiles_cpus": {"type": "integer", "minimum": 1, "default": 4},
+        "cell_profiles_memory_gb": {"type": "integer", "minimum": 2, "default": 16},
+        "cell_neighborhood_radii_um": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(,[0-9]+(\\.[0-9]+)?)*$", "default": "25,50,100"},
+        "cell_neighborhood_feature_groups": {"type": "string", "default": "available", "description": "available selects all present cell feature blocks; an explicit comma-separated list selects named blocks, and an empty string retains topology-only features."},
+        "cell_neighborhood_feature_weights": {"type": "string", "default": "{}", "description": "JSON object of positive feature-group weights; own:block and block separately weight focal-cell and neighbourhood representations."},
+        "cell_neighborhood_feature_storage": {"type": "string", "enum": ["table", "arrays"], "default": "table", "description": "table preserves the legacy wide representation; arrays retains all own/neighbor axes in source-bound NPY segments and uses bounded streaming niche fitting."},
+        "cell_neighborhood_row_batch_size": {"type": "integer", "minimum": 1, "default": 4096},
+        "cell_neighborhood_column_batch_size": {"type": "integer", "minimum": 1, "default": 64},
+        "cell_neighborhood_support_mode": {"type": "string", "enum": ["provided", "brightfield_native"], "default": "provided", "description": "Neighbourhood graph/density support. Provided preserves the supplied tissue raster. Experimental brightfield_native subtracts image-derived bright-background gaps at native sampling; does not change canonical cells, marker compartments or tissue domains, and does not use expert annotations."},
+        "cell_niche_fixed_k": {"type": "integer", "minimum": 0, "default": 0},
+        "cell_niche_max_k": {"type": "integer", "minimum": 2, "default": 8},
+        "cell_niche_seed": {"type": "integer", "minimum": 0, "default": 17},
+        "cell_niche_fit_limit": {"type": "integer", "minimum": 10, "default": 20000, "description": "Maximum seeded training cells; all eligible cells still contribute scaling and receive assignments."},
+        "cohort_niches_enable": {"type": "boolean", "default": false, "description": "Fit one exploratory niche model across at least two assembled specimen profiles; preserves the original profiles and within-specimen graphs."},
+        "cohort_niches_bundle": {"type": ["string", "null"], "default": null, "description": "Attach an existing completed cohort-niche directory to SpatialData exports bound to the exact source profiles used for fitting. Requires SpatialData export and is mutually exclusive with cohort_niches_enable."},
+        "cohort_niches_max_k": {"type": "integer", "minimum": 2, "default": 8},
+        "cohort_niches_fixed_k": {"type": "integer", "minimum": 0, "default": 0},
+        "cohort_niches_seed": {"type": "integer", "minimum": 0, "default": 17},
+        "cohort_niches_repeats": {"type": "integer", "minimum": 2, "default": 5},
+        "cohort_niches_fit_limit": {"type": "integer", "minimum": 10, "default": 20000},
+        "cohort_niches_max_working_mb": {"type": "integer", "minimum": 1, "default": 1024},
+        "cell_profiles_spatialdata": {"type": "boolean", "default": false},
+        "spatialdata_python": {"type": "string", "minLength": 1, "default": "python"},
+        "spatialdata_tile_size": {"type": "integer", "minimum": 16, "default": 1024},
+        "spatialdata_pyramid_levels": {"type": "integer", "minimum": 0, "default": 0},
+        "cell_reference_atlas": {"type": ["string", "null"], "default": null},
+        "region_reference_atlas": {"type": ["string", "null"], "default": null},
+        "cell_measured_assays": {"type": ["string", "null"], "default": null},
+        "tissue_hierarchy_enable": {"type": "boolean", "default": false},
+        "tissue_hierarchy_parent_variant": {"type": ["string", "null"], "default": null},
+        "tissue_hierarchy_model_snapshot": {"type": ["string", "null"], "default": null},
+        "tissue_hierarchy_weights_filename": {"type": ["string", "null"], "default": null},
+        "tissue_hierarchy_local_field_um": {"type": "number", "exclusiveMinimum": 0, "default": 56.0},
+        "tissue_hierarchy_context_field_um": {"type": "number", "exclusiveMinimum": 0, "default": 224.0},
+        "tissue_hierarchy_minimum_field_coverage": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "default": 1.0},
+        "tissue_hierarchy_max_window_pixels": {"type": "integer", "minimum": 1, "default": 16777216},
+        "tissue_hierarchy_feature_batch": {"type": "integer", "minimum": 1, "maximum": 256, "default": 16},
+        "tissue_hierarchy_device": {"type": "string", "enum": ["cpu", "cuda", "mps"], "default": "cuda"},
+        "tissue_hierarchy_python": {"type": "string", "minLength": 1, "default": "python3"},
+        "tissue_hierarchy_cpus": {"type": "integer", "minimum": 1, "default": 4},
+        "tissue_hierarchy_memory": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)? (GB|MB)$", "default": "16 GB"},
+        "tissue_hierarchy_seed": {"type": "integer", "minimum": 0, "default": 17},
+        "tissue_hierarchy_kodama_m": {"type": "integer", "minimum": 1, "default": 100},
+        "tissue_hierarchy_kodama_tcycle": {"type": "integer", "minimum": 1, "default": 20},
+        "tissue_hierarchy_kodama_neighbors": {"type": "integer", "minimum": 1, "default": 100},
+        "tissue_hierarchy_kodama_r_library": {"type": ["string", "null"], "minLength": 1, "pattern": "^[^\\u0000-\\u001f\\u007f]+$", "default": null, "description": "Optional explicitly supplied native KODAMA R library directory visible to the task runtime; no automatic host-library discovery or installation."},
+        "tissue_hierarchy_context_weight": {"type": "number", "exclusiveMinimum": 0, "default": 1},
+        "tissue_hierarchy_local_weight": {"type": "number", "exclusiveMinimum": 0, "default": 1},
+        "tissue_hierarchy_max_k": {"type": "integer", "minimum": 2, "default": 5},
+        "tissue_hierarchy_fixed_k": {"type": "integer", "minimum": 0, "default": 0},
+        "tissue_hierarchy_repeats": {"type": "integer", "minimum": 2, "default": 5},
+        "tissue_hierarchy_fit_limit": {"type": "integer", "minimum": 2, "default": 5000},
+        "tissue_hierarchy_components_per_block": {"type": "integer", "minimum": 3, "default": 64},
+        "tissue_hierarchy_min_observations": {"type": "integer", "minimum": 2, "default": 20},
+        "tissue_hierarchy_parent_purity": {"type": "number", "exclusiveMinimum": 0.5, "maximum": 1, "default": 0.8},
+        "tissue_hierarchy_min_seed_stability": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8},
+        "tissue_hierarchy_min_scale_agreement": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
+        "tissue_hierarchy_min_affinity_margin": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1, "description": "Minimum graph-affinity assignment margin for native KODAMA subdomain discovery; not a calibrated probability."},
+        "tissue_hierarchy_min_centroid_margin": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1, "description": "Deprecated legacy_kmeans CLI setting; ignored by the native KODAMA pipeline hierarchy route."},
+        "tissue_hierarchy_tile_size": {"type": "integer", "minimum": 16, "default": 512},
+        "tissue_hierarchy_max_components": {"type": "integer", "minimum": 2, "default": 1000000},
+        "medsam_appearance_multiclass": {"type": "boolean", "default": false},
+        "medsam_appearance_min_vote_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0},
+        "medsam_appearance_min_vote_margin": {"type": "number", "minimum": 0, "maximum": 1, "default": 0},
+        "medsam_pre_boundary_competition": {"type": "boolean", "default": true, "description": "Run deterministic annealed wand-like competition between neighbouring KODAMA labels before MedSAM."},
+        "medsam_pre_boundary_radius": {"type": "integer", "minimum": 0, "default": 64},
+        "medsam_pre_boundary_downsample": {"type": "integer", "minimum": 1, "default": 4},
+        "medsam_pre_boundary_iterations": {"type": "integer", "minimum": 1, "default": 16},
+        "medsam_pre_boundary_initial_temperature": {"type": "number", "exclusiveMinimum": 0, "default": 2.0},
+        "medsam_pre_boundary_final_temperature": {"type": "number", "exclusiveMinimum": 0, "default": 0.05},
+        "medsam_pre_boundary_data_weight": {"type": "number", "exclusiveMinimum": 0, "default": 1.0},
+        "medsam_pre_boundary_smoothness_weight": {"type": "number", "exclusiveMinimum": 0, "default": 0.3},
+        "medsam_pre_boundary_edge_beta": {"type": "number", "exclusiveMinimum": 0, "default": 0.7},
+        "medsam_pre_boundary_connectivity": {"type": "integer", "enum": [4, 8], "default": 8},
+        "medsam_internal_gradient_space": {"type": "string", "enum": ["luminance", "lab", "od", "lab_od"], "default": "luminance"},
+        "medsam_internal_gradient_sigma_px": {"type": "number", "minimum": 0, "default": 0.0},
+        "medsam_internal_watershed_compactness": {"type": "number", "minimum": 0, "default": 0.0},
+        "medsam_core_erosion_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_outer_dilation_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_smooth_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_pre_boundary_radius_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_internal_boundary_radius_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_internal_gradient_sigma_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_appearance_core_erosion_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_appearance_smooth_sigma_um": {"type": ["number", "null"], "minimum": 0, "default": null},
+        "medsam_appearance_min_region_area_um2": {"type": ["number", "null"], "minimum": 0, "default": null}
+      }
+    },
+    "input_output_options": {
+      "title": "Input and output",
+      "description": "Select one image or a folder of images and define the durable output location.",
+      "type": "object",
+      "properties": {
+        "folder_input": {
+          "type": ["string", "null"],
+          "description": "Folder containing supported H&E image files, including Olympus VSI with its _<sample>_ companion directory, and optional matching GeoJSON files. Takes precedence over image_input."
+        },
+        "image_input": {
+          "type": ["string", "null"],
+          "description": "Single H&E image path. Olympus VSI requires its sibling _<sample>_ companion directory. Use folder_input for a cohort."
+        },
+        "roi_geojson": {
+          "type": ["string", "null"],
+          "description": "Optional level-0 pixel Polygon/MultiPolygon GeoJSON paired with image_input."
+        },
+        "require_matching_roi": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reject or skip inputs without a matching ROI instead of generating a full-image ROI."
+        },
+        "outdir_base": {
+          "type": "string",
+          "minLength": 1,
+          "default": "results",
+          "description": "Durable output root."
+        },
+        "vsi_series_index": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "Bio-Formats series containing the primary whole-slide image in an Olympus VSI input."
+        },
+        "publish_dir_mode": {
+          "type": "string",
+          "enum": ["copy", "rellink"],
+          "default": "copy",
+          "description": "Use copy when work/ may be deleted; rellink requires retaining the Nextflow cache."
+        },
+        "run_full_pipeline": {"type": "boolean", "default": true},
+        "start_point": {"$ref": "#/definitions/stage_name"},
+        "end_point": {
+          "oneOf": [
+            {"const": "auto"},
+            {"$ref": "#/definitions/stage_name"}
+          ],
+          "default": "auto"
+        }
+      }
+    },
+    "scientific_design_options": {
+      "title": "Scientific purpose and evidence",
+      "description": "Declare one primary intended use and its evidence level before inspecting results.",
+      "type": "object",
+      "properties": {
+        "analysis_intent": {
+          "type": "string",
+          "enum": ["exploratory", "cell_segmentation", "cell_phenotyping", "tissue_domain_discovery", "virtual_staining", "outcome_prediction"],
+          "default": "exploratory",
+          "description": "Primary scientific question. Routes have different observation and statistical units."
+        },
+        "study_manifest": {
+          "type": ["string", "null"],
+          "description": "Optional JSON declaration based on resources/study_manifest.template.json."
+        },
+        "evidence_gate_mode": {
+          "type": "string",
+          "enum": ["off", "warn", "fail"],
+          "default": "warn",
+          "description": "Use fail for a locked validation run; passing verifies declarations, not scientific validity."
+        }
+      }
+    },
+    "runtime_options": {
+      "title": "Hardware and runtime",
+      "description": "Hardware tuning may change safe batch/concurrency settings but not scientific behavior.",
+      "type": "object",
+      "properties": {
+        "compute_device": {"type": "string", "enum": ["auto", "cpu", "gpu"], "default": "auto"},
+        "host_arch": {"type": "string", "enum": ["auto", "amd64", "arm64"], "default": "auto"},
+        "runtime_image_mode": {"type": "string", "enum": ["auto", "manual"], "default": "auto"},
+        "hardware_auto": {"type": "boolean", "default": true},
+        "hardware_profile": {"type": "string", "enum": ["auto", "conservative", "balanced", "aggressive"], "default": "auto"},
+        "max_cpus": {"$ref": "#/definitions/auto_positive_integer"},
+        "max_memory_gb": {"$ref": "#/definitions/auto_positive_integer"},
+        "max_parallel_tasks": {"$ref": "#/definitions/auto_positive_integer"},
+        "storage_preflight_mode": {
+          "type": "string",
+          "enum": ["off", "warn", "fail"],
+          "default": "fail",
+          "description": "Estimate per-filesystem output, work, cache and restart demand before scheduling image stages."
+        },
+        "storage_min_free_gib": {"type": "number", "minimum": 0, "default": 20.0},
+        "storage_safety_factor": {"type": "number", "minimum": 1, "default": 1.25},
+        "storage_restart_duplication_factor": {"type": "number", "minimum": 0, "default": 1.0},
+        "storage_source_expansion_factor": {"type": "number", "minimum": 1, "default": 8.0},
+        "gpu_scheduler_enable": {"type": "boolean", "default": true},
+        "gpu_memory_reserve_gb": {"type": "number", "minimum": 0, "default": 2.0},
+        "gpu_max_tasks_per_device": {"type": "integer", "minimum": 0, "default": 0}
+      }
+    },
+    "input_qc_options": {
+      "title": "Image and ROI integrity",
+      "description": "Strict defaults prevent uncalibrated or mismatched images and annotations from reaching learned stages.",
+      "type": "object",
+      "properties": {
+        "input_resolution_check": {"type": "boolean", "default": true},
+        "input_resolution_strict": {"type": "boolean", "default": true},
+        "input_resolution_min_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.05},
+        "input_resolution_max_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.5},
+        "input_resolution_cell_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
+        "input_resolution_max_anisotropy_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
+        "input_resolution_max_conversion_drift_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.02},
+        "input_resolution_max_metadata_conflict_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.02},
+        "input_resolution_override_mpp": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0.0,
+          "description": "Use only after independent verification of incorrect source metadata."
+        },
+        "input_hash_enable": {"type": "boolean", "default": true},
+        "input_require_rgb": {"type": "boolean", "default": true},
+        "input_require_pyramid": {"type": "boolean", "default": true},
+        "roi_validation_mode": {"type": "string", "enum": ["fail", "warn"], "default": "fail"},
+        "roi_bounds_tolerance_px2": {"type": "number", "minimum": 0, "default": 0.000001},
+        "grandqc_enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "GrandQC is mandatory for every route extending past conversion."
+        },
+        "grandqc_artifact_mpp_model": {
+          "oneOf": [
+            {"const": "auto"},
+            {"type": "number", "enum": [1.0, 1.5, 2.0]},
+            {"type": "string", "enum": ["1.0", "1.5", "2.0"]}
+          ],
+          "default": "auto"
+        },
+        "grandqc_artifact_overlap_fraction": {"type": "number", "minimum": 0, "exclusiveMaximum": 1, "default": 0.5},
+        "grandqc_tissue_probability_threshold": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "default": 0.5,
+          "description": "Minimum GrandQC tissue-class probability; lower values retain more possible tissue."
+        },
+        "grandqc_clean_tissue_policy": {
+          "type": "string",
+          "enum": ["tissue_minus_artifacts", "artifact_normal_only"],
+          "default": "tissue_minus_artifacts",
+          "description": "Build clean support from tissue detection minus explicit artifacts, or use legacy artifact class 1 only."
+        }
+      }
+    },
+    "cell_options": {
+      "title": "Cell identification and TMA",
+      "type": "object",
+      "properties": {
+        "cell_detection_mode": {
+          "type": "string",
+          "enum": ["consensus", "stardist"],
+          "default": "consensus",
+          "description": "Scientific detector-population choice; hardware must not change it."
+        },
+        "cell_consensus_fusion_acceptance_policy": {
+          "type": "string",
+          "enum": ["broad_pair", "any_two"],
+          "default": "broad_pair",
+          "description": "broad_pair is the role-aware default; any_two is a legacy sensitivity analysis."
+        },
+        "cell_consensus_match_radius_um": {"type": "number", "exclusiveMinimum": 0, "default": 4.0},
+        "expand_um": {"oneOf": [{"const": -1}, {"type": "number", "minimum": 0}], "default": 3.0},
+        "stardist_prob": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.52},
+        "stardist_nms": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.28},
+        "stardist_min_area": {"type": "integer", "minimum": 0, "default": 120},
+        "tma_enable": {"type": "boolean", "default": true},
+        "tma_min_spots": {"type": "integer", "minimum": 2, "default": 4},
+        "full_format": {"type": "string", "enum": ["zarr", "tif"], "default": "zarr"}
+      }
+    },
+    "gigatime_options": {
+      "title": "GigaTIME virtual markers",
+      "type": "object",
+      "properties": {
+        "gigatime_enable": {"type": "boolean", "default": true},
+        "gigatime_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
+        "gigatime_strict_target_mpp": {"type": "boolean", "default": true},
+        "gigatime_output_format": {"type": "string", "enum": ["zarr", "ome_tiff", "none"], "default": "zarr"},
+        "gigatime_output_dtype": {"type": "string", "enum": ["uint8", "uint16", "float32"], "default": "float32"},
+        "gigatime_output_channels": {"type": "string", "default": "", "description": "Empty selects all model channels; subsets or integer quantization are not equivalent full-panel restart inputs."},
+        "gigatime_output_pyramid": {"type": "boolean", "default": true},
+        "gigatime_export_ometiff": {"type": "boolean", "default": true},
+        "gigatime_skip_background_blocks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental only; false is required for the validated continuity path."
+        },
+        "gigatime_seam_qc_mode": {"type": "string", "enum": ["off", "warn", "fail"], "default": "fail"},
+        "gigatime_seam_qc_max_p95_excess": {"type": "number", "minimum": 0, "default": 0.1},
+        "gigatime_seam_qc_min_affected_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
+        "marker_quantification_enable": {"type": "boolean", "default": true},
+        "gigatime_kodama_enable": {"type": "boolean", "default": true}
+      }
+    },
+    "representation_options": {
+      "title": "UNI-2, KODAMA and clustering",
+      "type": "object",
+      "properties": {
+        "uni2_sampling_mode": {
+          "type": "string",
+          "enum": ["cells", "grid", "both"],
+          "default": "cells",
+          "description": "cells and grid are distinct scientific observation units; both is grid-primary with an auxiliary cell comparison."
+        },
+        "uni2_encoder": {"type": "string", "enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"], "default": "uni2-h", "description": "Patch foundation encoder supplied to the unchanged KODAMA workflow. UNI2-h remains the default; alternatives are experimental until ground-truth validation."},
+        "uni2_embedding_storage": {"type": "string", "enum": ["csv", "binary"], "default": "csv", "description": "Numerical embedding shard storage. Binary retains exact model float32 values with explicit row metadata and checksums; no change to observation or feature definitions."},
+        "uni2_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
+        "uni2_tile_size": {"type": "integer", "minimum": 32, "default": 224},
+        "uni2_inner_square_fixed_px": {"type": "integer", "minimum": 1, "default": 90},
+        "uni2_grid_stride_px": {"type": "integer", "minimum": 0, "default": 0, "description": "Grid-centre stride in model-input pixels. Zero uses uni2_inner_square_fixed_px for compatibility."},
+        "uni2_include_inner_square": {"type": "boolean", "default": true},
+        "uni2_fuse_tile_inner_square": {"type": "boolean", "default": true},
+        "uni2_use_roi_crop": {"type": "boolean", "default": true},
+        "uni2_paired_inner_square_mode": {"type": "string", "enum": ["token_subset", "masked_forward"], "default": "token_subset"},
+        "uni2_mask_context_mode": {"type": "string", "enum": ["none", "label", "inner_square", "label_and_inner_square"], "default": "label"},
+        "kodama_embedding_mode": {"type": "string", "minLength": 1, "default": "tile,inner_square"},
+        "kodama_dims_to_run": {"type": "integer", "minimum": 2, "default": 50},
+        "kodama_ncomp": {"type": "integer", "minimum": 1, "default": 50},
+        "kodama_save_selected_features": {"type": "boolean", "default": false},
+        "kodama_export_native_graph": {"type": "boolean", "default": false},
+        "kodama_n_cores": {"type": "integer", "minimum": 0, "default": 0},
+        "cluster_representation": {"type": "string", "enum": ["umap2d", "pca", "kodama_graph"], "default": "umap2d"},
+        "cluster_representation_dimensions": {"oneOf": [{"const": 0}, {"type": "integer", "minimum": 3}], "default": 0},
+        "kodama_landmarks": {"type": "integer", "minimum": 2, "default": 10000},
+        "cluster_algorithm": {"type": "string", "enum": ["leiden", "louvain", "walktrap"], "default": "leiden"},
+        "cluster_target_clusters": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Zero preserves graph-derived communities; a forced count is a prespecified sensitivity analysis."
+        },
+        "cluster_forced_count_sensitivity_acknowledged": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required acknowledgement that a nonzero forced cluster count is sensitivity-only and not the graph-derived primary result."
+        },
+        "cluster_snn_k": {"type": "integer", "minimum": 2, "default": 50},
+        "cluster_landmark_cells": {"oneOf": [{"const": 0}, {"type": "integer", "minimum": 2}], "default": 10000},
+        "cluster_landmark_assign_k": {"type": "integer", "minimum": 1, "default": 50},
+        "cluster_landmark_sample_strategy": {"type": "string", "enum": ["knn_inverse_distance"], "default": "knn_inverse_distance"},
+        "cluster_landmark_density_power": {"type": "number", "exclusiveMinimum": 0, "default": 2.0},
+        "cluster_resolution": {
+          "oneOf": [
+            {"const": "auto"},
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "string", "pattern": "^(?:0*[1-9][0-9]*(?:\\.[0-9]+)?|0*\\.[0-9]*[1-9][0-9]*)$"}
+          ],
+          "default": 0.3
+        },
+        "cluster_stability_runs": {"type": "integer", "minimum": 2, "default": 3},
+        "cluster_assignment_min_vote_margin": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
+        "cluster_stability_min_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.67},
+        "cluster_abstain_uncertain": {"type": "boolean", "default": true},
+        "cluster_primary_variant": {"type": "string", "const": "standard", "default": "standard"},
+        "cluster_secondary_variant": {"type": "string", "enum": ["none", "fine"], "default": "none"},
+        "cluster_secondary_profile": {"type": "string", "const": "fine", "default": "fine"},
+        "cluster_geojson_shared_boundary_simplify": {"type": "boolean", "default": true},
+        "cluster_geojson_shared_boundary_smooth": {"type": "boolean", "default": true, "description": "Selectively smooth only long, sharp internal class-boundary vertices after topology-preserving coverage simplification; never reads an expert annotation."},
+        "cluster_geojson_shared_boundary_smoothing_coefficient": {"type": "number", "minimum": 0, "exclusiveMaximum": 1, "default": 0.05},
+        "cluster_geojson_shared_boundary_smoothing_passes": {"type": "integer", "minimum": 1, "default": 1},
+        "cluster_geojson_shared_boundary_minimum_turn_degrees": {"type": "number", "minimum": 0, "maximum": 180, "default": 45.0},
+        "cluster_geojson_shared_boundary_minimum_adjacent_length": {"type": "number", "minimum": 0, "default": 16.0}
+      }
+    },
+    "pathsegmentor_options": {
+      "title": "Optional PathSegmentor semantic evidence",
+      "type": "object",
+      "properties": {
+        "pathsegmentor_enable": {"type": "boolean", "default": false, "description": "Run a pinned local PathSegmentor checkpoint as supervised semantic evidence without changing KODAMA fitting."},
+        "pathsegmentor_repo": {"type": "string", "default": "", "description": "Pinned local PathSegmentor source checkout; no network fallback."},
+        "pathsegmentor_config": {"type": "string", "default": ""},
+        "pathsegmentor_checkpoint": {"type": "string", "default": ""},
+        "pathsegmentor_prompt_panel": {"type": "string", "minLength": 1, "default": "resources/pathsegmentor_breast_prompts.json"},
+        "pathsegmentor_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
+        "pathsegmentor_output_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 2.0},
+        "pathsegmentor_tile_size": {"type": "integer", "const": 1024, "default": 1024},
+        "pathsegmentor_overlap_fraction": {"type": "number", "minimum": 0, "exclusiveMaximum": 0.9, "default": 0.25},
+        "pathsegmentor_min_tissue_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.01},
+        "pathsegmentor_cell_window_um": {"type": "number", "exclusiveMinimum": 0, "default": 28.0},
+        "pathsegmentor_guided_refine_enable": {"type": "boolean", "default": false, "description": "Publish a separate supervised boundary-only sensitivity result; never replaces the default MedSAM output."},
+        "pathsegmentor_boundary_band_um": {"type": "number", "minimum": 0, "default": 16.0},
+        "pathsegmentor_core_erosion_um": {"type": "number", "minimum": 0, "default": 24.0},
+        "pathsegmentor_min_distance_improvement": {"type": "number", "minimum": 0, "default": 0.01},
+        "pathsegmentor_assign_unlabeled_within_tissue": {"type": "boolean", "default": false, "description": "Experimental fill is restricted to GrandQC tissue and is recorded in provenance."},
+        "pathsegmentor_refine_block_rows": {"type": "integer", "minimum": 1, "default": 512}
+      }
+    },
+    "outcome_options": {
+      "title": "Section embedding and outcome research",
+      "type": "object",
+      "properties": {
+        "titan_enable": {"type": "boolean", "default": false},
+        "pathofmpred_enable": {"type": "boolean", "default": false},
+        "pathofmpred_cancer": {
+          "type": "string",
+          "pattern": "^[A-Z0-9_-]*$",
+          "default": "",
+          "description": "Explicit intended TCGA cancer code; it is never inferred from a filename."
+        },
+        "pathofmpred_include_limited_evidence": {"type": "boolean", "default": false},
+        "neoplastic_section_require_cells": {"type": "boolean", "default": true},
+        "titan_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.5}
+      }
+    },
+    "stage_name": {
+      "type": "string",
+      "enum": ["convert", "grandqc", "stardist", "cell_consensus", "tma", "tissue_mask", "pathsegmentor", "cell_assignment", "cytoplasm", "gigatime", "marker_quantification", "grid_tiles", "uni2", "kodama", "clustering", "cluster_mask", "grow_tissue", "medsam_refine", "cluster_geojson", "neoplastic_section", "titan", "pathofmpred"],
+      "default": "convert"
+    },
+    "auto_positive_integer": {
+      "oneOf": [
+        {"const": "auto"},
+        {"type": "integer", "minimum": 1}
+      ],
+      "default": "auto"
+    }
+  },
+  "allOf": [
+    {"$ref": "#/definitions/cell_atlas_options"},
+    {"$ref": "#/definitions/input_output_options"},
+    {"$ref": "#/definitions/scientific_design_options"},
+    {"$ref": "#/definitions/runtime_options"},
+    {"$ref": "#/definitions/input_qc_options"},
+    {"$ref": "#/definitions/cell_options"},
+    {"$ref": "#/definitions/gigatime_options"},
+    {"$ref": "#/definitions/representation_options"},
+    {"$ref": "#/definitions/pathsegmentor_options"},
+    {"$ref": "#/definitions/outcome_options"},
+    {
+      "if": {"properties": {"cluster_representation": {"const": "kodama_graph"}}, "required": ["cluster_representation"]},
+      "then": {
+        "properties": {
+          "cluster_algorithm": {"const": "leiden"},
+          "cluster_landmark_cells": {"const": 0},
+          "cluster_representation_dimensions": {"const": 0},
+          "cluster_resolution": {"not": {"const": "auto"}},
+          "cluster_secondary_variant": {"const": "none"}
+        },
+        "required": ["cluster_landmark_cells"]
+      }
+    },
+    {
+      "if": {"properties": {"grandqc_enable": {"const": false}}, "required": ["grandqc_enable"]},
+      "then": {"properties": {"end_point": {"const": "convert"}}, "required": ["end_point"]}
+    },
+    {
+      "if": {"properties": {"analysis_intent": {"const": "cell_phenotyping"}}, "required": ["analysis_intent"]},
+      "then": {"properties": {"uni2_sampling_mode": {"const": "cells"}}, "required": ["uni2_sampling_mode"]}
+    },
+    {
+      "if": {"properties": {"analysis_intent": {"const": "tissue_domain_discovery"}}, "required": ["analysis_intent"]},
+      "then": {"properties": {"uni2_sampling_mode": {"enum": ["grid", "both"]}}, "required": ["uni2_sampling_mode"]}
+    },
+    {
+      "if": {"properties": {"analysis_intent": {"const": "virtual_staining"}}, "required": ["analysis_intent"]},
+      "then": {"properties": {"gigatime_enable": {"const": true}}, "required": ["gigatime_enable"]}
+    },
+    {
+      "if": {"properties": {"analysis_intent": {"const": "outcome_prediction"}}, "required": ["analysis_intent"]},
+      "then": {
+        "properties": {"pathofmpred_enable": {"const": true}, "pathofmpred_cancer": {"type": "string", "minLength": 2}},
+        "required": ["pathofmpred_enable", "pathofmpred_cancer"]
+      }
+    },
+    {
+      "if": {"properties": {"cell_detection_mode": {"const": "consensus"}}, "required": ["cell_detection_mode"]},
+      "then": {"properties": {"compute_device": {"enum": ["auto", "gpu"]}}, "required": ["compute_device"]}
+    },
+    {
+      "if": {"properties": {"uni2_sampling_mode": {"enum": ["grid", "both"]}}, "required": ["uni2_sampling_mode"]},
+      "then": {
+        "properties": {
+          "uni2_encoder": {"enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"]},
+          "uni2_include_inner_square": {"const": true},
+          "uni2_fuse_tile_inner_square": {"const": true},
+          "uni2_use_roi_crop": {"const": true}
+        },
+        "required": ["uni2_encoder", "uni2_include_inner_square", "uni2_fuse_tile_inner_square", "uni2_use_roi_crop"]
+      }
+    },
+    {
+      "if": {"properties": {"cluster_target_clusters": {"minimum": 2}}, "required": ["cluster_target_clusters"]},
+      "then": {
+        "properties": {"cluster_forced_count_sensitivity_acknowledged": {"const": true}},
+        "required": ["cluster_forced_count_sensitivity_acknowledged"]
+      }
+    },
+    {
+      "if": {"properties": {"cluster_geojson_shared_boundary_smooth": {"const": true}}, "required": ["cluster_geojson_shared_boundary_smooth"]},
+      "then": {"properties": {"cluster_geojson_shared_boundary_simplify": {"const": true}}, "required": ["cluster_geojson_shared_boundary_simplify"]}
+    },
+    {
+      "if": {"properties": {"pathofmpred_enable": {"const": true}}, "required": ["pathofmpred_enable"]},
+      "then": {"properties": {"pathofmpred_cancer": {"type": "string", "minLength": 2}}, "required": ["pathofmpred_cancer"]}
+    },
+    {
+      "if": {"properties": {"pathsegmentor_enable": {"const": true}}, "required": ["pathsegmentor_enable"]},
+      "then": {
+        "properties": {
+          "compute_device": {"enum": ["auto", "gpu"]},
+          "pathsegmentor_repo": {"type": "string", "minLength": 1},
+          "pathsegmentor_config": {"type": "string", "minLength": 1},
+          "pathsegmentor_checkpoint": {"type": "string", "minLength": 1}
+        },
+        "required": ["compute_device", "pathsegmentor_repo", "pathsegmentor_config", "pathsegmentor_checkpoint"]
+      }
+    },
+    {
+      "if": {"properties": {"pathsegmentor_guided_refine_enable": {"const": true}}, "required": ["pathsegmentor_guided_refine_enable"]},
+      "then": {"properties": {"pathsegmentor_enable": {"const": true}}, "required": ["pathsegmentor_enable"]}
+    }
+  ]
+}

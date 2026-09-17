@@ -1,15 +1,18 @@
 process PREPARE_INPUT_OMETIFF {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'prepare_input_ometiff', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([image_file, input_support]) }
     tag "${sample_id}"
     label 'io_heavy'
 
     publishDir "${params.outdir_base}/01_input/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.convert_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.convert_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.convert_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.convert_memory_gb as int))} GB" }
     time { params.convert_time as String }
 
     input:
-    tuple val(sample_id), path(image_file), val(input_region)
+    tuple val(sample_id), path(image_file), val(input_region), path(input_support)
 
     output:
     tuple val(sample_id), path("${sample_id}.ome.tif"), emit: ome_tif
@@ -28,8 +31,20 @@ process PREPARE_INPUT_OMETIFF {
     def generic_converter_script = "${projectDir}/bin/convert_image_to_tiff.py"
     def resolution_validator_script = "${projectDir}/${params.input_resolution_validator_script}"
     def resolution_strict_flag = params.input_resolution_strict ? '--strict' : ''
+    def resolution_hash_flag = params.input_hash_enable ? '' : '--skip-file-hash'
+    def converted_rgb_requirement = params.input_require_rgb ? '--require-rgb' : ''
+    def converted_pyramid_requirement = params.input_require_pyramid ? '--require-pyramid' : ''
+    def codeFingerprint = PipelineHelpers.codeFingerprint([
+      resolution_validator_script,
+      generic_converter_script,
+      btf_converter_script,
+    ])
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
+
+    echo "[INFO] Input conversion code fingerprint: ${codeFingerprint}"
 
     export OMP_NUM_THREADS=${task.cpus}
     export MKL_NUM_THREADS=1
@@ -66,7 +81,9 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
@@ -98,6 +115,7 @@ PY
         --input-region "${input_region}" \
         --compression "${params.convert_compression}" \
         --quality ${params.convert_jpeg_quality} \
+        --vsi-series-index ${params.vsi_series_index} \
         ${params.convert_pyramid ? '--pyramid' : ''} \
         --tile 512
     fi
@@ -114,7 +132,11 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
+        ${converted_rgb_requirement} \
+        ${converted_pyramid_requirement} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
@@ -124,6 +146,8 @@ PY
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     touch "${sample_id}.ome.tif"
     printf '{"status":"stub"}\n' > "${sample_id}.source_resolution.json"
     printf '{"status":"stub"}\n' > "${sample_id}.converted_resolution.json"

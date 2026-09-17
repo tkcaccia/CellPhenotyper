@@ -51,6 +51,7 @@ from ome_tiff_metadata import (
     tiff_resolution_kwargs,
     validate_ome_tiff,
 )
+from tiff_preview import read_tiled_tiff_preview
 
 
 # Optional preview deps
@@ -152,15 +153,21 @@ def resize_mask_to_shape(mask: np.ndarray, target_shape: tuple[int, int]) -> np.
     """Nearest-neighbor resize for label/binary masks to match target (H,W)."""
     if mask.shape == target_shape:
         return mask
-    from skimage.transform import resize
-    out = resize(
-        mask.astype(np.float32),
-        target_shape,
-        order=0,
-        preserve_range=True,
-        anti_aliasing=False
+    if mask.ndim != 2:
+        raise ValueError(f"Mask resize requires a 2D array. Got shape={mask.shape}")
+    target_h, target_w = (int(target_shape[0]), int(target_shape[1]))
+    if target_h <= 0 or target_w <= 0:
+        raise ValueError(f"Mask resize target must be positive. Got shape={target_shape}")
+    source_h, source_w = mask.shape
+    row_index = np.minimum(
+        ((np.arange(target_h, dtype=np.float64) + 0.5) * source_h / target_h).astype(np.int64),
+        source_h - 1,
     )
-    return out.astype(mask.dtype, copy=False)
+    col_index = np.minimum(
+        ((np.arange(target_w, dtype=np.float64) + 0.5) * source_w / target_w).astype(np.int64),
+        source_w - 1,
+    )
+    return np.asarray(mask)[np.ix_(row_index, col_index)]
 
 
 def row_blocks(n_rows: int, block_rows: int):
@@ -402,10 +409,15 @@ def grow_downsampled_to_fullres(
         tissue_full_for_write = None
         tissue_low = np.asarray(tissue_arr) > 0
     else:
-        raise ValueError(
-            f"Downsampled grow requires tissue mask on the seed grid or requested low-res grid. "
-            f"Got tissue={tissue_arr.shape}, seeds={seeds_full.shape}, expected_low={low_shape}."
+        # GrandQC masks may be stored on their own low-resolution grid. Resample
+        # directly to the bounded work grid instead of materializing a full-size
+        # tissue array, which is unnecessary and expensive for whole-slide data.
+        print(
+            f"[WARN] Resampling tissue mask from {tissue_arr.shape} to downsampled "
+            f"grow grid {low_shape} (seed grid={seeds_full.shape}, factor={f})."
         )
+        tissue_full_for_write = None
+        tissue_low = resize_mask_to_shape(np.asarray(tissue_arr), low_shape) > 0
 
     rows_out = max(1, int(np.ceil(block_rows / f)))
     print(f"[INFO] Downsampled grow: full_shape={seeds_full.shape}, factor={f}, block_rows={block_rows}")
@@ -516,8 +528,13 @@ def read_preview_background_small(path: str, expected_shape: tuple[int, int], fa
             return None
     except Exception:
         if f > 1:
-            return None
-        bg = imread(path)
+            try:
+                bg = read_tiled_tiff_preview(path, f)
+            except Exception as exc:
+                print(f"[WARN] Could not read tiled TIFF preview via Zarr: {exc}", flush=True)
+                return None
+        else:
+            bg = imread(path)
     if bg.ndim > 3:
         bg = bg[0]
     bg_rgb = to_uint8_rgb(bg)
@@ -865,6 +882,7 @@ def main():
                 baseline_tissue_mask=baseline_tissue,
                 config=med_cfg,
                 baseline_label_map=classic_grown,
+                allowed_support_mask=tissue,
             )
         except MedSAMUnavailableError as exc:
             if med_cfg.save_debug:

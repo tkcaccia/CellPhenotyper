@@ -12,8 +12,11 @@ import re
 import ssl
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
+
+from model_provenance import checkpoint_record, git_revision
 
 
 NOTICE_TEXT = """GrandQC integration notice
@@ -104,14 +107,33 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--default-source-mpp", type=float, default=0.25, help="Fallback source MPP when TIFF metadata is missing")
     ap.add_argument("--artifact-mpp-model", default="auto", choices=["auto", "1.0", "1.5", "2.0"], help="GrandQC artifact model magnification surrogate in MPP; 'auto' selects based on source MPP")
     ap.add_argument("--tissue-mpp-model", type=float, default=10.0, help="GrandQC tissue detector working MPP")
+    ap.add_argument(
+        "--tissue-probability-threshold",
+        type=float,
+        default=0.5,
+        help=(
+            "Minimum GrandQC tissue-class probability retained as tissue. The official "
+            "two-class argmax decision is equivalent to 0.5; lower values increase sensitivity."
+        ),
+    )
+    ap.add_argument(
+        "--clean-tissue-policy",
+        choices=["tissue_minus_artifacts", "artifact_normal_only"],
+        default="tissue_minus_artifacts",
+        help=(
+            "How the GrandQC clean-tissue output is constructed. tissue_minus_artifacts "
+            "uses the tissue detector and removes explicit artifact classes 2-6; "
+            "artifact_normal_only preserves the legacy class-1-only behavior."
+        ),
+    )
     ap.add_argument("--patch-size", type=int, default=512, help="Official tissue-detector patch size")
     ap.add_argument(
         "--artifact-tile-size",
         type=int,
         default=0,
         help=(
-            "Artifact-model context tile size. Zero selects 1024 on CUDA GPUs with at least "
-            "8 GiB VRAM and 512 otherwise. This is independent of the tissue patch size."
+            "Artifact-model context tile size. Zero uses the official 512-pixel GrandQC "
+            "inference size. Larger experimental sizes must be requested explicitly."
         ),
     )
     ap.add_argument("--artifact-overlap-fraction", type=float, default=0.5, help="Fractional overlap between artifact tiles, used with center-crop merge")
@@ -586,12 +608,15 @@ def resolve_artifact_mpp_model(requested: str, source_mpp: float) -> float:
     if requested != "auto":
         return float(requested)
     # GrandQC provides 10x (1.0), 7x (1.5), and 5x (2.0) artifact models.
-    # For very high-resolution zoomed-in inputs we prefer the denser 10x grid;
-    # for typical 20x/40x WSI crops we keep the 7x default; for coarse inputs
-    # we step down to the 5x model.
+    # For very high-resolution zoomed-in inputs we prefer the denser 10x grid.
     if source_mpp <= 0.12:
         return 1.0
-    if source_mpp >= 0.30:
+    # On nominal 20x/40x brightfield WSIs, the 5x checkpoint is more robust to
+    # scanners whose metadata overstates the effective optical resolution. A
+    # controlled three-checkpoint probe on the reference Visium WSI showed the
+    # 1.5-MPP model collapsing to class 6 while the 2.0-MPP model retained
+    # normal tissue and localized edge/focus artifacts correctly.
+    if source_mpp >= 0.20:
         return 2.0
     return 1.5
 
@@ -629,10 +654,9 @@ def resolve_artifact_tile_size(requested: int, device: str, torch_mod) -> tuple[
             cuda_total_gib = float(torch_mod.cuda.get_device_properties(0).total_memory) / float(1024 ** 3)
         except Exception:
             cuda_total_gib = None
-    # The artifact model is fully convolutional. Larger context removes the
-    # padding-position bias that otherwise appears as repeated tile bands.
-    tile_size = 1024 if cuda_total_gib is not None and cuda_total_gib >= 8.0 else 512
-    return tile_size, {"mode": "hardware_auto", "cuda_total_gib": cuda_total_gib}
+    # GrandQC was trained and released with 512 x 512 inference patches. Keep
+    # that geometry independent of GPU size; overlap handles edge seams.
+    return 512, {"mode": "official_default", "cuda_total_gib": cuda_total_gib}
 
 
 def torch_load_any(path: str, torch_mod, map_location: str):
@@ -686,19 +710,11 @@ def preprocess_patch(rgb, preprocessing_fn, np_mod):
 
 
 def predict_mask(model, x_tensor, torch_mod, device: str):
-    use_autocast = device == "cuda" and hasattr(torch_mod, "autocast")
     with torch_mod.inference_mode():
-        if use_autocast:
-            with torch_mod.autocast(device_type="cuda", dtype=torch_mod.float16):
-                if hasattr(model, "predict"):
-                    pred = model.predict(x_tensor)
-                else:
-                    pred = model(x_tensor)
+        if hasattr(model, "predict"):
+            pred = model.predict(x_tensor)
         else:
-            if hasattr(model, "predict"):
-                pred = model.predict(x_tensor)
-            else:
-                pred = model(x_tensor)
+            pred = model(x_tensor)
     pred = pred.squeeze().detach().cpu().numpy()
     if pred.ndim == 2:
         return pred.astype("int16")
@@ -707,27 +723,58 @@ def predict_mask(model, x_tensor, torch_mod, device: str):
 
 def predict_scores(model, x_tensor, torch_mod, device: str):
     import numpy as _np
-    use_autocast = device == "cuda" and hasattr(torch_mod, "autocast")
     with torch_mod.inference_mode():
-        if use_autocast:
-            with torch_mod.autocast(device_type="cuda", dtype=torch_mod.float16):
-                if hasattr(model, "predict"):
-                    pred = model.predict(x_tensor)
-                else:
-                    pred = model(x_tensor)
+        if hasattr(model, "predict"):
+            pred = model.predict(x_tensor)
         else:
-            if hasattr(model, "predict"):
-                pred = model.predict(x_tensor)
-            else:
-                pred = model(x_tensor)
+            pred = model(x_tensor)
     pred = pred.squeeze().detach().float().cpu().numpy()
     if pred.ndim == 2:
         return pred[None, ...].astype("float32")
     pred = pred.astype("float32")
+    # Released GrandQC checkpoints include a channel-wise Softmax activation.
+    # Only normalize logits for a checkpoint that does not already emit
+    # probabilities; a second softmax changes confidence and class margins.
+    channel_sum = pred.sum(axis=0)
+    if float(pred.min()) >= -1e-6 and float(pred.max()) <= 1.0 + 1e-6 and _np.allclose(
+        channel_sum, 1.0, atol=1e-3, rtol=1e-3
+    ):
+        return pred
     pred -= pred.max(axis=0, keepdims=True)
     np_exp = _np.exp(pred).astype("float32", copy=False)
     denom = _np.maximum(np_exp.sum(axis=0, keepdims=True), 1e-6)
     return (np_exp / denom).astype("float32")
+
+
+def tissue_decision_from_scores(scores, threshold: float, np_mod):
+    """Apply a tunable tissue probability decision to the binary GrandQC model.
+
+    GrandQC channel 0 is tissue and channel 1 is background. At threshold 0.5,
+    this is equivalent to the released model's argmax decision (including ties).
+    """
+    values = np_mod.asarray(scores)
+    if values.ndim != 3 or values.shape[0] != 2:
+        raise ValueError(f"GrandQC tissue detector must emit two score channels, got {values.shape}")
+    if not 0.0 < float(threshold) < 1.0:
+        raise ValueError("tissue probability threshold must be strictly between 0 and 1")
+    tissue_probability = values[0].astype("float32", copy=False)
+    mask = np_mod.where(tissue_probability >= float(threshold), 0, 1).astype(np_mod.uint8)
+    return mask, tissue_probability
+
+
+def build_clean_tissue_mask(full_mask, tissue_detector_mask, policy: str, np_mod):
+    """Construct GrandQC's downstream support without conflating background and artifacts."""
+    classes = np_mod.asarray(full_mask)
+    tissue = np_mod.asarray(tissue_detector_mask)
+    if classes.shape != tissue.shape:
+        raise ValueError("GrandQC artifact and tissue masks must have the same shape")
+    if policy == "tissue_minus_artifacts":
+        support = (tissue == 0) & ~np_mod.isin(classes, [2, 3, 4, 5, 6])
+    elif policy == "artifact_normal_only":
+        support = classes == 1
+    else:
+        raise ValueError(f"Unsupported GrandQC clean-tissue policy: {policy}")
+    return support.astype(np_mod.uint8) * 255
 
 
 def make_color_map(mask, np_mod):
@@ -874,6 +921,41 @@ def save_mask_tiff(path: Path, arr, tifffile_mod):
     tifffile_mod.imwrite(str(path), arr, compression="deflate")
 
 
+def finalize_probability_blend(score_sum, weight_sum, full_mask, confidence_meta, np_mod, row_block: int = 1024):
+    """Finalize blended class probabilities in bounded row blocks."""
+    n_classes = int(score_sum.shape[0])
+    artifact_ids = np_mod.array([cid for cid in [2, 3, 4, 5, 6] if cid < n_classes], dtype=np_mod.int64)
+    tissue_id = 1 if 1 < n_classes else 0
+    background_id = 7 if 7 < n_classes else (n_classes - 1)
+    for y0 in range(0, full_mask.shape[0], max(1, int(row_block))):
+        y1 = min(full_mask.shape[0], y0 + max(1, int(row_block)))
+        weights_block = np_mod.asarray(weight_sum[y0:y1, :])
+        valid = weights_block > 0
+        if not valid.any():
+            continue
+        scores_block = np_mod.asarray(score_sum[:, y0:y1, :])
+        normalized = scores_block[:, valid] / weights_block[valid][None, :]
+        pred_idx = normalized.argmax(axis=0).astype(np_mod.uint8)
+        if artifact_ids.size > 0:
+            artifact_prob = normalized[artifact_ids].sum(axis=0)
+            context_prob = np_mod.maximum(normalized[tissue_id], normalized[background_id])
+            pred_is_artifact = np_mod.isin(pred_idx, artifact_ids)
+            uncertain = pred_is_artifact & (
+                (artifact_prob < confidence_meta["artifact_probability_threshold"]) |
+                ((artifact_prob - context_prob) < confidence_meta["artifact_margin_threshold"])
+            )
+            fallback = np_mod.where(
+                normalized[tissue_id] >= normalized[background_id], tissue_id, background_id
+            ).astype(np_mod.uint8)
+            pred_idx[uncertain] = fallback[uncertain]
+            confidence_meta["suppressed_pixels"] += int(uncertain.sum())
+        out_block = full_mask[y0:y1, :]
+        out_block[valid] = pred_idx
+        full_mask[y0:y1, :] = out_block
+    confidence_meta["enabled"] = True
+    return full_mask, confidence_meta
+
+
 def refine_small_fov_foreign_object_mask(full_mask, thumb_rgb, source_mpp: float, artifact_meta: dict, image_mod, cv2_mod, np_mod):
     """
     GrandQC can overcall broad horizontal artifact bands on small high-magnification
@@ -998,7 +1080,10 @@ def refine_small_fov_foreign_object_mask(full_mask, thumb_rgb, source_mpp: float
     return refined_full_mask, meta
 
 
-def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, patch_size: int, device: str, tissue_ckpt: Path, mods):
+def run_tissue_detection(
+    reader, source_mpp: float, tissue_mpp_model: float, patch_size: int,
+    tissue_probability_threshold: float, device: str, tissue_ckpt: Path, mods,
+):
     np_mod = mods["np"]
     Image = mods["Image"]
     torch_mod = mods["torch"]
@@ -1018,9 +1103,10 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
 
     enc_param = [int(mods["cv2"].IMWRITE_JPEG_QUALITY), 80]
     _, enc = mods["cv2"].imencode('.jpg', thumb, enc_param)
-    thumb_jpeg = mods["cv2"].imdecode(enc, 1)
-    thumb_rgb = mods["cv2"].cvtColor(thumb_jpeg, mods["cv2"].COLOR_BGR2RGB)
-    del thumb, enc, thumb_jpeg
+    # OpenCV's encode/decode round trip preserves the numeric RGB byte order
+    # passed in here, matching the upstream GrandQC OME-TIFF implementation.
+    thumb_rgb = mods["cv2"].imdecode(enc, 1)
+    del thumb, enc
 
     preprocessing_fn = make_preprocessing_fn(smp_mod)
     model = smp_mod.UnetPlusPlus(
@@ -1041,6 +1127,7 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
     overhang_w = width - wi_n * patch_size
     overhang_h = height - he_n * patch_size
     tissue_mask = np_mod.empty((height, width), dtype=np_mod.uint8)
+    tissue_probability = np_mod.empty((height, width), dtype=np_mod.float32)
     for h in range(he_n + 1):
         if h == he_n and overhang_h <= 0:
             continue
@@ -1062,9 +1149,15 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
             patch = extract_patch_with_pad(thumb_rgb, src_y0, src_x0, patch_size, np_mod)
             x = preprocess_patch(patch, preprocessing_fn, np_mod)
             x_tensor = torch_mod.from_numpy(x).unsqueeze(0).to(device)
-            mask = predict_mask(model, x_tensor, torch_mod, device).astype(np_mod.uint8)
+            scores = predict_scores(model, x_tensor, torch_mod, device)
+            mask, probability = tissue_decision_from_scores(
+                scores, tissue_probability_threshold, np_mod
+            )
             tissue_mask[dst_y0:dst_y1, dst_x0:dst_x1] = mask[mask_y0:mask_y1, mask_x0:mask_x1]
-            del patch, x, x_tensor, mask
+            tissue_probability[dst_y0:dst_y1, dst_x0:dst_x1] = probability[
+                mask_y0:mask_y1, mask_x0:mask_x1
+            ]
+            del patch, x, x_tensor, scores, mask, probability
     pred_tissue_fraction = float((tissue_mask == 0).astype(np_mod.float32).mean())
     fallback_mask = heuristic_tissue_mask(thumb_rgb, mods["cv2"], np_mod)
     fallback_tissue_fraction = float((fallback_mask == 0).astype(np_mod.float32).mean())
@@ -1085,15 +1178,27 @@ def run_tissue_detection(reader, source_mpp: float, tissue_mpp_model: float, pat
     del model
     if device == "cuda":
         torch_mod.cuda.empty_cache()
-    return thumb_rgb, tissue_mask, color, overlay, {
+    return thumb_rgb, tissue_mask, tissue_probability, color, overlay, {
         "effective_tissue_mpp": float(effective_mpp),
+        "tissue_probability_threshold": float(tissue_probability_threshold),
         "tissue_mask_source": tissue_mask_source,
         "predicted_tissue_fraction": float(pred_tissue_fraction),
         "fallback_tissue_fraction": float(fallback_tissue_fraction),
     }
 
 
-def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float, tissue_mask_thumb, patch_size: int, overlap_fraction: float, device: str, artifact_ckpt: Path, mods):
+def run_artifact_detection(
+    reader,
+    source_mpp: float,
+    artifact_mpp_model: float,
+    tissue_mask_thumb,
+    patch_size: int,
+    overlap_fraction: float,
+    device: str,
+    artifact_ckpt: Path,
+    mods,
+    scratch_dir: Path,
+):
     np_mod = mods["np"]
     Image = mods["Image"]
     torch_mod = mods["torch"]
@@ -1104,9 +1209,8 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
     model.eval()
     preprocessing_fn = make_preprocessing_fn(smp_mod)
 
-    # Use overlapping tiles and keep only the stable center region from each tile.
-    # This removes the hard seam artefacts that appear when neighboring GrandQC
-    # predictions disagree near tile edges.
+    # Every image size uses the same smooth probability blending. Accumulators are
+    # memory mapped so WSI dimensions change storage requirements, not inference.
     target_w = max(1, int(round(reader.level0_w * source_mpp / artifact_mpp_model)))
     target_h = max(1, int(round(reader.level0_h * source_mpp / artifact_mpp_model)))
     effective_overlap_fraction = float(overlap_fraction)
@@ -1117,15 +1221,13 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
     overlap_px = max(0, min(int(round(patch_size * effective_overlap_fraction)), patch_size - 1))
     y_positions = sliding_positions(target_h, patch_size, overlap_px)
     x_positions = sliding_positions(target_w, patch_size, overlap_px)
-    y_bounds = center_merge_bounds(y_positions, patch_size, target_h)
-    x_bounds = center_merge_bounds(x_positions, patch_size, target_w)
-    tissue_map_art = np_mod.array(Image.fromarray(tissue_mask_thumb).resize((target_w, target_h), Image.Resampling.LANCZOS))
+    # This is a categorical mask. Nearest-neighbour sampling avoids creating
+    # artificial intermediate class values that are then rejected by `== 0`.
+    tissue_map_art = np_mod.array(
+        Image.fromarray(tissue_mask_thumb).resize((target_w, target_h), Image.Resampling.NEAREST)
+    )
 
-    max_score_blend_pixels = 25_000_000
-    use_score_blend = (target_h * target_w) <= max_score_blend_pixels
     full_mask = np_mod.full((target_h, target_w), 7, dtype=np_mod.uint8)
-    score_sum = None
-    weight_sum = None
     confidence_meta = {
         "enabled": False,
         "suppressed_pixels": 0,
@@ -1134,74 +1236,76 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
     }
     scale_y = reader.level0_h / float(target_h)
     scale_x = reader.level0_w / float(target_w)
-    for yi, out_y0 in enumerate(y_positions):
-        out_y1 = min(target_h, out_y0 + patch_size)
-        read_y0 = int(round(out_y0 * scale_y))
-        read_y1 = int(round(out_y1 * scale_y))
-        read_y1 = max(read_y0 + 1, min(reader.level0_h, read_y1))
-        wy0, wy1, cy0, cy1 = y_bounds[yi]
-        for xi, out_x0 in enumerate(x_positions):
-            out_x1 = min(target_w, out_x0 + patch_size)
-            read_x0 = int(round(out_x0 * scale_x))
-            read_x1 = int(round(out_x1 * scale_x))
-            read_x1 = max(read_x0 + 1, min(reader.level0_w, read_x1))
-            wx0, wx1, cx0, cx1 = x_bounds[xi]
-            td_patch = tissue_map_art[out_y0:out_y1, out_x0:out_x1]
-            if td_patch.shape != (patch_size, patch_size):
-                pad_h = patch_size - td_patch.shape[0]
-                pad_w = patch_size - td_patch.shape[1]
-                td_patch = np_mod.pad(td_patch, ((0, max(0, pad_h)), (0, max(0, pad_w))), mode="constant")
-            if np_mod.count_nonzero(td_patch == 0) > 50:
+    score_sum = None
+    weight_sum = None
+    n_classes = 0
+    accumulator_bytes = 0
+    scratch_dir = Path(scratch_dir)
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".grandqc_probability_blend_", dir=str(scratch_dir)) as blend_tmp:
+        blend_root = Path(blend_tmp)
+        for out_y0 in y_positions:
+            out_y1 = min(target_h, out_y0 + patch_size)
+            read_y0 = int(round(out_y0 * scale_y))
+            read_y1 = int(round(out_y1 * scale_y))
+            read_y1 = max(read_y0 + 1, min(reader.level0_h, read_y1))
+            for out_x0 in x_positions:
+                out_x1 = min(target_w, out_x0 + patch_size)
+                read_x0 = int(round(out_x0 * scale_x))
+                read_x1 = int(round(out_x1 * scale_x))
+                read_x1 = max(read_x0 + 1, min(reader.level0_w, read_x1))
+                td_patch = tissue_map_art[out_y0:out_y1, out_x0:out_x1]
+                if td_patch.shape != (patch_size, patch_size):
+                    pad_h = patch_size - td_patch.shape[0]
+                    pad_w = patch_size - td_patch.shape[1]
+                    td_patch = np_mod.pad(td_patch, ((0, max(0, pad_h)), (0, max(0, pad_w))), mode="constant")
+                if np_mod.count_nonzero(td_patch == 0) <= 50:
+                    continue
                 patch = reader.read_region(read_y0, read_y1, read_x0, read_x1, level=0)
                 patch = normalize_to_rgb_uint8(patch, np_mod)
                 pil = Image.fromarray(patch[:, :, :3]).resize((patch_size, patch_size), Image.Resampling.LANCZOS).convert("RGB")
                 x = preprocess_patch(np_mod.array(pil), preprocessing_fn, np_mod)
                 x_tensor = torch_mod.from_numpy(x).unsqueeze(0).to(device)
-                if use_score_blend:
-                    scores = predict_scores(model, x_tensor, torch_mod, device)
-                    del x_tensor
-                    if score_sum is None:
-                        score_sum = np_mod.zeros((scores.shape[0], target_h, target_w), dtype=np_mod.float32)
-                        weight_sum = np_mod.zeros((target_h, target_w), dtype=np_mod.float32)
-                    valid = (td_patch == 0).astype(np_mod.float32)
-                    h_eff = out_y1 - out_y0
-                    w_eff = out_x1 - out_x0
-                    wy = smooth_blend_weights_1d(h_eff, np_mod)
-                    wx = smooth_blend_weights_1d(w_eff, np_mod)
-                    tile_weight = (wy[:, None] * wx[None, :]) * valid[:h_eff, :w_eff]
-                    score_sum[:, out_y0:out_y1, out_x0:out_x1] += scores[:, :h_eff, :w_eff] * tile_weight[:h_eff, :w_eff][None, :, :]
-                    weight_sum[out_y0:out_y1, out_x0:out_x1] += tile_weight[:h_eff, :w_eff]
-                    continue
-                mask_raw = predict_mask(model, x_tensor, torch_mod, device).astype(np_mod.uint8)
-                del x_tensor
-                mask = np_mod.where(td_patch == 1, 7, mask_raw)
-            else:
-                if use_score_blend:
-                    continue
-                mask = np_mod.full((patch_size, patch_size), 7, dtype=np_mod.uint8)
-            full_mask[wy0:wy1, wx0:wx1] = mask[cy0:cy1, cx0:cx1]
-    if use_score_blend and score_sum is not None and weight_sum is not None:
-        valid = weight_sum > 0
-        score_sum[:, valid] /= weight_sum[valid][None, :]
-        full_mask = np_mod.full((target_h, target_w), 7, dtype=np_mod.uint8)
-        pred_idx = score_sum[:, valid].argmax(axis=0).astype(np_mod.uint8)
-        n_classes = int(score_sum.shape[0])
-        artifact_ids = np_mod.array([cid for cid in [2, 3, 4, 5, 6] if cid < n_classes], dtype=np_mod.int64)
-        tissue_id = 1 if 1 < n_classes else 0
-        background_id = 7 if 7 < n_classes else (n_classes - 1)
-        if artifact_ids.size > 0:
-            artifact_prob = score_sum[artifact_ids][:, valid].sum(axis=0)
-            context_prob = np_mod.maximum(score_sum[tissue_id, valid], score_sum[background_id, valid])
-            pred_is_artifact = np_mod.isin(pred_idx, artifact_ids)
-            uncertain = pred_is_artifact & (
-                (artifact_prob < confidence_meta["artifact_probability_threshold"]) |
-                ((artifact_prob - context_prob) < confidence_meta["artifact_margin_threshold"])
+                scores = predict_scores(model, x_tensor, torch_mod, device)
+                del x_tensor, patch, pil, x
+                if score_sum is None:
+                    n_classes = int(scores.shape[0])
+                    score_sum = np_mod.memmap(
+                        blend_root / "score_sum.float32.mmap",
+                        mode="w+",
+                        dtype=np_mod.float32,
+                        shape=(n_classes, target_h, target_w),
+                    )
+                    weight_sum = np_mod.memmap(
+                        blend_root / "weight_sum.float32.mmap",
+                        mode="w+",
+                        dtype=np_mod.float32,
+                        shape=(target_h, target_w),
+                    )
+                    score_sum[:] = 0.0
+                    weight_sum[:] = 0.0
+                    accumulator_bytes = int((n_classes + 1) * target_h * target_w * 4)
+                valid = (td_patch == 0).astype(np_mod.float32)
+                h_eff = out_y1 - out_y0
+                w_eff = out_x1 - out_x0
+                wy = smooth_blend_weights_1d(h_eff, np_mod)
+                wx = smooth_blend_weights_1d(w_eff, np_mod)
+                tile_weight = (wy[:, None] * wx[None, :]) * valid[:h_eff, :w_eff]
+                score_sum[:, out_y0:out_y1, out_x0:out_x1] += scores[:, :h_eff, :w_eff] * tile_weight[None, :, :]
+                weight_sum[out_y0:out_y1, out_x0:out_x1] += tile_weight
+
+        if score_sum is not None and weight_sum is not None:
+            score_sum.flush()
+            weight_sum.flush()
+            full_mask, confidence_meta = finalize_probability_blend(
+                score_sum,
+                weight_sum,
+                full_mask,
+                confidence_meta,
+                np_mod,
+                row_block=max(64, min(1024, target_h)),
             )
-            fallback = np_mod.where(score_sum[tissue_id, valid] >= score_sum[background_id, valid], tissue_id, background_id).astype(np_mod.uint8)
-            pred_idx[uncertain] = fallback[uncertain]
-            confidence_meta["enabled"] = True
-            confidence_meta["suppressed_pixels"] = int(uncertain.sum())
-        full_mask[valid] = pred_idx
+            del score_sum, weight_sum
     del model
     if device == "cuda":
         torch_mod.cuda.empty_cache()
@@ -1213,8 +1317,10 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
         "requested_overlap_fraction": float(overlap_fraction),
         "overlap_fraction": float(effective_overlap_fraction),
         "adaptive_overlap_boosted": bool(adaptive_overlap_boosted),
-        "merge_mode": "probability_blend_windowed_overlap" if use_score_blend else "center_crop_overlap",
-        "score_blend_enabled": bool(use_score_blend),
+        "merge_mode": "probability_blend_memmap_windowed_overlap",
+        "score_blend_enabled": True,
+        "score_accumulator": "numpy_memmap",
+        "score_accumulator_bytes": int(accumulator_bytes),
         "confidence_filter": confidence_meta,
     }
     artifact_patch_span = max(1, int(round(artifact_mpp_model / source_mpp * patch_size)))
@@ -1223,6 +1329,8 @@ def run_artifact_detection(reader, source_mpp: float, artifact_mpp_model: float,
 
 def main() -> int:
     args = parse_args()
+    if not 0.0 < float(args.tissue_probability_threshold) < 1.0:
+        raise ValueError("--tissue-probability-threshold must be strictly between 0 and 1")
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "grandqc_notice.txt").write_text(NOTICE_TEXT, encoding="utf-8")
@@ -1253,12 +1361,18 @@ def main() -> int:
             "artifact_mpp_model_requested": str(args.artifact_mpp_model),
             "artifact_tile_size_requested": int(args.artifact_tile_size),
             "tissue_mpp_model": float(args.tissue_mpp_model),
+            "tissue_probability_threshold": float(args.tissue_probability_threshold),
+            "clean_tissue_policy": str(args.clean_tissue_policy),
             "tissue_patch_size": int(args.patch_size),
             "device": args.device,
             "grandqc_license": "CC BY-NC-SA 4.0",
             "grandqc_citation_doi": "10.1038/s41467-024-54769-y",
             "class_mapping": QC_CLASS_MAPPING,
             "level0_shape_yx": [int(reader.level0_h), int(reader.level0_w)],
+            "model_provenance": {
+                "tissue": {"used_model": False},
+                "artifact": {"used_model": False},
+            },
         }
         if args.dry_run:
             (outdir / f"{args.sample_id}_grandqc_summary.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -1283,14 +1397,36 @@ def main() -> int:
 
         tissue_ckpt, artifact_ckpt = ensure_models(cache_dir, artifact_mpp_model, args.download_models)
         meta["device"] = device
+        upstream_home = discover_bundled_grandqc_home()
+        upstream_revision = git_revision(upstream_home) if upstream_home is not None else None
+        meta["model_provenance"] = {
+            "tissue": {
+                "source_repository": "https://github.com/cpath-ukk/grandqc",
+                "requested_revision": None,
+                "resolved_revision": f"zenodo:{TISSUE_RECORD_ID}",
+                "source_code_revision": upstream_revision,
+                "cache_path": str(tissue_ckpt.resolve()),
+                "checkpoints": [checkpoint_record(tissue_ckpt, logical_name="tissue")],
+            },
+            "artifact": {
+                "source_repository": "https://github.com/cpath-ukk/grandqc",
+                "requested_revision": None,
+                "resolved_revision": f"zenodo:{ARTIFACT_RECORD_ID}",
+                "source_code_revision": upstream_revision,
+                "cache_path": str(artifact_ckpt.resolve()),
+                "checkpoints": [checkpoint_record(artifact_ckpt, logical_name="artifact")],
+            },
+        }
 
         print("[INFO] GrandQC running tissue detection", flush=True)
-        thumb_rgb, tissue_mask_thumb, tissue_color, tissue_overlay, tissue_meta = run_tissue_detection(
-            reader, source_mpp, args.tissue_mpp_model, args.patch_size, device, tissue_ckpt, mods
+        thumb_rgb, tissue_mask_thumb, tissue_probability, tissue_color, tissue_overlay, tissue_meta = run_tissue_detection(
+            reader, source_mpp, args.tissue_mpp_model, args.patch_size,
+            args.tissue_probability_threshold, device, tissue_ckpt, mods
         )
         print("[INFO] GrandQC running artifact detection", flush=True)
         full_mask, tissue_map_art, artifact_patch_span, artifact_meta = run_artifact_detection(
-            reader, source_mpp, artifact_mpp_model, tissue_mask_thumb, artifact_tile_size, args.artifact_overlap_fraction, device, artifact_ckpt, mods
+            reader, source_mpp, artifact_mpp_model, tissue_mask_thumb, artifact_tile_size,
+            args.artifact_overlap_fraction, device, artifact_ckpt, mods, outdir
         )
         full_mask, small_fov_refine_meta = refine_small_fov_foreign_object_mask(
             full_mask, thumb_rgb, source_mpp, artifact_meta, Image, cv2_mod, np_mod
@@ -1298,7 +1434,9 @@ def main() -> int:
         print("[INFO] GrandQC preparing output masks", flush=True)
 
         artifact_binary = (np_mod.isin(full_mask, [2, 3, 4, 5, 6]).astype(np_mod.uint8) * 255)
-        clean_tissue = ((full_mask == 1).astype(np_mod.uint8) * 255)
+        clean_tissue = build_clean_tissue_mask(
+            full_mask, tissue_map_art, args.clean_tissue_policy, np_mod
+        )
         tissue_binary = ((tissue_mask_thumb == 0).astype(np_mod.uint8) * 255)
 
         qc_target_h = full_mask.shape[0]
@@ -1327,6 +1465,11 @@ def main() -> int:
         gc.collect()
         print("[INFO] GrandQC writing TIFF masks", flush=True)
         save_mask_tiff(outdir / f"{args.sample_id}_grandqc_tissue_detection_mask.tif", tissue_binary, tifffile_mod)
+        save_mask_tiff(
+            outdir / f"{args.sample_id}_grandqc_tissue_probability.tif",
+            tissue_probability.astype(np_mod.float32, copy=False),
+            tifffile_mod,
+        )
         save_mask_tiff(outdir / f"{args.sample_id}_grandqc_artifact_mask.tif", artifact_binary, tifffile_mod)
         save_mask_tiff(outdir / f"{args.sample_id}_grandqc_clean_tissue_mask.tif", clean_tissue, tifffile_mod)
 
@@ -1339,6 +1482,8 @@ def main() -> int:
         meta.update({
             "effective_tissue_mpp": tissue_meta["effective_tissue_mpp"],
             "tissue_mask_source": tissue_meta["tissue_mask_source"],
+            "tissue_probability_threshold": tissue_meta["tissue_probability_threshold"],
+            "clean_tissue_policy": str(args.clean_tissue_policy),
             "predicted_tissue_fraction_raw": tissue_meta["predicted_tissue_fraction"],
             "fallback_tissue_fraction": tissue_meta["fallback_tissue_fraction"],
             "artifact_patch_span_level0_px": int(artifact_patch_span),

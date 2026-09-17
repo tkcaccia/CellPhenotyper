@@ -1,18 +1,21 @@
 process RUN_GIGATIME_ON_CROP {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'run_gigatime_on_crop', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([crop_tif, shift_json, nuclei_mask_tif, cyto_mask_tif, tissue_mask_tif, ring_mask_tif]) }
     tag "${sample_id}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/05_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "gigatime_${sample_id}"
     publishDir "${params.outdir_base}/05_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "quantification_${sample_id}"
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.gigatime_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.gigatime_memory_gb as int))} GB" }
+    cpus { TaskRuntime.cpus(runtime_plan, 'gigatime') }
+    memory { TaskRuntime.memory(runtime_plan, 'gigatime') }
     time { params.gigatime_time as String }
 
     input:
-    tuple val(sample_id), path(crop_tif), path(shift_json), path(nuclei_mask_tif), path(cyto_mask_tif)
+    tuple val(sample_id), path(crop_tif), path(shift_json), path(nuclei_mask_tif), path(cyto_mask_tif), path(tissue_mask_tif), path(ring_mask_tif)
+    val(runtime_plan)
 
     output:
     tuple val(sample_id), path("gigatime_${sample_id}"), emit: gigatime_dir
@@ -21,11 +24,11 @@ process RUN_GIGATIME_ON_CROP {
     script:
     def gigatime_script = "${projectDir}/${params.gigatime_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py"].each {
+    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py", "${projectDir}/bin/gigatime_seam_qc.py", "${projectDir}/bin/quantify_gigatime_intensity.py", "${projectDir}/bin/profile_cell_morphology.py", "${projectDir}/bin/model_provenance.py"].each {
       codeDigest.update(new File(it).bytes)
     }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
-    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def resolvedComputeDevice = TaskRuntime.device(runtime_plan)
     def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
@@ -37,14 +40,19 @@ process RUN_GIGATIME_ON_CROP {
     def output_format = params.gigatime_output_format ?: 'ome_tiff'
     def global_auto_hardware = params.containsKey('hardware_auto') ? params.hardware_auto : true
     def resolved_auto_hardware = params.gigatime_auto_hardware == null ? global_auto_hardware : params.gigatime_auto_hardware
-    def resolved_hardware_profile = params.gigatime_hardware_profile?.toString()?.trim()
-    if (!resolved_hardware_profile) resolved_hardware_profile = (params.hardware_profile ?: 'balanced').toString()
+    // The explicit value input carries the resolved policy into both command
+    // construction and cache identity; include-time params are not authoritative.
+    def inherited_hardware_profile = TaskRuntime.profile(runtime_plan)
+    def resolved_hardware_profile = params.gigatime_hardware_profile?.toString()?.trim()?.toLowerCase()
+    if (!resolved_hardware_profile || resolved_hardware_profile == 'auto') resolved_hardware_profile = inherited_hardware_profile
+    if (!(resolved_hardware_profile in ['conservative', 'balanced', 'aggressive'])) resolved_hardware_profile = 'balanced'
     def resolved_max_auto_batch = (params.gigatime_max_auto_batch as int) > 0 ? (params.gigatime_max_auto_batch as int) : (params.hardware_max_auto_batch as int)
     def resolved_max_auto_block_size = (params.gigatime_max_auto_block_size as int) > 0 ? (params.gigatime_max_auto_block_size as int) : (params.hardware_max_auto_block_size as int)
     def resolved_max_auto_output_gib = (params.gigatime_max_auto_output_gib as double) > 0 ? (params.gigatime_max_auto_output_gib as double) : (params.hardware_max_auto_output_gib as double)
     def resolved_min_free_system_gb = (params.gigatime_min_free_system_gb as double) > 0 ? (params.gigatime_min_free_system_gb as double) : (params.hardware_min_free_system_gb as double)
     def auto_hardware_flag = resolved_auto_hardware ? '--auto-hardware' : ''
-    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    // Do not round a fractional task cap up to 1 GiB or discard its fraction.
+    def task_mem_gb = task.memory.toBytes() / (1024.0d * 1024.0d * 1024.0d)
     def clean_channel_spec = { raw ->
       if (raw == null) return ''
       if (raw instanceof Boolean) return ''
@@ -58,11 +66,14 @@ process RUN_GIGATIME_ON_CROP {
     def integrated_quant_flag = params.gigatime_integrated_quantification as boolean
     def nuclei_mask_flag = integrated_quant_flag ? "--nuclei-mask \"${nuclei_mask_tif}\"" : ''
     def cyto_mask_flag = integrated_quant_flag ? "--cyto-mask \"${cyto_mask_tif}\"" : ''
+    def ring_mask_flag = integrated_quant_flag && (params.expand_um as double) >= 0 ? "--ring-mask \"${ring_mask_tif}\"" : ''
     def quant_dir_flag = integrated_quant_flag ? "--quant-dir \"quantification_${sample_id}\"" : ''
     def memory_wait_seconds = Math.max(0, ((params.gigatime_memory_wait_minutes as int) * 60))
     def min_usable_memory_gb = Math.max(0.0, params.gigatime_min_usable_memory_gb as double)
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     echo "[INFO] GigaTIME code fingerprint: ${codeFingerprint}"
 
     TOKEN_ENV_FILE="${token_env_file}"
@@ -100,7 +111,7 @@ process RUN_GIGATIME_ON_CROP {
     export OPENBLAS_NUM_THREADS=1
     export NUMEXPR_NUM_THREADS=1
 
-    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${resolvedComputeDevice}" == "gpu" ]]; then
       echo "[DEBUG] GigaTIME GPU diagnostics"
       nvidia-smi -L || true
       python - <<'PY'
@@ -116,6 +127,8 @@ PY
 
     mkdir -p "gigatime_${sample_id}"
     mkdir -p "quantification_${sample_id}"
+    printf '[]\n' > "gigatime_${sample_id}/gigatime_channels.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "gigatime_${sample_id}/gigatime_metadata.json"
 
     wait_for_gigatime_memory() {
       local waited=0
@@ -165,9 +178,12 @@ PY
     python "${gigatime_script}" \\
       --image "${crop_tif}" \\
       --shift-json "${shift_json}" \\
+      --source-mpp ${params.input_resolution_override_mpp} \\
       --outdir "gigatime_${sample_id}" \\
+      --qc-tissue-mask "${tissue_mask_tif}" \\
       ${nuclei_mask_flag} \\
       ${cyto_mask_flag} \\
+      ${ring_mask_flag} \\
       ${quant_dir_flag} \\
       --repo-id "${params.gigatime_repo_id}" \\
       --page ${params.gigatime_page} \\
@@ -199,6 +215,9 @@ PY
       --skip-background-close-radius ${params.gigatime_skip_background_close_radius} \\
       --skip-background-min-obj-area ${params.gigatime_skip_background_min_obj_area} \\
       --skip-background-hole-area ${params.gigatime_skip_background_hole_area} \\
+      --seam-qc-mode ${params.gigatime_seam_qc_mode} \\
+      --seam-qc-max-p95-excess ${params.gigatime_seam_qc_max_p95_excess} \\
+      --seam-qc-min-affected-fraction ${params.gigatime_seam_qc_min_affected_fraction} \\
       --max-output-gib ${params.gigatime_max_output_gib} \\
       --disk-buffer-threshold-gib ${params.gigatime_disk_buffer_threshold_gib} \\
       ${strict_target_flag} \\
@@ -211,6 +230,8 @@ PY
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "gigatime_${sample_id}"
     mkdir -p "quantification_${sample_id}"
     """

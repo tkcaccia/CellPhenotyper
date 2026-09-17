@@ -9,7 +9,8 @@ if (length(args) < 2) {
       "<rawdata_rdata> <output_dir>",
       "[--embedding-mode tile|nuclei|cyto|inner_square|all|full|tile,inner_square,...]",
       "[--dims-to-run N] [--spark-top N] [--landmarks N] [--kodama-ncomp N] [--n-cores N]",
-      "[--backend cpu|cuda|metal] [--gpu-device N]"
+      "[--backend cpu|cuda|metal] [--gpu-device N] [--save-selected-features true|false]",
+      "[--export-native-graph true|false]"
     )
   )
 }
@@ -20,16 +21,33 @@ output_dir <- args[2]
 embedding_mode <- "all"
 dims_to_run <- 20L
 spark_top <- 100L
-landmarks <- 1000L
-kodama_ncomp <- 2L
+landmarks <- 10000L
+kodama_ncomp <- 50L
 n_cores <- 4L
 backend <- "cpu"
 gpu_device <- 0L
+save_selected_features <- FALSE
+export_native_graph <- FALSE
 
 if (length(args) > 2) {
   i <- 3L
   while (i <= length(args)) {
     flag <- args[i]
+    if (flag == "--export-native-graph") {
+      if (i + 1L > length(args)) stop("--export-native-graph requires true or false")
+      value <- tolower(args[i + 1L])
+      if (!value %in% c("true", "false")) stop("--export-native-graph must be true or false")
+      export_native_graph <- identical(value, "true")
+      i <- i + 2L
+      next
+    }
+    if (flag == "--save-selected-features" && i + 1L <= length(args)) {
+      value <- tolower(args[i + 1L])
+      if (!value %in% c("true", "false")) stop("--save-selected-features must be true or false")
+      save_selected_features <- identical(value, "true")
+      i <- i + 2L
+      next
+    }
     if (flag == "--embedding-mode" && i + 1L <= length(args)) {
       embedding_mode <- args[i + 1L]
       i <- i + 2L
@@ -81,10 +99,10 @@ if (!is.finite(spark_top) || spark_top < 1L) {
   spark_top <- 100L
 }
 if (!is.finite(landmarks) || landmarks < 1L) {
-  landmarks <- 1000L
+  landmarks <- 10000L
 }
 if (!is.finite(kodama_ncomp) || kodama_ncomp < 1L) {
-  kodama_ncomp <- 2L
+  kodama_ncomp <- 50L
 }
 if (!is.finite(n_cores) || n_cores < 1L) {
   n_cores <- 1L
@@ -120,6 +138,17 @@ normalize_modes <- function(mode_string) {
 library(KODAMA)
 library(data.table)
 
+script_argument <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(script_argument) != 1L) stop("Cannot locate the portable KODAMA graph helper")
+script_directory <- dirname(normalizePath(sub("^--file=", "", script_argument)))
+source(file.path(script_directory, "kodama_graph_export.R"))
+if (export_native_graph) {
+  kodama_graph_require_packages()
+  if (!"KODAMA.graph.materialize" %in% getNamespaceExports("KODAMA")) {
+    stop("Installed KODAMA lacks the verified native graph materialization API")
+  }
+}
+
 kodama_description <- utils::packageDescription("KODAMA")
 kodama_revision <- kodama_description$RemoteSha %||% kodama_description$GithubSHA1 %||% "unknown"
 cat(sprintf(
@@ -145,6 +174,21 @@ flush.console()
 load(rawdata_path)
 cat("[INFO] Loaded rawdata RData\n")
 flush.console()
+if (!exists("embedding_input_provenance", inherits = FALSE)) embedding_input_provenance <- NULL
+verified_uni2_input <- !is.null(embedding_input_provenance)
+rawdata_input_sha256 <- NULL
+if (verified_uni2_input) {
+  if (!is.list(embedding_input_provenance) ||
+      !(embedding_input_provenance$format %in% c("cellphenotyper_uni2_binary_input", "cellphenotyper_uni2_csv_input")) ||
+      !identical(embedding_input_provenance$schema_version, "1.0.0"))
+    stop("Unsupported UNI2 input provenance in rawdata")
+  verified_analysis_ids <- embedding_input_provenance$analysis_observation_ids
+  if (!is.character(verified_analysis_ids) || !length(verified_analysis_ids) || anyNA(verified_analysis_ids) ||
+      any(!nzchar(verified_analysis_ids)) || anyDuplicated(verified_analysis_ids))
+    stop("UNI2 input provenance needs unique explicit analysis IDs")
+  if (!requireNamespace("digest", quietly = TRUE)) stop("UNI2 provenance requires R package digest")
+  rawdata_input_sha256 <- digest::digest(file = rawdata_path, algo = "sha256", serialize = FALSE)
+}
 
 required_objects <- c("ann", "xy")
 missing_required <- required_objects[!vapply(required_objects, exists, logical(1), inherits = TRUE)]
@@ -160,13 +204,18 @@ if (!("label" %in% colnames(ann))) {
   ann$label <- rownames(ann)
 }
 ann$label <- as.character(ann$label)
-ann <- ann[!is.na(ann$label) & nzchar(ann$label), , drop = FALSE]
-ann <- ann[!duplicated(ann$label), , drop = FALSE]
+if (!length(ann$label) || anyNA(ann$label) || any(!nzchar(ann$label)) ||
+    any(trimws(ann$label) != ann$label) || any(grepl("[[:cntrl:]]", ann$label)) || anyDuplicated(ann$label))
+  stop("Invalid or duplicate annotation IDs; no rows are silently discarded")
+if (verified_uni2_input && !identical(ann$label, verified_analysis_ids))
+  stop("UNI2 annotation IDs/order differ from the exact rawdata provenance; no dropping/reordering is permitted")
 rownames(ann) <- ann$label
 
 if (!all(c("x", "y") %in% colnames(ann))) {
   stop("Annotation table in rawdata must contain columns 'x' and 'y'")
 }
+if (!is.numeric(ann$x) || !is.numeric(ann$y) || any(!is.finite(ann$x)) || any(!is.finite(ann$y)))
+  stop("Annotations require numeric finite coordinates")
 if (!("polygon_label" %in% colnames(ann))) {
   ann$polygon_label <- "unknown"
 }
@@ -243,21 +292,26 @@ sanitize_mode_matrix <- function(mat, mode_name) {
     return(NULL)
   }
   mat <- as.matrix(mat)
+  if (!is.numeric(mat)) stop("Embedding matrix for mode ", mode_name, " must be numeric; no silent imputation")
   storage.mode(mat) <- "double"
   ids <- rownames(mat)
   if (is.null(ids)) {
     stop(paste("Embedding matrix for mode", mode_name, "is missing row names (cell IDs)."))
   }
   ids <- as.character(ids)
-  keep <- !is.na(ids) & nzchar(ids)
-  if (!all(keep)) {
-    mat <- mat[keep, , drop = FALSE]
-    ids <- ids[keep]
-  }
-  dup <- duplicated(ids)
-  if (any(dup)) {
-    mat <- mat[!dup, , drop = FALSE]
-    ids <- ids[!dup]
+  if (!length(ids) || anyNA(ids) || any(!nzchar(ids)) || any(trimws(ids) != ids) ||
+      any(grepl("[[:cntrl:]]", ids)) || anyDuplicated(ids))
+    stop("Invalid or duplicate embedding cell IDs for mode ", mode_name, "; no rows are silently discarded")
+  features <- colnames(mat)
+  if (is.null(features) || !length(features) || anyNA(features) || any(!nzchar(features)) || anyDuplicated(features))
+    stop("Embedding feature names must be explicit and unique for mode ", mode_name)
+  if (any(!is.finite(mat))) stop("Nonfinite embedding features for mode ", mode_name, "; no silent imputation")
+  if (verified_uni2_input) {
+    if (!identical(ids, verified_analysis_ids))
+      stop("UNI2 matrix IDs/order differ from rawdata provenance for mode ", mode_name)
+    expected_features <- embedding_input_provenance$modes[[mode_name]]$selected_feature_names
+    if (!is.character(expected_features) || !identical(colnames(mat), expected_features))
+      stop("UNI2 matrix feature names/order differ from rawdata provenance for mode ", mode_name)
   }
   rownames(mat) <- ids
   mat
@@ -269,17 +323,22 @@ for (m in names(mode_mats)) {
 
 available_modes <- names(Filter(Negate(is.null), mode_mats))
 selected_modes <- normalize_modes(embedding_mode)
+if (verified_uni2_input && !all(selected_modes %in% embedding_input_provenance$selected_modes))
+  stop("Requested modes are not covered by UNI2 source provenance")
 missing_modes <- setdiff(selected_modes, available_modes)
 if (length(missing_modes) > 0L) {
   stop(paste("Requested embedding mode(s) missing from rawdata:", paste(missing_modes, collapse = ",")))
 }
 cat(sprintf("[INFO] KODAMA embedding_mode=%s\n", paste(selected_modes, collapse = ",")))
 
-common_ids <- Reduce(
-  intersect,
-  c(list(ann_full$label), lapply(selected_modes, function(m) rownames(mode_mats[[m]])))
-)
-common_ids <- sort(unique(common_ids))
+for (mode in selected_modes) {
+  source_ids <- rownames(mode_mats[[mode]])
+  if (!setequal(source_ids, ann_full$label))
+    stop("Embedding and annotation IDs must match exactly for mode ", mode,
+      "; no intersection/drop is permitted. Missing=", length(setdiff(ann_full$label, source_ids)),
+      "; foreign=", length(setdiff(source_ids, ann_full$label)))
+}
+common_ids <- if (verified_uni2_input) verified_analysis_ids else sort(ann_full$label)
 if (length(common_ids) < 3L) {
   stop(
     paste(
@@ -359,6 +418,34 @@ pca_res <- KODAMA.pca(
 )
 pca <- pca_res$scores
 rownames(pca) <- common_ids
+pca_feature_names <- colnames(data)
+if (is.null(pca_feature_names)) pca_feature_names <- sprintf("selected_feature_%d", seq_len(ncol(data)))
+if (is.null(colnames(pca))) colnames(pca) <- sprintf("PC%d", seq_len(ncol(pca)))
+pca_model_metadata <- list(
+  schema_version = "1.0.0",
+  input_feature_names = pca_feature_names,
+  input_feature_count = ncol(data),
+  selected_embedding_modes = selected_modes,
+  requested_components = requested_pca_components,
+  computed_components = ncol(pca),
+  center = TRUE, scale = TRUE,
+  backend = pca_res$backend %||% backend,
+  seed = 543210L,
+  kodama_package_version = as.character(utils::packageVersion("KODAMA")),
+  kodama_package_revision = kodama_revision
+)
+if (verified_uni2_input) {
+  pca_model_metadata$rawdata_input_sha256 <- rawdata_input_sha256
+  pca_model_metadata$embedding_input_provenance <- embedding_input_provenance
+}
+selected_features_path <- if (save_selected_features) file.path(output_dir, "selected_features.rds") else NA_character_
+if (save_selected_features) {
+  saveRDS(list(
+    schema_version = "1.0.0", features = data, observation_ids = common_ids,
+    feature_names = pca_feature_names, selected_embedding_modes = selected_modes,
+    preprocessing = "raw selected embedding columns, before centered/scaled PCA"
+  ), selected_features_path, compress = FALSE)
+}
 cat(sprintf(
   "[INFO] PCA components computed=%d requested=%d backend=%s runtime_seconds=%.3f\n",
   ncol(pca), requested_pca_components, pca_res$backend %||% backend,
@@ -392,7 +479,7 @@ plot(pca[pca_plot_idx, 1], pca[pca_plot_idx, 2], pch = 20, col = lab[pca_plot_id
 dev.off()
 
 pca_rdata <- file.path(output_dir, paste0("pca_full_", ncol(pca), ".RData"))
-save(pca, xy, file = pca_rdata)
+save(pca, xy, common_ids, ann, selected_modes, pca_feature_names, pca_model_metadata, embedding_input_provenance, file = pca_rdata)
 
 if (nrow(pca) <= plot_max_cells) {
   u <- fastEmbedR::umap(
@@ -433,11 +520,21 @@ spatial_for_kodama <- as.matrix(xy)
 storage.mode(spatial_for_kodama) <- "double"
 rownames(spatial_for_kodama) <- common_ids
 kodama_landmarks <- min(as.integer(landmarks), nrow(pca))
-kodama_ncomp <- min(as.integer(kodama_ncomp), dims_use)
+requested_kodama_ncomp <- as.integer(kodama_ncomp)
+effective_kodama_ncomp <- min(requested_kodama_ncomp, dims_use)
+if (effective_kodama_ncomp != requested_kodama_ncomp) {
+  warning(sprintf(
+    "KODAMA requested internal ncomp=%d exceeds its %d input PCA features; effective internal ncomp=%d. These are separate parameters; increase --dims-to-run explicitly if the requested internal rank is required.",
+    requested_kodama_ncomp, dims_use, effective_kodama_ncomp
+  ))
+}
 cat(sprintf("[INFO] KODAMA landmarks=%d\n", kodama_landmarks))
-cat(sprintf("[INFO] KODAMA internal ncomp=%d\n", kodama_ncomp))
+cat(sprintf("[INFO] KODAMA internal ncomp requested=%d effective=%d; input PCA dimensions=%d\n", requested_kodama_ncomp, effective_kodama_ncomp, dims_use))
 
 visual_neighbors <- 30L
+if (export_native_graph && nrow(pca) > kodama_exact_max_cells) {
+  stop("Requested native graph export requires all observations in KODAMA; the outer subset/projection branch cannot supply it")
+}
 
 if (nrow(pca) <= kodama_exact_max_cells) {
   visual_neighbors <- min(30L, nrow(pca) - 1L)
@@ -447,7 +544,7 @@ if (nrow(pca) <= kodama_exact_max_cells) {
     landmarks = kodama_landmarks,
     n.cores = as.integer(n_cores),
     seed = 543210,
-    ncomp = kodama_ncomp,
+    ncomp = effective_kodama_ncomp,
     backend = backend,
     visual.init = TRUE,
     return.graph = "handle"
@@ -489,7 +586,7 @@ if (nrow(pca) <= kodama_exact_max_cells) {
     landmarks = min(kodama_landmarks, nrow(pca_kodama)),
     n.cores = as.integer(n_cores),
     seed = 543210,
-    ncomp = kodama_ncomp,
+    ncomp = effective_kodama_ncomp,
     backend = backend,
     visual.init = TRUE,
     return.graph = "handle"
@@ -526,6 +623,32 @@ if (nrow(pca) <= kodama_exact_max_cells) {
   gc(FALSE)
 }
 
+graph_manifest <- NULL
+if (export_native_graph && nrow(pca) <= kodama_exact_max_cells) {
+  graph_manifest <- export_portable_kodama_graph(
+    jj, observation_ids = common_ids, outdir = output_dir,
+    pca_file = pca_rdata, expected_observation_ids = rownames(pca),
+    projected = FALSE,
+    package_version = as.character(utils::packageVersion("KODAMA")),
+    package_revision = kodama_revision
+  )
+  cat(sprintf("[INFO] Exported all-observation native KODAMA graph: observations=%d directed_edges=%d\n",
+    graph_manifest$observation_count, graph_manifest$stored_edges))
+} else if (export_native_graph) {
+  # Internal landmark optimization still gives an all-input-row graph. This
+  # outer sampling branch is different: jj only contains projection_idx rows.
+  # Do not publish it as a graph for all common_ids or infer edges from UMAP.
+  cat("[INFO] Portable all-observation graph unavailable: outer KODAMA subset/projection branch\n")
+}
+actual_kodama_classifier <- jj$parameters$classifier %||% "unknown"
+kodama_ncomp_applicability <- if (identical(actual_kodama_classifier, "knn")) {
+  "not_PLS_rank_for_raw_data_knn_classifier; retained parameter may affect accelerator worker-memory estimates"
+} else if (identical(actual_kodama_classifier, "pls_lda")) {
+  "PLS_LDA_component_parameter; actual fitted rank may be numerically constrained"
+} else "unknown_classifier_applicability"
+cat(sprintf("[INFO] Actual KODAMA classifier=%s; ncomp applicability=%s\n",
+  actual_kodama_classifier, kodama_ncomp_applicability))
+
 kodama_pdf <- file.path(output_dir, paste0("kodama_full_", dims_use, ".pdf"))
 pdf(kodama_pdf)
 vis_plot_idx <- seq_len(nrow(vis))
@@ -537,7 +660,44 @@ plot(vis[vis_plot_idx, 1], vis[vis_plot_idx, 2], pch = 20, col = lab[vis_plot_id
 dev.off()
 
 kodama_rdata <- file.path(output_dir, paste0("kodama_full_", dims_use, ".RData"))
-save(vis, xy, common_ids, ann, lab, selected_modes, file = kodama_rdata)
+representation_metadata <- list(
+  schema_version = "1.0.0",
+  available_cluster_representations = c("umap2d", "pca", if (!is.null(graph_manifest)) "kodama_graph"),
+  pca_file = basename(pca_rdata),
+  pca_file_md5 = unname(tools::md5sum(pca_rdata)),
+  pca_dimensions = ncol(pca),
+  pca_observations = nrow(pca),
+  observation_order = "common_ids and rownames(pca), explicitly joined by ID downstream",
+  pca_preprocessing = pca_model_metadata,
+  rawdata_input_sha256 = rawdata_input_sha256,
+  embedding_input_provenance = embedding_input_provenance,
+  selected_features_file = if (save_selected_features) basename(selected_features_path) else NULL,
+  selected_features_saved = save_selected_features,
+  visualization = "KODAMA UMAP; display coordinates, separate from saved PCA feature space",
+  visualization_dimensions = ncol(vis),
+  visualization_projected = nrow(pca) > kodama_exact_max_cells,
+  visualization_exact_observations = if (nrow(pca) > kodama_exact_max_cells) length(projection_idx) else nrow(pca),
+  pca_scores_projected = FALSE,
+  requested_kodama_ncomp = requested_kodama_ncomp,
+  effective_kodama_ncomp = effective_kodama_ncomp,
+  actual_kodama_classifier = actual_kodama_classifier,
+  kodama_ncomp_applicability = kodama_ncomp_applicability,
+  kodama_input_pca_dimensions = dims_use,
+  kodama_graph_available = !is.null(graph_manifest),
+  kodama_graph_export_requested = export_native_graph,
+  kodama_graph_file = if (!is.null(graph_manifest)) graph_manifest$file else NULL,
+  kodama_graph_sha256 = if (!is.null(graph_manifest)) graph_manifest$file_sha256 else NULL,
+  kodama_graph_manifest_file = if (!is.null(graph_manifest)) "kodama_graph.json" else NULL,
+  kodama_graph_reason = if (!is.null(graph_manifest)) "native corrected directed distances; all input observations; no affinity conversion" else if (!export_native_graph)
+    "Native graph export was not requested; materialization and storage remain opt-in" else
+    "Outer KODAMA optimization used a subset; projected UMAP cannot supply an all-observation native graph"
+)
+save(vis, xy, common_ids, ann, lab, selected_modes, representation_metadata, file = kodama_rdata)
+if (requireNamespace("jsonlite", quietly = TRUE)) {
+  jsonlite::write_json(representation_metadata, file.path(output_dir, "clustering_representations.json"), auto_unbox = TRUE, pretty = TRUE, null = "null", na = "null")
+} else {
+  saveRDS(representation_metadata, file.path(output_dir, "clustering_representations.rds"))
+}
 
 timing <- KODAMA.timing(jj)
 timing$backend <- backend

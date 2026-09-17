@@ -13,6 +13,7 @@ FIX in this version:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -41,11 +42,73 @@ import tifffile
 import torchvision.transforms as T
 
 from uni2_grid import assign_rounded_centers_to_grid
+from model_provenance import hf_model_provenance, resolve_hf_snapshot, sha256_file, package_version
+from uni2_embedding_io import (write_binary_shard, iter_binary_blocks, binary_shard_paths,
+                               discover_embedding_shards, SUFFIX as BINARY_SUFFIX)
 
 
 # --------------------------
-# Encoder utilities (kept compatible with your current script)
+# Foundation-encoder adapters
 # --------------------------
+# ``uni2_encoder`` is retained as the public parameter name for backwards
+# compatibility, but every supported model has an explicit adapter contract.
+# In particular, register tokens must never be averaged into morphology
+# features or mistaken for spatial patch tokens.
+ENCODER_SPECS: Dict[str, Dict[str, Any]] = {
+    "uni2-h": {
+        "backend": "timm_hf",
+        "repo_id": "MahmoodLab/UNI2-h",
+        "pooling": "cls",
+        "tag": "uni2-h",
+        "model_input_size": 224,
+        "prefix_tokens_after_cls": 8,
+        "supports_token_subset": True,
+        "recommended_max_batch": 256,
+    },
+    "virchow": {
+        "backend": "timm_hf",
+        "repo_id": "paige-ai/Virchow",
+        "pooling": "cls_mean_concat",
+        "tag": "virchow",
+        "model_input_size": 224,
+        "prefix_tokens_after_cls": 0,
+        "supports_token_subset": True,
+        "recommended_max_batch": 16,
+    },
+    "virchow2": {
+        "backend": "timm_hf",
+        "repo_id": "paige-ai/Virchow2",
+        "pooling": "cls_mean_concat",
+        "tag": "virchow2",
+        "model_input_size": 224,
+        "prefix_tokens_after_cls": 4,
+        "supports_token_subset": True,
+        "recommended_max_batch": 16,
+    },
+    "phikon-v2": {
+        "backend": "hf_transformers",
+        "repo_id": "owkin/phikon-v2",
+        "pooling": "cls",
+        "tag": "phikon-v2",
+        "model_input_size": 224,
+        "prefix_tokens_after_cls": 0,
+        "supports_token_subset": True,
+        "recommended_max_batch": 64,
+    },
+}
+
+
+def encoder_spec(encoder: str) -> Dict[str, Any]:
+    """Return an immutable copy of a supported model's spatial-token contract."""
+    key = str(encoder).strip().lower()
+    if key not in ENCODER_SPECS:
+        raise ValueError(
+            f"Unsupported foundation encoder '{encoder}'. Supported encoders: "
+            + ", ".join(sorted(ENCODER_SPECS))
+        )
+    return dict(ENCODER_SPECS[key])
+
+
 def build_dinov2_transform(img_size: int = 224):
     return T.Compose([
         T.Resize(img_size, interpolation=T.InterpolationMode.BICUBIC),
@@ -117,7 +180,11 @@ def pool_from_token_parts(cls: Optional[torch.Tensor],
     raise ValueError(f"Unknown pooling mode: {mode}")
 
 
-def extract_cls_and_patch_tokens(feats: Any) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+def extract_cls_and_patch_tokens(
+    feats: Any,
+    *,
+    prefix_tokens_after_cls: Optional[int] = None,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
     if isinstance(feats, dict):
         if "x_norm_patchtokens" in feats or "x_norm_clstoken" in feats:
             cls = feats.get("x_norm_clstoken")
@@ -136,14 +203,29 @@ def extract_cls_and_patch_tokens(feats: Any) -> Tuple[Optional[torch.Tensor], Op
         if feats.dim() == 3:
             cls = feats[:, 0]
             patch = feats[:, 1:] if feats.size(1) > 1 else None
-            # Some ViT variants, including UNI2-h, prepend extra prefix/register
-            # tokens after CLS. For inner-square-style derivation we need only the
-            # square patch-token grid, so strip any leading non-patch tokens if a
-            # perfect-square tail exists.
+            # Registered adapters declare the number of non-spatial tokens after
+            # CLS. The square-tail inference remains only as a compatibility path
+            # for unregistered feature containers used by old unit fixtures.
             if patch is not None and patch.size(1) > 0:
                 n = int(patch.size(1))
-                side = int(round(math.sqrt(n)))
-                if side * side != n:
+                if prefix_tokens_after_cls is not None:
+                    prefix = int(prefix_tokens_after_cls)
+                    if prefix < 0 or prefix >= n:
+                        raise ValueError(
+                            f"Invalid prefix-token count {prefix} for {n} post-CLS tokens"
+                        )
+                    patch = patch[:, prefix:]
+                    spatial_n = int(patch.size(1))
+                    spatial_side = int(round(math.sqrt(spatial_n)))
+                    if spatial_side * spatial_side != spatial_n:
+                        raise ValueError(
+                            "Encoder token contract did not yield a square spatial grid: "
+                            f"post_cls={n}, prefix={prefix}, spatial={spatial_n}"
+                        )
+                else:
+                    side = int(round(math.sqrt(n)))
+                    if side * side == n:
+                        return cls, patch
                     for extra_prefix in range(1, min(32, n)):
                         tail = n - extra_prefix
                         if tail <= 0:
@@ -369,26 +451,20 @@ def _create_timm_model_with_fallback(enc_id: str, timm_kwargs: Dict[str, Any], r
 
 
 def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_token: Optional[str]):
+    registered = encoder_spec(encoder)
     presets: Dict[str, Dict[str, Any]] = {
-        "dinov2_vitb14": {"backend": "dinov2_hub", "id": "dinov2_vitb14", "pooling": "cls", "tag": "dinov2_vitb14"},
-        "dinov2_vitl14": {"backend": "dinov2_hub", "id": "dinov2_vitl14", "pooling": "cls", "tag": "dinov2_vitl14"},
-        "virchow":  {"backend": "timm_hf", "id": "hf-hub:paige-ai/Virchow",  "pooling": "cls_mean_concat", "tag": "virchow"},
-        "virchow2": {"backend": "timm_hf", "id": "hf-hub:paige-ai/Virchow2", "pooling": "cls_mean_concat", "tag": "virchow2"},
-        "uni":   {"backend": "timm_hf", "id": "hf-hub:MahmoodLab/UNI",    "pooling": "cls", "tag": "uni"},
-        "uni2-h": {
-            "backend": "timm_hf",
-            "id": "hf-hub:MahmoodLab/UNI2-h",
-            "pooling": "cls",
-            "tag": "uni2-h",
-            "timm_kwargs": {
-                "img_size": 224, "patch_size": 14, "depth": 24, "num_heads": 24, "init_values": 1e-5,
-                "embed_dim": 1536, "mlp_ratio": 2.66667 * 2, "num_classes": 0, "no_embed_class": True,
-                "reg_tokens": 8, "dynamic_img_size": True,
-            },
-            "needs_swiglu_silu": True,
-        },
-        "phikon-v2": {"backend": "hf_transformers", "id": "owkin/phikon-v2", "pooling": "cls", "tag": "phikon-v2"},
+        key: {
+            **value,
+            "id": f"hf-hub:{value['repo_id']}" if value["backend"] == "timm_hf" else value["repo_id"],
+        }
+        for key, value in ENCODER_SPECS.items()
     }
+    presets["uni2-h"]["timm_kwargs"] = {
+        "img_size": 224, "patch_size": 14, "depth": 24, "num_heads": 24, "init_values": 1e-5,
+        "embed_dim": 1536, "mlp_ratio": 2.66667 * 2, "num_classes": 0, "no_embed_class": True,
+        "reg_tokens": 8, "dynamic_img_size": True,
+    }
+    presets["uni2-h"]["needs_swiglu_silu"] = True
 
     if backend == "auto":
         if encoder in presets:
@@ -396,24 +472,13 @@ def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_tok
             enc_id = presets[encoder]["id"]
             preset = presets[encoder]
         else:
-            if encoder.startswith("hf-hub:"):
-                backend_used = "timm_hf"
-                enc_id = encoder
-                preset = {}
-            elif "/" in encoder:
-                backend_used = "hf_transformers"
-                enc_id = encoder
-                preset = {}
-            else:
-                backend_used = "dinov2_hub"
-                enc_id = encoder
-                preset = {}
+            raise ValueError(f"Encoder '{encoder}' has no registered adapter")
     else:
         backend_used = backend
         enc_id = encoder if encoder not in presets else presets[encoder]["id"]
         preset = presets.get(encoder, {})
 
-    pooling_used = preset.get("pooling", "cls") if pooling == "auto" else pooling
+    pooling_used = preset.get("pooling", registered["pooling"]) if pooling == "auto" else pooling
     tag = preset.get("tag", encoder.replace("/", "_").replace(":", "_"))
 
     _maybe_hf_login(hf_token)
@@ -476,6 +541,279 @@ def load_encoder(encoder: str, backend: str, pooling: str, img_size: int, hf_tok
         return (model, processor), None, backend_used, pooling_used, tag
 
     raise ValueError(f"Unknown backend: {backend_used}")
+
+
+def load_local_uni2_encoder(snapshot: Path, weights_filename: str, device: str = "cpu"):
+    """Load a pinned local UNI2-h bundle without network or permissive weights.
+
+    The hierarchy producer hashes the exact config/checkpoint before this call.
+    Unlike the legacy Hub fallback, missing/unexpected state keys are fatal.
+    Returned callable consumes already spatially resized RGB uint8 arrays; no
+    additional center crop is allowed to silently shrink the declared field.
+    """
+    import timm
+    from timm.layers import SwiGLUPacked
+
+    root = Path(snapshot).resolve()
+    config = json.loads((root / "config.json").read_text())
+    architecture = config.get("architecture", "")
+    # The official UNI2-h manual recipe uses the giant timm entry point with
+    # explicit custom ViT-H dimensions. Some compatible configs use huge.
+    # Both are constrained to the exact recipe below and strict state loading.
+    if architecture not in {"vit_giant_patch14_224", "vit_huge_patch14_224"}:
+        raise ValueError("Pinned UNI2-h config must use the compatible vit_giant_patch14_224 or vit_huge_patch14_224 base architecture")
+    requested = str(device).lower()
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested but is unavailable; no silent CPU fallback")
+    if requested == "mps" and not (getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()):
+        raise RuntimeError("MPS was requested but is unavailable")
+    if requested not in {"cpu", "cuda", "mps"}:
+        raise ValueError("Device must be cpu, cuda or mps")
+    model = timm.create_model(
+        architecture, pretrained=False, img_size=224, patch_size=14, depth=24,
+        num_heads=24, init_values=1e-5, embed_dim=1536, mlp_ratio=2.66667 * 2,
+        num_classes=0, no_embed_class=True, reg_tokens=8, dynamic_img_size=True,
+        mlp_layer=SwiGLUPacked, act_layer=torch.nn.SiLU,
+    )
+    weights = root / weights_filename
+    if Path(weights_filename).name != weights_filename or not weights.is_file():
+        raise ValueError("Checkpoint must be a named file inside the supplied snapshot")
+    if weights.suffix == ".safetensors":
+        from safetensors.torch import load_file
+        state = load_file(str(weights), device="cpu")
+    else:
+        state = torch.load(weights, map_location="cpu", weights_only=True)
+    for key in ("state_dict", "model", "model_state_dict"):
+        if isinstance(state, dict) and isinstance(state.get(key), dict):
+            state = state[key]
+            break
+    if not isinstance(state, dict) or not all(isinstance(key, str) for key in state):
+        raise ValueError("UNI2 checkpoint does not contain a tensor state dictionary")
+    if state and all(key.startswith("module.") for key in state):
+        state = {key[7:]: value for key, value in state.items()}
+    model.load_state_dict(state, strict=True)
+    del state
+    model = model.to(torch.device(requested)).eval()
+    cfg = config.get("pretrained_cfg", {})
+    mean = np.asarray(cfg.get("mean", [0.485, 0.456, 0.406]), np.float32)
+    std = np.asarray(cfg.get("std", [0.229, 0.224, 0.225]), np.float32)
+    if mean.shape != (3,) or std.shape != (3,) or not np.isfinite(mean).all() or not np.isfinite(std).all() or np.any(std <= 0):
+        raise ValueError("Invalid UNI2 RGB normalization in snapshot config")
+
+    def encode(rgb_batch):
+        array = np.asarray(rgb_batch)
+        if array.dtype != np.uint8 or array.ndim != 4 or array.shape[1:] != (224, 224, 3):
+            raise ValueError("Pinned UNI2 encoder requires Bx224x224x3 uint8 inputs")
+        normalized = (array.astype(np.float32) / 255.0 - mean) / std
+        tensor = torch.from_numpy(normalized).permute(0, 3, 1, 2).to(requested)
+        with torch.inference_mode():
+            values = model(tensor)
+        if not torch.is_tensor(values) or values.ndim != 2 or values.shape[1] != 1536:
+            raise ValueError("UNI2-h must return the 1536-dimensional CLS feature vector")
+        return values.detach().cpu().numpy().astype(np.float32, copy=False)
+    return encode
+
+
+def fingerprint_encoder_state(model) -> str:
+    """Hash the tensors actually loaded, not a possibly mutable repository ref."""
+    digest = hashlib.sha256()
+    state = model.state_dict()
+    if not state:
+        raise ValueError("Cannot fingerprint an encoder with no tensor state")
+    for name, tensor in sorted(state.items()):
+        if not torch.is_tensor(tensor):
+            raise ValueError(f"Non-tensor encoder state entry: {name}")
+        digest.update(json.dumps([name, str(tensor.dtype), list(tensor.shape)], separators=(",", ":")).encode())
+        # One parameter at a time; no full-model state clone or giant bytes copy.
+        raw = tensor.detach().cpu().contiguous().reshape(-1).view(torch.uint8).numpy()
+        digest.update(memoryview(raw))
+    return digest.hexdigest()
+
+
+def build_extraction_cache_contract(args, *, model_state_sha256, backend, pooling,
+                                    calibration, global_scaling, preprocessing):
+    """Bind resumable grid shards to exact inputs, physical scale and weights."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(model_state_sha256)):
+        raise ValueError("A SHA256 of the actual loaded encoder state is required for cache reuse")
+    inputs = {}
+    for name in ("image", "mask", "objects_csv", "resolution_json"):
+        supplied = str(getattr(args, name, "") or "")
+        if not supplied:
+            inputs[name] = None
+            continue
+        path = Path(supplied)
+        if path.is_file():
+            inputs[name] = {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+        elif path.is_dir():
+            records = {item.relative_to(path).as_posix(): sha256_file(item) for item in sorted(path.rglob("*")) if item.is_file()}
+            inputs[name] = {"tree_sha256": hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest(), "files": len(records)}
+        elif name == "mask" and getattr(args, "objects_csv", "") and not getattr(args, "zero_outside_mask", False):
+            inputs[name] = {"status": "absent_unused_mask"}
+        else:
+            raise FileNotFoundError(f"Cannot fingerprint UNI2 input {name}: {path}")
+    # Authentication never belongs in a manifest. Output locations and resume
+    # toggles do not define features; all inference/selection options do.
+    excluded = {"hf_token", "outdir", "paired_inner_square_outdir", "tiles_root", "disable_grid_resume", *inputs}
+    parameters = {key: value for key, value in vars(args).items() if key not in excluded}
+    parameters["paired_inner_square_enabled"] = bool(getattr(args, "paired_inner_square_outdir", ""))
+    code_files = [Path(__file__), Path(__file__).with_name("uni2_grid.py"), Path(__file__).with_name("model_provenance.py"),
+                  Path(__file__).with_name("uni2_embedding_io.py")]
+    contract = {"schema_version": "2.0.0", "inputs": inputs, "parameters": parameters,
+                "encoder_state_sha256": model_state_sha256, "backend": backend, "pooling": pooling,
+                "calibration": calibration, "global_scaling": global_scaling, "preprocessing": preprocessing,
+                "code_sha256": {path.name: sha256_file(path) for path in code_files},
+                "software": {name: package_version(name) for name in ("torch", "torchvision", "timm", "transformers", "numpy", "Pillow", "tifffile", "zarr", "openslide-python", "imagecodecs")}}
+    canonical = json.dumps(contract, sort_keys=True, separators=(",", ":"), allow_nan=False, default=str)
+    return json.loads(canonical), hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def validate_extraction_grid_cache(marker, expected_contract, directory, expected_mode=None):
+    from uni2_embedding_io import binary_shard_paths, discover_embedding_shards, iter_binary_blocks, SUFFIX as BINARY_SUFFIX
+    if marker.get("cache_contract_sha256") != expected_contract:
+        return False
+    files = marker.get("shard_files")
+    if not isinstance(files, list) or len(files) != int(marker.get("shards", 0)) or not files:
+        return False
+    storage = marker.get("embedding_storage", "csv")
+    if expected_mode is not None and marker.get("embedding_mode") != expected_mode:
+        raise RuntimeError("UNI2 cached grid embedding mode differs from requested representation")
+    names = set()
+    for record in files:
+        name = str(record.get("name", ""))
+        if not name or Path(name).name != name or name in names:
+            raise RuntimeError("Malformed UNI2 cache shard inventory; preserving existing outputs")
+        names.add(name)
+        path = Path(directory) / name
+        if not path.is_file() or sha256_file(path) != record.get("sha256"):
+            raise RuntimeError(f"UNI2 cached shard checksum mismatch: {path}; use a fresh output directory")
+        if "size_bytes" in record and path.stat().st_size != record["size_bytes"]:
+            raise RuntimeError("UNI2 cached shard size mismatch")
+        if storage == "binary":
+            if record.get("storage") != "binary" or not name.endswith(BINARY_SUFFIX):
+                raise RuntimeError("UNI2 binary cache has an incompatible logical shard inventory")
+            if json.loads(path.read_text()).get("embedding_mode") != marker.get("embedding_mode"):
+                raise RuntimeError("UNI2 binary shard embedding mode differs from its grid receipt")
+            expected_payloads = [{"name": p.name, "sha256": sha256_file(p), "size_bytes": p.stat().st_size}
+                                 for p in binary_shard_paths(path)[1:]]
+            if record.get("payload_files") != expected_payloads:
+                raise RuntimeError("UNI2 cached binary payload inventory mismatch")
+            for _rows, _values in iter_binary_blocks(path):
+                pass
+    actual = {p.name for p in discover_embedding_shards(directory, storage=storage)}
+    if actual != names:
+        raise RuntimeError("UNI2 cache contains stale, unlisted or missing shards; use a fresh output directory")
+    return True
+
+
+def init_embedding_writer(tile_out, tag, storage="csv", rows_per_shard=10000, embedding_mode="tile"):
+    if storage not in {"csv", "binary"} or int(rows_per_shard) != rows_per_shard or rows_per_shard < 1:
+        raise ValueError("Invalid UNI2 embedding storage or rows per shard")
+    return {"tile_out": Path(tile_out), "tag": tag, "storage": storage, "rows_per_shard": int(rows_per_shard),
+            "embedding_mode": embedding_mode, "row_parts": [], "feature_parts": [], "row_count": 0,
+            "total_rows": 0, "shard_idx": 0, "feat_dim": None, "feat_cols": None, "dtype": None, "ids": set()}
+
+
+def append_embedding_rows(state, meta_df, feats_np):
+    if feats_np is None:
+        return
+    values = np.asarray(feats_np)
+    if values.ndim != 2 or len(meta_df) != len(values) or values.shape[1] == 0:
+        raise ValueError("UNI2 encoder output/metadata shape mismatch")
+    if values.dtype.kind != "f" or values.dtype.itemsize not in (4, 8) or not np.isfinite(values).all():
+        raise ValueError("UNI2 embeddings require finite float32/float64 encoder outputs")
+    if "cell_id" not in meta_df or meta_df.cell_id.isna().any():
+        raise ValueError("UNI2 writer requires exact cell IDs")
+    if any(not isinstance(key, (str, int, np.integer)) or isinstance(key, (bool, np.bool_)) for key in meta_df.cell_id):
+        raise ValueError("UNI2 writer requires exact string/integer IDs, never floating-point IDs")
+    meta_df = meta_df.reset_index(drop=True).copy()
+    meta_df["cell_id"] = meta_df.cell_id.astype(str)
+    ids = meta_df.cell_id.tolist()
+    if any(not key or key.strip() != key for key in ids) or len(set(ids)) != len(ids) or state["ids"].intersection(ids):
+        raise ValueError("Duplicate or invalid UNI2 cell IDs in writer")
+    if state["feat_dim"] is None:
+        state["feat_dim"] = values.shape[1]
+        state["feat_cols"] = [f"feat_{j + 1}" for j in range(values.shape[1])]
+        state["dtype"] = values.dtype.str
+    elif state["feat_dim"] != values.shape[1] or state["dtype"] != values.dtype.str:
+        raise ValueError("UNI2 feature dimensions or dtype changed within a grid")
+    state["ids"].update(ids)
+    for start in range(0, len(values), state["rows_per_shard"]):
+        # A batch can straddle a shard boundary; never buffer more than the cap.
+        end = min(len(values), start + state["rows_per_shard"])
+        cursor = start
+        while cursor < end:
+            stop = min(end, cursor + state["rows_per_shard"] - state["row_count"])
+            state["row_parts"].append(meta_df.iloc[cursor:stop])
+            state["feature_parts"].append(values[cursor:stop])
+            state["row_count"] += stop - cursor
+            state["total_rows"] += stop - cursor
+            cursor = stop
+            if state["row_count"] == state["rows_per_shard"]:
+                flush_embedding_writer(state)
+
+
+def flush_embedding_writer(state):
+    if not state["row_count"]:
+        return
+    rows = pd.concat(state["row_parts"], ignore_index=True)
+    values = np.concatenate(state["feature_parts"], axis=0)
+    stem = state["tile_out"] / f"{state['tag']}_embeddings_shard{state['shard_idx']:04d}"
+    if state["storage"] == "binary":
+        write_binary_shard(stem, rows, values, state["feat_cols"], embedding_mode=state["embedding_mode"])
+    else:
+        path = stem.with_name(stem.name + ".csv.gz")
+        if path.exists():
+            raise FileExistsError(f"UNI2 shard already exists: {path}")
+        features = pd.DataFrame(values, columns=state["feat_cols"])
+        pd.concat([rows, features], axis=1).to_csv(path, index=False, compression="gzip")
+    state["row_parts"], state["feature_parts"] = [], []
+    state["row_count"] = 0
+    state["shard_idx"] += 1
+
+
+def embedding_shard_inventory(directory, storage):
+    records = []
+    for path in discover_embedding_shards(directory, storage=storage):
+        record = {"name": path.name, "sha256": sha256_file(path), "size_bytes": path.stat().st_size, "storage": storage}
+        if storage == "binary":
+            record["payload_files"] = [{"name": p.name, "sha256": sha256_file(p), "size_bytes": p.stat().st_size}
+                                       for p in binary_shard_paths(path)[1:]]
+        records.append(record)
+    return records
+
+
+def validate_extraction_completion_cache(root, expected_contract, storage, tag, expected_mode=None):
+    root = Path(root)
+    path = root / f".{tag}_embedding_complete.json"
+    # Completed grids are individually resumable before a root receipt exists.
+    if not path.exists():
+        return
+    marker = json.loads(path.read_text())
+    if marker.get("cache_contract_sha256") != expected_contract or marker.get("embedding_storage") != storage:
+        raise RuntimeError("UNI2 completion input/model/storage contract differs; use a fresh output directory")
+    if expected_mode is not None and marker.get("embedding_mode") != expected_mode:
+        raise RuntimeError("UNI2 completion embedding mode differs from requested representation")
+    expected = set(discover_embedding_shards(root, storage=storage))
+    if storage == "binary":
+        for shard in list(expected):
+            expected.update(binary_shard_paths(shard)[1:])
+    expected.update(root.rglob(f".{tag}_grid_complete.json"))
+    records = marker.get("payload_inventory")
+    if not isinstance(records, list):
+        raise RuntimeError("UNI2 completion lacks the exact payload inventory")
+    found = set()
+    for record in records:
+        relative = record.get("path")
+        if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts or "\\" in relative:
+            raise RuntimeError("Unsafe UNI2 completion payload path")
+        payload = root / relative
+        if payload not in expected or payload in found or not payload.is_file():
+            raise RuntimeError("UNI2 completion contains a stale, duplicate or missing payload")
+        if payload.stat().st_size != record.get("size_bytes") or sha256_file(payload) != record.get("sha256"):
+            raise RuntimeError("UNI2 completion payload checksum/size mismatch; use a fresh output directory")
+        found.add(payload)
+    if found != expected:
+        raise RuntimeError("UNI2 completion does not cover the exact payload inventory")
 
 
 # --------------------------
@@ -943,6 +1281,46 @@ def compute_centroids_streaming(mask_reader: LabelReader, block: int = 4096, ver
     return labels.astype(np.int64), cx, cy, area
 
 
+def load_observations_csv(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load exact observation centres for non-cell sampling modes."""
+    available = list(pd.read_csv(path, nrows=0).columns)
+    selected = [column for column in ("label", "x", "y", "area_px") if column in available]
+    frame = pd.read_csv(path, usecols=selected)
+    frame.columns = [str(column).strip().strip('"').strip("'") for column in frame.columns]
+    required = {"label", "x", "y"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"Observation CSV is missing columns: {missing}")
+    if frame.empty:
+        raise ValueError("Observation CSV contains no rows")
+
+    labels = pd.to_numeric(frame["label"], errors="raise").to_numpy(dtype=np.int64)
+    cx = pd.to_numeric(frame["x"], errors="raise").to_numpy(dtype=np.float64)
+    cy = pd.to_numeric(frame["y"], errors="raise").to_numpy(dtype=np.float64)
+    area = (
+        pd.to_numeric(frame["area_px"], errors="raise").to_numpy(dtype=np.int64)
+        if "area_px" in frame.columns
+        else np.ones(len(frame), dtype=np.int64)
+    )
+    if np.any(labels <= 0) or len(np.unique(labels)) != len(labels):
+        raise ValueError("Observation labels must be unique positive integers")
+    if not np.all(np.isfinite(cx)) or not np.all(np.isfinite(cy)):
+        raise ValueError("Observation coordinates must be finite")
+    if np.any(area <= 0):
+        raise ValueError("Observation areas must be positive")
+    return labels, cx, cy, area
+
+
+def read_resolution_json_mpp(path: Path) -> Optional[float]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    scalar = payload.get("source_mpp", payload.get("effective_mpp"))
+    x_value = payload.get("source_mpp_x", payload.get("mpp_x", scalar))
+    y_value = payload.get("source_mpp_y", payload.get("mpp_y", scalar))
+    values = [_safe_float(value) for value in (x_value, y_value)]
+    values = [value for value in values if value is not None and value > 0]
+    return float(sum(values) / len(values)) if values else None
+
+
 # --------------------------
 # Folder helpers
 # --------------------------
@@ -1092,6 +1470,11 @@ def parse_args():
 
     p.add_argument("--image", required=True)
     p.add_argument("--mask", required=True)
+    p.add_argument("--objects-csv", default="",
+                   help="Optional observation table with label,x,y; bypasses mask-centroid discovery.")
+    p.add_argument("--resolution-json", default="",
+                   help="Optional sidecar providing source_mpp/source_mpp_x/source_mpp_y.")
+    p.add_argument("--observation-type", default="cell", choices=["cell", "grid"])
     p.add_argument("--outdir", required=True)
     p.add_argument("--paired-inner-square-outdir", default="",
                    help="Optional second output directory for paired inner_square embeddings")
@@ -1145,7 +1528,12 @@ def parse_args():
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--torch-threads", type=int, default=16)
 
-    p.add_argument("--rows-per-csv", type=int, default=10000)
+    p.add_argument("--rows-per-csv", type=int, default=10000,
+                   help="Maximum observations per output shard (CSV or binary).")
+    p.add_argument("--embedding-storage", choices=["csv", "binary"], default="csv",
+                   help="Output shard storage; binary preserves exact encoder float32/float64 values without wide CSV features.")
+    p.add_argument("--embedding-mode", choices=["tile", "nuclei", "cyto", "inner_square"], default="tile",
+                   help="Explicit output representation identity; paired extraction requires primary tile mode.")
     p.add_argument("--mask-block", type=int, default=4096)
     p.add_argument("--max-cells", type=int, default=0,
                    help="Process only the first N labels after filtering; intended for quick validation only.")
@@ -1164,12 +1552,30 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.rows_per_csv < 1 or args.batch < 1:
+        raise ValueError("--rows-per-csv and --batch must be positive")
+    if args.paired_inner_square_outdir and args.embedding_mode != "tile":
+        raise ValueError("Paired UNI2 extraction requires --embedding-mode tile")
     paired_mode = str(args.paired_inner_square_mode)
+    adapter = encoder_spec(args.encoder)
+    if int(args.img_size) != int(adapter["model_input_size"]):
+        raise ValueError(
+            f"{args.encoder} requires --img-size {adapter['model_input_size']} for the registered adapter; "
+            f"received {args.img_size}"
+        )
+    if (
+        args.paired_inner_square_outdir
+        and paired_mode == "token_subset"
+        and not bool(adapter["supports_token_subset"])
+    ):
+        raise ValueError(f"{args.encoder} does not support token_subset inner-square extraction")
     print(f"[INFO] paired_inner_square_mode={paired_mode}", flush=True)
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     secondary_outdir = Path(args.paired_inner_square_outdir).resolve() if args.paired_inner_square_outdir else None
     if secondary_outdir is not None:
+        if secondary_outdir == outdir or outdir in secondary_outdir.parents or secondary_outdir in outdir.parents:
+            raise ValueError("UNI2 primary and paired output directories must be separate, non-nested roots")
         secondary_outdir.mkdir(parents=True, exist_ok=True)
 
     gr, gc = args.grid.lower().split("x")
@@ -1196,6 +1602,27 @@ def main():
         encoder=args.encoder, backend=args.backend, pooling=args.pooling, img_size=args.img_size, hf_token=args.hf_token
     )
     print(f"[INFO] encoder={args.encoder} backend={backend_used} pooling={pooling_used} tag={tag}")
+    model_provenance: Dict[str, Any] = {
+        "source_repository": None,
+        "requested_revision": None,
+        "resolved_revision": None,
+        "cache_path": None,
+        "checkpoints": [],
+    }
+    repo_id = str(adapter["repo_id"])
+    if repo_id:
+        _, snapshot = resolve_hf_snapshot(repo_id, "main")
+        model_provenance = hf_model_provenance(
+            repo_id,
+            snapshot or "",
+            requested_revision="main",
+        )
+
+    # Fingerprint before moving the model to the accelerator. Repository tags
+    # and cache-ref metadata alone do not prove which tensors were loaded.
+    model_provenance["runtime_state_sha256"] = fingerprint_encoder_state(
+        model_obj[0] if backend_used == "hf_transformers" else model_obj
+    )
 
     if backend_used == "hf_transformers":
         model, processor = model_obj
@@ -1211,18 +1638,31 @@ def main():
     mask_path = Path(args.mask).expanduser().resolve()
 
     img_reader = RegionReader(img_path, level=args.image_level, force_full_image=args.force_full_image)
-    mask_reader = LabelReader(mask_path)
+    mask_reader = None
+    if not args.objects_csv or args.zero_outside_mask:
+        mask_reader = LabelReader(mask_path)
 
-    H, W = mask_reader.shape
-    print(f"[INFO] mask shape={H}x{W} (backend={mask_reader.backend})")
-    if img_reader.shape is not None:
-        ih, iw = img_reader.shape[0], img_reader.shape[1]
-        print(f"[INFO] image shape={ih}x{iw} (backend={img_reader.backend})")
+    if img_reader.shape is None:
+        raise RuntimeError("Unable to resolve image dimensions")
+    ih, iw = int(img_reader.shape[0]), int(img_reader.shape[1])
+    print(f"[INFO] image shape={ih}x{iw} (backend={img_reader.backend})")
+    if args.objects_csv and not args.zero_outside_mask:
+        H, W = ih, iw
+        print("[INFO] external observations use the full-resolution image coordinate space")
+    else:
+        if mask_reader is None:
+            raise RuntimeError("A readable label mask is required for cell-centred extraction")
+        H, W = mask_reader.shape
+        print(f"[INFO] mask shape={H}x{W} (backend={mask_reader.backend})")
         if (ih != H) or (iw != W):
             print(f"[WARN] image(level={args.image_level}) shape={ih}x{iw} differs from mask={H}x{W}")
             print("[WARN] Ensure mask and selected image level are aligned!")
 
-    detected_source_mpp = infer_source_mpp(str(img_path))
+    detected_source_mpp = (
+        read_resolution_json_mpp(Path(args.resolution_json).resolve())
+        if args.resolution_json
+        else infer_source_mpp(str(img_path))
+    )
     source_mpp = detected_source_mpp if detected_source_mpp and detected_source_mpp > 0 else float(args.default_source_mpp)
     extraction_tile_size, effective_mpp = resolve_extraction_tile_size(
         model_tile_size=int(args.tile_size),
@@ -1250,9 +1690,34 @@ def main():
         p_lo=float(args.scale_plo),
         p_hi=float(args.scale_phi),
     )
+    cache_contract, cache_contract_sha256 = build_extraction_cache_contract(
+        args, model_state_sha256=model_provenance["runtime_state_sha256"],
+        backend=backend_used, pooling=pooling_used,
+        calibration={"source_mpp": float(source_mpp), "target_mpp": float(args.target_mpp),
+                     "effective_mpp": effective_mpp, "extraction_tile_size": int(extraction_tile_size),
+                     "image_shape_yx": [ih, iw], "analysis_shape_yx": [H, W],
+                     "image_reader": img_reader.backend, "mask_reader": mask_reader.backend if mask_reader else None,
+                     "resolved_device": str(device)},
+        global_scaling={"lo": lo.tolist(), "hi": hi.tolist()},
+        preprocessing={
+            "transform": processor.to_dict() if processor is not None else str(transform),
+            "encoder_adapter": adapter,
+        },
+    )
+    if not args.disable_grid_resume:
+        for root, mode in ((outdir, args.embedding_mode), (secondary_outdir, "inner_square")):
+            if root is not None:
+                validate_extraction_completion_cache(root, cache_contract_sha256, args.embedding_storage, tag, mode)
 
-    # Pass 1: centroids/area streaming
-    labels, cx, cy, area = compute_centroids_streaming(mask_reader, block=args.mask_block, verbose=True)
+    # Pass 1: discover cell centroids or load exact grid observation centres.
+    if args.objects_csv:
+        labels, cx, cy, area = load_observations_csv(Path(args.objects_csv).resolve())
+        if np.any(cx < 0) or np.any(cx >= W) or np.any(cy < 0) or np.any(cy >= H):
+            raise ValueError("Observation coordinates fall outside the aligned image/mask extent")
+    else:
+        if mask_reader is None:
+            raise RuntimeError("Label-mask centroid discovery requires a mask reader")
+        labels, cx, cy, area = compute_centroids_streaming(mask_reader, block=args.mask_block, verbose=True)
     if args.min_area > 0:
         keep = area >= args.min_area
         labels, cx, cy, area = labels[keep], cx[keep], cy[keep], area[keep]
@@ -1260,7 +1725,7 @@ def main():
         n_keep = min(int(args.max_cells), labels.shape[0])
         labels, cx, cy, area = labels[:n_keep], cx[:n_keep], cy[:n_keep], area[:n_keep]
     N = labels.shape[0]
-    print(f"[INFO] cells after filter: {N}")
+    print(f"[INFO] {args.observation_type} observations after filter: {N}")
 
     # Assign and process cells from the same rounded integer centroid. Mixing a
     # floating-point grid assignment with a rounded extraction center can move a
@@ -1284,47 +1749,21 @@ def main():
 
     half = extraction_tile_size // 2
 
-    def init_writer_state(tile_out: Path) -> Dict[str, Any]:
-        return {
-            "tile_out": tile_out,
-            "row_parts": [],
-            "row_count": 0,
-            "total_rows": 0,
-            "shard_idx": 0,
-            "feat_dim": None,
-            "feat_cols": None,
-        }
-
-    def append_writer_rows(state: Dict[str, Any], meta_df: pd.DataFrame, feats_np: np.ndarray):
-        if feats_np is None:
-            return
-        if state["feat_dim"] is None:
-            state["feat_dim"] = int(feats_np.shape[1])
-            state["feat_cols"] = [f"feat_{j+1}" for j in range(state["feat_dim"])]
-        feat_df = pd.DataFrame(feats_np, columns=state["feat_cols"])
-        state["row_parts"].append(pd.concat([meta_df.reset_index(drop=True), feat_df], axis=1))
-        state["row_count"] += feats_np.shape[0]
-        state["total_rows"] += feats_np.shape[0]
-
-    def flush_writer(state: Dict[str, Any]):
-        if state["row_count"] == 0:
-            return
-        df = pd.concat(state["row_parts"], ignore_index=True)
-        out_path = state["tile_out"] / f"{tag}_embeddings_shard{state['shard_idx']:04d}.csv.gz"
-        df.to_csv(out_path, index=False, compression="gzip")
-        state["row_parts"] = []
-        state["row_count"] = 0
-        state["shard_idx"] += 1
-
     def grid_marker_path(tile_out: Path) -> Path:
         return tile_out / f".{tag}_grid_complete.json"
 
-    def read_valid_grid_marker(marker_path: Path) -> Optional[Dict[str, Any]]:
+    def read_valid_grid_marker(marker_path: Path, expected_mode: str) -> Optional[Dict[str, Any]]:
         try:
             marker = json.loads(marker_path.read_text())
         except Exception:
             return None
+        if not validate_extraction_grid_cache(marker, cache_contract_sha256, marker_path.parent, expected_mode):
+            return None
+        if marker.get("embedding_storage", "csv") != args.embedding_storage:
+            return None
         if str(marker.get("paired_inner_square_mode", "")) != paired_mode:
+            return None
+        if str(marker.get("observation_type", "cell")) != str(args.observation_type):
             return None
         expected_rows = int(marker.get("index_end", -1)) - int(marker.get("index_start", -1))
         if expected_rows < 0 or int(marker.get("rows_written", -1)) != expected_rows:
@@ -1335,16 +1774,35 @@ def main():
 
     def grid_is_complete(tile_out: Path, secondary_tile_out: Optional[Path]) -> bool:
         primary_marker = grid_marker_path(tile_out)
-        if not primary_marker.exists() or read_valid_grid_marker(primary_marker) is None:
-            return False
-        if not any(tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
+        for output, mode in ((tile_out, args.embedding_mode), (secondary_tile_out, "inner_square")):
+            if output is None:
+                continue
+            marker_path = grid_marker_path(output)
+            # A partial bundle is evidence, not an invitation to silently delete
+            # features. Explicit --disable-grid-resume retains the old opt-in
+            # recomputation behavior; ordinary resume is fail-closed.
+            if not marker_path.exists() and any(output.glob("*embeddings_shard*")):
+                raise RuntimeError(f"UNI2 output has incomplete or orphan shards: {output}; use a fresh output directory")
+            if marker_path.exists():
+                try:
+                    cached_identity = json.loads(marker_path.read_text()).get("cache_contract_sha256")
+                except (ValueError, OSError):
+                    cached_identity = None
+                if cached_identity != cache_contract_sha256:
+                    raise RuntimeError(
+                        f"UNI2 cached grid has missing or different input/model/calibration provenance: {marker_path}. "
+                        "Existing features are preserved. Use a fresh output directory or explicitly --disable-grid-resume to recompute."
+                    )
+                if read_valid_grid_marker(marker_path, mode) is None:
+                    raise RuntimeError(f"UNI2 cached grid receipt is inconsistent: {marker_path}; use a fresh output directory")
+        if not primary_marker.exists():
+            if secondary_tile_out is not None and grid_marker_path(secondary_tile_out).exists():
+                raise RuntimeError("UNI2 paired cache has only a secondary completion receipt; use a fresh output directory")
             return False
         if secondary_tile_out is not None:
             secondary_marker = grid_marker_path(secondary_tile_out)
-            if not secondary_marker.exists() or read_valid_grid_marker(secondary_marker) is None:
-                return False
-            if not any(secondary_tile_out.glob(f"{tag}_embeddings_shard*.csv.gz")):
-                return False
+            if not secondary_marker.exists():
+                raise RuntimeError("UNI2 paired cache has only a primary completion receipt; use a fresh output directory")
         return True
 
     def reset_incomplete_grid(tile_out: Path, secondary_tile_out: Optional[Path], tile_tiles: Optional[Path]) -> None:
@@ -1362,9 +1820,14 @@ def main():
             "index_end": int(end_idx),
             "rows_written": int(state["total_rows"]),
             "shards": int(state["shard_idx"]),
+            "shard_files": embedding_shard_inventory(state["tile_out"], args.embedding_storage),
+            "embedding_storage": args.embedding_storage,
+            "embedding_mode": state["embedding_mode"],
             "encoder": str(args.encoder),
             "tag": str(tag),
             "paired_inner_square_mode": str(paired_mode),
+            "observation_type": str(args.observation_type),
+            "cache_contract_sha256": cache_contract_sha256,
             "completed_at_unix": time.time(),
         }
         grid_marker_path(state["tile_out"]).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
@@ -1404,7 +1867,10 @@ def main():
             images = torch.stack(items, dim=0).to(device, non_blocking=True)
             raw_feats = model.forward_features(images) if need_tokens and hasattr(model, "forward_features") else model(images)
 
-        cls_tokens, patch_tokens = extract_cls_and_patch_tokens(raw_feats)
+        cls_tokens, patch_tokens = extract_cls_and_patch_tokens(
+            raw_feats,
+            prefix_tokens_after_cls=int(adapter["prefix_tokens_after_cls"]),
+        )
         pooled = pool_from_token_parts(cls_tokens, patch_tokens, pooling_used)
         return pooled, cls_tokens, patch_tokens
 
@@ -1447,18 +1913,14 @@ def main():
                         )
 
         primary_meta_df = pd.DataFrame.from_records(batch_primary_meta)
-        append_writer_rows(primary_state, primary_meta_df, tile_feats)
+        append_embedding_rows(primary_state, primary_meta_df, tile_feats)
         if secondary_state is not None:
             secondary_records = batch_secondary_meta if paired_mode == "masked_forward" else batch_primary_meta
             secondary_meta_df = pd.DataFrame.from_records(secondary_records)
-            append_writer_rows(secondary_state, secondary_meta_df, inner_square_style_feats)
+            append_embedding_rows(secondary_state, secondary_meta_df, inner_square_style_feats)
 
         batch_primary_items, batch_secondary_items = [], []
         batch_primary_meta, batch_secondary_meta = [], []
-        if primary_state["row_count"] >= args.rows_per_csv:
-            flush_writer(primary_state)
-        if secondary_state is not None and secondary_state["row_count"] >= args.rows_per_csv:
-            flush_writer(secondary_state)
 
     # Pass 2: process grid tiles
     for tr in range(GR):
@@ -1483,8 +1945,9 @@ def main():
                 continue
             reset_incomplete_grid(tile_out, secondary_tile_out, tile_tiles)
 
-            primary_state = init_writer_state(tile_out)
-            secondary_state = init_writer_state(secondary_tile_out) if secondary_tile_out is not None else None
+            primary_state = init_embedding_writer(tile_out, tag, args.embedding_storage, args.rows_per_csv, args.embedding_mode)
+            secondary_state = (init_embedding_writer(secondary_tile_out, tag, args.embedding_storage, args.rows_per_csv, "inner_square")
+                               if secondary_tile_out is not None else None)
 
             for i in tqdm(range(s, e), desc=f"grid {tr:02d},{tc:02d}", leave=False):
                 lab = int(labels[i])
@@ -1509,6 +1972,8 @@ def main():
                 secondary_img_tile = None
 
                 if args.zero_outside_mask:
+                    if mask_reader is None:
+                        raise RuntimeError("--zero-outside-mask requires a mask reader")
                     m_tile = mask_reader.read(x0, y0, extraction_tile_size, extraction_tile_size).astype(np.int64, copy=False)
                     keep_label = (m_tile == lab)
                     keep_square = build_inner_square_mask(
@@ -1586,7 +2051,7 @@ def main():
                 tile_path = ""
                 if args.save_tiles and tile_tiles is not None:
                     sub = cell_subfolder(tile_tiles, lab, per_dir=int(args.bucket_size))
-                    tile_name = f"cell_{lab:08d}_x{x}_y{y}.{args.tiles_format}"
+                    tile_name = f"{args.observation_type}_{lab:08d}_x{x}_y{y}.{args.tiles_format}"
                     outp = sub / tile_name
                     tile_path = str(outp)
                     if args.tiles_format == "png":
@@ -1596,6 +2061,7 @@ def main():
 
                 meta = {
                     "cell_id": lab,
+                    "observation_type": str(args.observation_type),
                     "cx": x,
                     "cy": y,
                     "area_px": a,
@@ -1632,9 +2098,9 @@ def main():
                     run_batch(primary_state, secondary_state)
 
             run_batch(primary_state, secondary_state)
-            flush_writer(primary_state)
+            flush_embedding_writer(primary_state)
             if secondary_state is not None:
-                flush_writer(secondary_state)
+                flush_embedding_writer(secondary_state)
             write_grid_marker(primary_state, tr, tc, s, e)
             if secondary_state is not None:
                 write_grid_marker(secondary_state, tr, tc, s, e)
@@ -1642,13 +2108,15 @@ def main():
     def validate_complete_output(root: Path, mode_name: str) -> Dict[str, Any]:
         total_written = 0
         completed_grids = 0
+        payloads = set()
+        logical_shards = set()
         for tid in range(GR * GC):
             s, e = int(tile_starts[tid]), int(tile_ends[tid])
             if s == e:
                 continue
             tr, tc = divmod(tid, GC)
             marker_path = grid_marker_path(tile_folder(root, tr, tc))
-            marker = read_valid_grid_marker(marker_path)
+            marker = read_valid_grid_marker(marker_path, mode_name)
             if marker is None:
                 raise RuntimeError(
                     f"UNI2 {mode_name} output is incomplete or inconsistent for grid {tr:02d},{tc:02d}"
@@ -1660,31 +2128,52 @@ def main():
                 )
             total_written += int(marker["rows_written"])
             completed_grids += 1
+            payloads.add(marker_path)
+            for record in marker["shard_files"]:
+                path = marker_path.parent / record["name"]
+                logical_shards.add(path)
+                payloads.add(path)
+                if args.embedding_storage == "binary":
+                    payloads.update(binary_shard_paths(path)[1:])
         if total_written != int(N):
             raise RuntimeError(
                 f"UNI2 {mode_name} cell coverage failed: expected={int(N)} written={total_written}"
             )
+        if set(discover_embedding_shards(root, storage=args.embedding_storage)) != logical_shards:
+            raise RuntimeError("UNI2 complete output has stale or unlisted grid shards")
+        actual_markers = set(root.rglob(f".{tag}_grid_complete.json"))
+        if actual_markers != {p for p in payloads if p.name == f".{tag}_grid_complete.json"}:
+            raise RuntimeError("UNI2 complete output has stale or unlisted grid completion receipts")
         summary = {
             "encoder": str(args.encoder),
             "tag": str(tag),
             "embedding_mode": str(mode_name),
+            "embedding_storage": args.embedding_storage,
+            "payload_inventory": [{"path": p.relative_to(root).as_posix(), "sha256": sha256_file(p),
+                                   "size_bytes": p.stat().st_size} for p in sorted(payloads)],
             "paired_inner_square_mode": str(paired_mode),
             "expected_cells": int(N),
+            "expected_observations": int(N),
+            "observation_type": str(args.observation_type),
             "rows_written": int(total_written),
             "missing_cells": 0,
             "completed_grids": int(completed_grids),
             "completed_at_unix": time.time(),
+            "model_provenance": model_provenance,
+            "encoder_adapter": adapter,
+            "cache_contract_sha256": cache_contract_sha256,
+            "cache_contract": cache_contract,
         }
         (root / f".{tag}_embedding_complete.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n"
         )
         return summary
 
-    primary_summary = validate_complete_output(outdir, "tile")
-    print(f"[INFO] UNI2 tile coverage validated: {primary_summary['rows_written']}/{N}", flush=True)
+    primary_summary = validate_complete_output(outdir, args.embedding_mode)
+    print(f"[INFO] {tag} {args.embedding_mode} coverage validated: {primary_summary['rows_written']}/{N}", flush=True)
     if secondary_outdir is not None:
         secondary_summary = validate_complete_output(secondary_outdir, "inner_square")
-        print(f"[INFO] UNI2 inner_square coverage validated: {secondary_summary['rows_written']}/{N}", flush=True)
+        print(f"[INFO] {tag} inner_square coverage validated: {secondary_summary['rows_written']}/{N}", flush=True)
 
     print("🎉 Done.")
 

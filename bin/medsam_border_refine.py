@@ -4,7 +4,8 @@ import inspect
 import os
 import sys
 import time
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -37,6 +38,28 @@ class MedSAMUnavailableError(RuntimeError):
     pass
 
 
+class TileEmbeddingCache:
+    """Per-image-call exact encoder cache, disk-backed to bound accelerator RAM."""
+    def __init__(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="medsam_embeddings_")
+        self.entries = {}
+        self.encoder_calls = 0
+        self.hits = 0
+
+    def get(self, key, encode):
+        if key not in self.entries:
+            path = Path(self.directory.name) / f"tile_{len(self.entries)}.npy"
+            np.save(path, np.asarray(encode()), allow_pickle=False)
+            self.entries[key] = path
+            self.encoder_calls += 1
+        else:
+            self.hits += 1
+        return np.load(self.entries[key], mmap_mode="r", allow_pickle=False)
+
+    def close(self):
+        self.directory.cleanup()
+
+
 @dataclass(frozen=True)
 class MedSAMConfig:
     checkpoint: str = str(DEFAULT_MEDSAM_CHECKPOINT)
@@ -54,6 +77,7 @@ class MedSAMConfig:
     repo_dir: str = str(DEFAULT_MEDSAM_REPO)
     cluster_tile_size: int = 4096
     cluster_tile_overlap: int = 512
+    _embedding_cache: object = field(default=None, repr=False, compare=False)
 
 
 def _disk(radius: int):
@@ -171,9 +195,11 @@ def _iter_mask_tiles(mask: np.ndarray, tile_size: int, overlap: int) -> List[Tup
     if not mask.any():
         return []
     y0, y1, x0, x1 = _bbox_from_mask(mask, margin=0)
-    ys = _tile_starts(y0, y1, tile_size, overlap)
-    xs = _tile_starts(x0, x1, tile_size, overlap)
     h, w = mask.shape
+    # A shared image lattice makes a tile identical for every label prompt.
+    # Label-bounding-box-specific grids would prevent encoder reuse.
+    ys = [y for y in _tile_starts(0, h, tile_size, overlap) if y < y1 and y + tile_size > y0]
+    xs = [x for x in _tile_starts(0, w, tile_size, overlap) if x < x1 and x + tile_size > x0]
     windows: List[Tuple[int, int, int, int]] = []
     for yy0 in ys:
         yy1 = min(h, yy0 + max(1, int(tile_size)))
@@ -234,7 +260,7 @@ def _load_medsam_model(checkpoint: str, device: str, repo_dir: str):
     return model
 
 
-def _infer_box_prompt(crop_rgb: np.ndarray, box_xyxy: np.ndarray, config: MedSAMConfig) -> Tuple[np.ndarray, np.ndarray]:
+def _encode_image_tile(crop_rgb: np.ndarray, config: MedSAMConfig) -> np.ndarray:
     import torch
 
     model = _load_medsam_model(config.checkpoint, config.device, config.repo_dir)
@@ -242,16 +268,25 @@ def _infer_box_prompt(crop_rgb: np.ndarray, box_xyxy: np.ndarray, config: MedSAM
     tensor = torch.tensor(img_1024, dtype=torch.float32, device=config.device).permute(2, 0, 1).unsqueeze(0)
 
     with torch.inference_mode():
-        image_embedding = model.image_encoder(tensor)
+        return model.image_encoder(tensor).detach().cpu().numpy()
+
+
+def _decode_box_prompt(image_embedding, crop_shape, box_xyxy, config):
+    import torch
+
+    model = _load_medsam_model(config.checkpoint, config.device, config.repo_dir)
+    # Copy the read-only memory map before exposing it as a mutable tensor.
+    embedding_tensor = torch.as_tensor(np.array(image_embedding), device=config.device)
+    with torch.inference_mode():
         scale = np.array(
-            [1024.0 / crop_rgb.shape[1], 1024.0 / crop_rgb.shape[0], 1024.0 / crop_rgb.shape[1], 1024.0 / crop_rgb.shape[0]],
+            [1024.0 / crop_shape[1], 1024.0 / crop_shape[0], 1024.0 / crop_shape[1], 1024.0 / crop_shape[0]],
             dtype=np.float32,
         )
         box_1024 = (box_xyxy.astype(np.float32) * scale)[None, :]
         box_torch = torch.as_tensor(box_1024, dtype=torch.float32, device=config.device)[:, None, :]
         sparse_embeddings, dense_embeddings = model.prompt_encoder(points=None, boxes=box_torch, masks=None)
         low_res_logits, _ = model.mask_decoder(
-            image_embeddings=image_embedding,
+            image_embeddings=embedding_tensor,
             image_pe=model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
@@ -260,13 +295,25 @@ def _infer_box_prompt(crop_rgb: np.ndarray, box_xyxy: np.ndarray, config: MedSAM
         prob = torch.sigmoid(low_res_logits)
         prob = torch.nn.functional.interpolate(
             prob,
-            size=crop_rgb.shape[:2],
+            size=crop_shape[:2],
             mode="bilinear",
             align_corners=False,
         )
         prob_np = prob.squeeze().detach().cpu().numpy().astype(np.float32)
     pred_mask = prob_np >= 0.5
     return pred_mask, prob_np
+
+
+def _infer_box_prompt(crop_rgb: np.ndarray, box_xyxy: np.ndarray, config: MedSAMConfig) -> Tuple[np.ndarray, np.ndarray]:
+    cache = config._embedding_cache
+    if cache is None:
+        embedding = _encode_image_tile(crop_rgb, config)
+    else:
+        # Valid only within a single immutable input image call; cache lifetime
+        # never crosses images. Views at identical bounds share pointer/strides.
+        key = (crop_rgb.__array_interface__["data"][0], crop_rgb.shape, crop_rgb.strides, crop_rgb.dtype.str)
+        embedding = cache.get(key, lambda: _encode_image_tile(crop_rgb, config))
+    return _decode_box_prompt(embedding, crop_rgb.shape, box_xyxy, config)
 
 
 def _upsample_bool_mask(mask: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
@@ -550,8 +597,25 @@ def run_medsam_border_refine(
     baseline_tissue_mask: np.ndarray,
     config: MedSAMConfig,
     baseline_label_map: np.ndarray | None = None,
+    allowed_support_mask: np.ndarray | None = None,
+    editable_mask: np.ndarray | None = None,
+    protected_labels: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray | None, float, Dict[str, object], Dict[str, np.ndarray]]:
+    encoder_cache = TileEmbeddingCache()
+    config = replace(config, _embedding_cache=encoder_cache)
+    try:
+        return _run_medsam_border_refine(image, seed_labels, baseline_tissue_mask, config,
+                                        baseline_label_map, allowed_support_mask,
+                                        editable_mask, protected_labels)
+    finally:
+        encoder_cache.close()
+
+
+def _run_medsam_border_refine(image, seed_labels, baseline_tissue_mask, config,
+                              baseline_label_map, allowed_support_mask,
+                              editable_mask, protected_labels):
     start = time.perf_counter()
+    encoder_cache = config._embedding_cache
     seed_labels = np.asarray(seed_labels)
     _log(f"start image_shape={getattr(image, 'shape', None)} seed_shape={seed_labels.shape} baseline_shape={np.asarray(baseline_tissue_mask).shape} device={config.device}")
     label_dtype = seed_labels.dtype
@@ -566,6 +630,25 @@ def run_medsam_border_refine(
     baseline = np.asarray(baseline_tissue_mask).astype(bool)
     if baseline.shape != seed_binary.shape:
         raise ValueError(f"Baseline mask and seed mask shape mismatch: {baseline.shape} vs {seed_binary.shape}")
+    if editable_mask is not None and np.shape(editable_mask) != baseline.shape:
+        raise ValueError("Editable mask shape differs from baseline")
+    if protected_labels is not None and np.shape(protected_labels) != baseline.shape:
+        raise ValueError("Protected label shape differs from baseline")
+    if allowed_support_mask is None:
+        allowed_support = np.ones(seed_binary.shape, dtype=bool)
+    else:
+        allowed_support = np.asarray(allowed_support_mask).astype(bool)
+        if allowed_support.shape != seed_binary.shape:
+            raise ValueError(
+                f"Allowed-support mask and seed mask shape mismatch: {allowed_support.shape} vs {seed_binary.shape}"
+            )
+    excluded_seed_pixels = int(np.count_nonzero(seed_binary & ~allowed_support))
+    excluded_baseline_pixels = int(np.count_nonzero(baseline & ~allowed_support))
+    if excluded_seed_pixels:
+        seed_labels = seed_labels.copy()
+        seed_labels[~allowed_support] = 0
+        seed_binary = seed_labels > 0
+    baseline &= allowed_support
 
     if baseline_label_map is not None:
         baseline_labels = np.asarray(baseline_label_map).astype(label_dtype, copy=False)
@@ -586,7 +669,9 @@ def run_medsam_border_refine(
     best_score = np.full(baseline.shape, -np.inf, dtype=score_dtype)
     best_score[baseline] = 0.25
     probability_map = np.zeros(baseline.shape, dtype=score_dtype) if config.save_debug else None
-    background_mask = _obvious_background_mask(image)
+    # GrandQC empty/background pixels are hard negatives throughout refinement,
+    # not merely a final output clip.
+    background_mask = _obvious_background_mask(image) | ~allowed_support
     region_meta: List[Dict[str, object]] = []
 
     protected_core = np.zeros(baseline.shape, dtype=bool)
@@ -610,9 +695,18 @@ def run_medsam_border_refine(
             continue
 
         label_core = _build_protected_core(label_support, label_seed, int(config.core_erosion_radius))
+        if editable_mask is not None:
+            # Unknown interiors must not be re-protected by an erosion of the
+            # pre-refinement grown labels. Accepted prompt seeds remain fixed.
+            label_core &= ~np.asarray(editable_mask, bool) | label_seed
         label_outer = _binary_dilate(label_support, int(config.outer_dilation_radius))
         label_outer |= label_support
+        label_outer &= allowed_support
         label_band = label_outer & ~label_core
+        if editable_mask is not None:
+            if np.shape(editable_mask) != baseline.shape:
+                raise ValueError("Editable mask shape differs from baseline")
+            label_band &= np.asarray(editable_mask, dtype=bool)
 
         protected_core |= label_core
         editable_band |= label_band
@@ -702,11 +796,13 @@ def run_medsam_border_refine(
         _log(f"cluster {lid}: done total_sec={time.perf_counter() - label_start:.1f}")
 
     raw_medsam_labels = final_labels.copy()
+    raw_medsam_labels[~allowed_support] = 0
 
     final_mask = _conservative_cleanup(final_labels > 0, baseline, seed_binary, protected_core, editable_band, outer_envelope, background_mask, config)
     final_labels[~final_mask] = 0
     final_labels[seed_binary] = seed_labels[seed_binary]
     final_labels[protected_core_labels > 0] = protected_core_labels[protected_core_labels > 0]
+    final_labels[~allowed_support] = 0
 
     strict_min_area = max(int(config.min_object_size) + 2000, int(round(int(config.min_object_size) * 1.35)))
     final_labels = _apply_white_background_exclusion(final_labels, background_mask, seed_labels, protected_core_labels)
@@ -721,6 +817,7 @@ def run_medsam_border_refine(
     final_mask = _prune_thin_structures(final_mask, seed_binary, protected_core, max(3, int(config.smooth_radius) + 2))
     final_mask[np.asarray(background_mask).astype(bool) & ~seed_binary & ~protected_core] = False
     final_mask = ndi.binary_fill_holes(final_mask)
+    final_mask &= allowed_support
     final_mask |= seed_binary
     final_mask |= protected_core
     final_labels[~final_mask] = 0
@@ -738,8 +835,22 @@ def run_medsam_border_refine(
     final_labels = _apply_white_background_exclusion(final_labels, background_mask, seed_labels, protected_core_labels)
     final_labels[seed_binary] = seed_labels[seed_binary]
     final_labels[protected_core_labels > 0] = protected_core_labels[protected_core_labels > 0]
+    final_labels[~allowed_support] = 0
 
+    if editable_mask is not None:
+        final_labels[~np.asarray(editable_mask, bool)] = baseline_labels[~np.asarray(editable_mask, bool)]
+    if protected_labels is not None:
+        protected = np.asarray(protected_labels)
+        if protected.shape != final_labels.shape:
+            raise ValueError("Protected label shape differs from baseline")
+        final_labels[protected > 0] = protected[protected > 0]
+    final_labels[~allowed_support] = 0
     final_mask = final_labels > 0
+    final_outside_support_pixels = int(np.count_nonzero(final_mask & ~allowed_support))
+    if final_outside_support_pixels:
+        raise RuntimeError(
+            f"MedSAM support contract violated: {final_outside_support_pixels} final pixels lie outside allowed support"
+        )
     runtime = time.perf_counter() - start
     meta: Dict[str, object] = {
         "device": config.device,
@@ -751,8 +862,16 @@ def run_medsam_border_refine(
         "final_pixels": int(final_mask.sum()),
         "protected_core_pixels": int(protected_core.sum()),
         "editable_band_pixels": int(editable_band.sum()),
+        "allowed_support_pixels": int(allowed_support.sum()),
+        "allowed_empty_pixels": int((~allowed_support).sum()),
+        "allowed_support_excluded_seed_pixels": int(excluded_seed_pixels),
+        "allowed_support_excluded_baseline_pixels": int(excluded_baseline_pixels),
+        "final_outside_allowed_support_pixels": int(final_outside_support_pixels),
         "runtime_sec": float(runtime),
         "regions": region_meta,
+        "image_encoder_calls": encoder_cache.encoder_calls,
+        "image_embedding_cache_hits": encoder_cache.hits,
+        "image_embedding_cache": "per-image-call disk-backed exact embeddings on shared tile lattice",
     }
     artifacts = {
         "protected_core": protected_core.astype(np.uint8),
@@ -765,6 +884,7 @@ def run_medsam_border_refine(
         artifacts["baseline_labels"] = baseline_labels.astype(label_dtype, copy=False)
         artifacts["protected_core_labels"] = protected_core_labels.astype(label_dtype, copy=False)
         artifacts["outer_envelope"] = outer_envelope.astype(np.uint8)
+        artifacts["allowed_support_mask"] = allowed_support.astype(np.uint8)
         artifacts["final_mask"] = final_mask.astype(np.uint8)
         artifacts["probability_map"] = probability_map.astype(np.float16, copy=False) if probability_map is not None else np.zeros((1,), dtype=np.float16)
     prob_out = probability_map.astype(np.float16, copy=False) if probability_map is not None else None

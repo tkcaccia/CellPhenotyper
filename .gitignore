@@ -48,6 +48,15 @@ singularity-cellphenotyper-*.sif
 
 # runtime outputs
 *.html
+!docs/pipeline_metro/*.html
+!resources/cell_inspector.html
+
+# local implementation-validation artifacts
+.qc/
+.venv-spatial/
+.venv-spatialdata/
+.venv-marker-tests/
 
 # local TensorFlow build artifacts used for maintainer-only GPU image builds
 docker/wheels/
+.gpu_locks/

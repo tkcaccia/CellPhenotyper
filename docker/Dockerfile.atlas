@@ -1,0 +1,21 @@
+# Optional overlay on an explicitly selected existing CPU or GPU runtime.
+# For release builds use a platform-specific repository@sha256:... reference.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG BASE_IMAGE
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+LABEL org.opencontainers.image.base.name="${BASE_IMAGE}"
+WORKDIR /opt/cellphenotyper
+COPY main.nf cell_profiles.nf nextflow.config nextflow_schema.json pipeline_paramers.yml requirements-atlas.txt requirements-spatialdata.txt /opt/cellphenotyper/
+COPY bin /opt/cellphenotyper/bin
+COPY lib /opt/cellphenotyper/lib
+COPY modules /opt/cellphenotyper/modules
+COPY subworkflows /opt/cellphenotyper/subworkflows
+COPY resources /opt/cellphenotyper/resources
+COPY docker /opt/cellphenotyper/docker
+COPY docs /opt/cellphenotyper/docs
+COPY examples /opt/cellphenotyper/examples
+RUN bash /opt/cellphenotyper/docker/install_atlas_runtime.sh /opt/cellphenotyper
+ENV CELLPHENOTYPER_ATLAS_PREFIX=/opt/micromamba/envs/cellphenotyper-atlas
+# Do not alter the base ML PATH, LD_LIBRARY_PATH, CUDA settings or environment.
+CMD ["/bin/bash"]

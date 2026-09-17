@@ -1,11 +1,14 @@
 process MAP_CELLS_TO_ROI_POLYGONS {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'map_cells_to_roi_polygons', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([objects_csv, roi_geojson, shift_json]) }
     tag "${sample_id}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/07_cell_assignments/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.assign_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.assign_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.assign_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.assign_memory_gb as int))} GB" }
     time { params.assign_time as String }
 
     input:
@@ -22,6 +25,8 @@ process MAP_CELLS_TO_ROI_POLYGONS {
     def assign_script = "${projectDir}/${params.assign_script}"
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
 
     python "${assign_script}" \\
       --objects "${objects_csv}" \\
@@ -39,6 +44,8 @@ process MAP_CELLS_TO_ROI_POLYGONS {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     touch "${sample_id}_objects_assigned.csv"
     """
 }

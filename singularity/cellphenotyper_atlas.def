@@ -1,0 +1,33 @@
+Bootstrap: docker
+From: {{ BASE_IMAGE }}
+
+# BASE_IMAGE has no default: pass an explicit, architecture-matched base digest.
+# Requires Apptainer definition-file templating (documented in Apptainer 1.2+).
+%files
+  main.nf /opt/cellphenotyper/main.nf
+  cell_profiles.nf /opt/cellphenotyper/cell_profiles.nf
+  nextflow.config /opt/cellphenotyper/nextflow.config
+  nextflow_schema.json /opt/cellphenotyper/nextflow_schema.json
+  pipeline_paramers.yml /opt/cellphenotyper/pipeline_paramers.yml
+  requirements-atlas.txt /opt/cellphenotyper/requirements-atlas.txt
+  requirements-spatialdata.txt /opt/cellphenotyper/requirements-spatialdata.txt
+  bin /opt/cellphenotyper/bin
+  lib /opt/cellphenotyper/lib
+  modules /opt/cellphenotyper/modules
+  subworkflows /opt/cellphenotyper/subworkflows
+  resources /opt/cellphenotyper/resources
+  docker /opt/cellphenotyper/docker
+  docs /opt/cellphenotyper/docs
+  examples /opt/cellphenotyper/examples
+
+%post
+  bash /opt/cellphenotyper/docker/install_atlas_runtime.sh /opt/cellphenotyper
+
+%environment
+  export CELLPHENOTYPER_ATLAS_PREFIX=/opt/micromamba/envs/cellphenotyper-atlas
+
+%test
+  /usr/local/bin/cellphenotyper-atlas-python /opt/cellphenotyper/docker/verify_atlas_runtime.py --source-root /opt/cellphenotyper --requirements /opt/cellphenotyper/requirements-atlas.txt --strict-isolation
+
+%runscript
+  exec "$@"

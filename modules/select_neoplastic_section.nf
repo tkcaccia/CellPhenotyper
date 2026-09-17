@@ -1,10 +1,13 @@
 process SELECT_NEOPLASTIC_SECTION {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'select_neoplastic_section', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([cluster_geojson, objects_csv, image_tif, shift_json]) }
     tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/16_neoplastic_section/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.neoplastic_section_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.neoplastic_section_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.neoplastic_section_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(4, params.neoplastic_section_memory_gb as int)))} GB" }
     time { params.neoplastic_section_time as String }
 
     input:
@@ -29,6 +32,8 @@ process SELECT_NEOPLASTIC_SECTION {
     def requireFlag = (params.neoplastic_section_require_cells as boolean) ? '--require-neoplastic' : ''
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     echo "[INFO] Neoplastic section code fingerprint: ${codeFingerprint}"
     python "${scriptPath}" \
       --cluster-geojson "${cluster_geojson}" --objects "${objects_csv}" \
@@ -44,6 +49,8 @@ process SELECT_NEOPLASTIC_SECTION {
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "neoplastic_${sample_id}_${cluster_variant}"
     touch "neoplastic_${sample_id}_${cluster_variant}/selected_section.ome.tif"
     touch "neoplastic_${sample_id}_${cluster_variant}/selected_section_mask.tif"

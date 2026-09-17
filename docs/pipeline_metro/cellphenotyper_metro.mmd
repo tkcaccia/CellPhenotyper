@@ -1,0 +1,172 @@
+%% CellPhenotyper route-oriented metro map.
+%% The figure intentionally shows biological analysis routes rather than Nextflow plumbing.
+%%metro title: CellPhenotyper
+%%metro style: nfcore
+%%metro mode: light
+%%metro line_order: definition
+%%metro line_spread: bundle
+%%metro legend: bottom | canvas
+%%metro directional: true
+%%metro compact_offsets: true
+%%metro center_ports: true
+%%metro fold_threshold: 80
+%%metro section_x_gap: 70
+%%metro section_y_gap: 92
+%%metro track_gap: 2
+%%metro off_track: cell_route
+%%metro line: source | H&E image intake | #253746
+%%metro line: whole_tissue | Whole-tissue crop | #009E73
+%%metro line: roi_tissue | Optional ROI-restricted crop | #E64B35 | dashed
+%%metro line: analysis | Analysis-ready tissue | #253746
+%%metro line: tissue_grid | A · Tissue-domain morphology | #3C5488
+%%metro line: stardist_cells | B · StarDist detections | #4DBBD5
+%%metro line: monusac_cells | B · HoVer-Net MoNuSAC detections | #8491B4
+%%metro line: cellvit_cells | B · CellViT++ detections | #DC0000
+%%metro line: cell_morphology | B1 · Cell-centred morphology | #7E6148
+%%metro line: virtual_markers | B2 · Virtual marker phenotype | #F39B7F
+%%metro line: section_models | Optional section-level models | #6F42C1 | dashed
+
+%%metro file: input_image | WSI | H&E whole-slide image
+%%metro files: marker_quantification | OME-TIFF, CSV | Virtual mIHC and per-cell marker measurements
+%%metro files: cluster_geojson | GeoJSON | Tissue phenotype regions
+%%metro files: pathofmpred | CSV, HTML, PNG | Section-level research predictions
+
+%%metro process: prepare_ometiff | PREPARE_INPUT_OMETIFF$
+%%metro process: grandqc | RUN_GRANDQC_ARTIFACT_ANALYSIS$
+%%metro process: roi_crop | PREPARE_ROI_GEOJSON$
+%%metro process: whole_crop | PREPARE_ANALYSIS_CROP$
+%%metro process: roi_crop | PREPARE_ANALYSIS_CROP$
+%%metro process: tissue_gate | CROP_GRANDQC_CLEAN_MASK$
+%%metro process: grid_tiling | BUILD_UNI2_SPATIAL_GRID$
+%%metro process: grid_uni2 | EXTRACT_UNI2_EMBEDDINGS_SHARED$
+%%metro process: grid_kodama | RUN_KODAMA_ANALYSIS$
+%%metro process: grid_leiden | RUN_RCODE_CLUSTERING$
+%%metro process: stardist | RUN_STARDIST_ROI_SEGMENTATION$
+%%metro process: hovernet | RUN_HOVERNET_MONUSAC$
+%%metro process: cellvitpp | RUN_CELLVITPP$
+%%metro process: consensus | BUILD_CELL_CONSENSUS$
+%%metro process: cell_tiling | EXTRACT_UNI2_CELL_AUXILIARY$
+%%metro process: cell_uni2 | EXTRACT_UNI2_EMBEDDINGS$
+%%metro process: cell_uni2 | EXTRACT_UNI2_CELL_AUXILIARY$
+%%metro process: cell_kodama | RUN_KODAMA_CELL_AUXILIARY$
+%%metro process: cell_leiden | RUN_RCODE_CLUSTERING$
+%%metro process: gigatime | RUN_GIGATIME_ON_CROP$
+%%metro process: gigatime | EXPORT_GIGATIME_OMETIFF$
+%%metro process: marker_quantification | QUANTIFY_GIGATIME_INTENSITY$
+%%metro process: marker_kodama | RUN_GIGATIME_KODAMA$
+%%metro process: cell_cluster_mask | LABELS_TO_CLUSTER_MASK$
+%%metro process: grid_cluster_mask | GRID_CLUSTERS_TO_MASK$
+%%metro process: grow_to_tissue | GROW_TO_TISSUE$
+%%metro process: medsam | REFINE_GROWN_TISSUE_MEDSAM$
+%%metro process: cluster_geojson | MASK_TO_GEOJSON$
+%%metro process: neoplastic_section | SELECT_NEOPLASTIC_SECTION$
+%%metro process: titan | EXTRACT_TITAN_SECTION_EMBEDDING$
+%%metro process: pathofmpred | RUN_PATHOFMPRED$
+
+graph LR
+    subgraph input_crop [1 · Image intake and tissue selection]
+        %%metro direction: LR
+        %%metro grid: input_crop | 0,0,2,1
+        input_image([H&E whole-slide image])
+        prepare_ometiff([MPP-aware OME-TIFF])
+        grandqc([GrandQC tissue and artifact mask])
+        whole_crop([Crop to usable tissue])
+        roi_crop([ROI GeoJSON: crop to usable tissue ∩ ROI])
+        tissue_gate([Unified analysis crop])
+        route_split([Route selection])
+
+        input_image -->|source| prepare_ometiff
+        prepare_ometiff -->|source| grandqc
+        grandqc -->|whole_tissue| whole_crop
+        grandqc -->|roi_tissue| roi_crop
+        whole_crop -->|whole_tissue| tissue_gate
+        roi_crop -->|roi_tissue| tissue_gate
+        tissue_gate -->|analysis| route_split
+    end
+
+    subgraph pathway_a [2A · Pathway A — tissue-domain morphology]
+        %%metro direction: LR
+        %%metro grid: pathway_a | 1,0,1,2
+        grid_tiling([Overlapping grid; adjacent inner cores])
+        grid_uni2([UNI-2: tile + inner-centre features])
+        grid_kodama([Grid PCA + KODAMA])
+        grid_leiden([Grid Leiden phenotypes])
+
+        grid_tiling -->|tissue_grid| grid_uni2
+        grid_uni2 -->|tissue_grid| grid_kodama
+        grid_kodama -->|tissue_grid| grid_leiden
+    end
+
+    subgraph pathway_b_detection [2B · Pathway B — parallel cell detection]
+        %%metro direction: LR
+        %%metro grid: pathway_b_detection | 1,1,1,1
+        %%metro exit: right | cell_morphology
+        stardist([StarDist])
+        hovernet([HoVer-Net MoNuSAC])
+        cellvitpp([CellViT++])
+        consensus([Role-aware instance fusion])
+        cell_route([Cell morphology])
+        gigatime([GigaTIME virtual mIHC])
+        marker_quantification([Nuclear + cell-region marker quantification])
+        marker_kodama([Marker PCA + KODAMA])
+
+        stardist -->|stardist_cells| consensus
+        hovernet -->|monusac_cells| consensus
+        cellvitpp -->|cellvit_cells| consensus
+        consensus -->|cell_morphology| cell_route
+        consensus -->|virtual_markers| gigatime
+        gigatime -->|virtual_markers| marker_quantification
+        marker_quantification -->|virtual_markers| marker_kodama
+    end
+
+    subgraph pathway_b_cell_features [3B1 · Cell-centred morphology]
+        %%metro direction: LR
+        %%metro grid: pathway_b_cell_features | 2,1,1,1
+        %%metro entry: left | cell_morphology
+        cell_tiling([Cell-centred tiles])
+        cell_uni2([UNI-2: tile + 90 px inner-square])
+        cell_kodama([Cell PCA + KODAMA])
+        cell_leiden([Cell Leiden phenotypes])
+
+        cell_tiling -->|cell_morphology| cell_uni2
+        cell_uni2 -->|cell_morphology| cell_kodama
+        cell_kodama -->|cell_morphology| cell_leiden
+    end
+
+    subgraph tissue_segmentation [4 · Tissue phenotype reconstruction]
+        %%metro direction: LR
+        %%metro grid: tissue_segmentation | 3,0,2,1
+        morphology_labels([Morphology phenotype labels])
+        cell_cluster_mask([Rasterize cell phenotypes])
+        grid_cluster_mask([Rasterize grid phenotypes])
+        grow_to_tissue([Grow sparse cell labels through tissue])
+        medsam([GPU MedSAM boundary refinement])
+        cluster_geojson([Tissue phenotype GeoJSON])
+
+        morphology_labels -->|cell_morphology| cell_cluster_mask
+        morphology_labels -->|tissue_grid| grid_cluster_mask
+        cell_cluster_mask -->|cell_morphology| grow_to_tissue
+        grow_to_tissue -->|cell_morphology| medsam
+        grid_cluster_mask -->|tissue_grid| medsam
+        medsam -->|cell_morphology,tissue_grid| cluster_geojson
+    end
+
+    subgraph optional_interpretation [5 · Optional section-level interpretation]
+        %%metro direction: LR
+        %%metro grid: optional_interpretation | 4,0,2,1
+        neoplastic_section([Select neoplastic-enriched section])
+        titan([CONCH features + TITAN])
+        pathofmpred([PathoFMPred])
+
+        neoplastic_section -->|section_models| titan
+        titan -->|section_models| pathofmpred
+    end
+
+    route_split -->|tissue_grid| grid_tiling
+    route_split -->|stardist_cells| stardist
+    route_split -->|monusac_cells| hovernet
+    route_split -->|cellvit_cells| cellvitpp
+    cell_route -->|cell_morphology| cell_tiling
+    grid_leiden -->|tissue_grid| morphology_labels
+    cell_leiden -->|cell_morphology| morphology_labels
+    cluster_geojson -->|section_models| neoplastic_section

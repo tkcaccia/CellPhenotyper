@@ -86,6 +86,9 @@ RUN set -euo pipefail && \
 WORKDIR /opt/cellphenotyper
 COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md /opt/cellphenotyper/
 COPY bin /opt/cellphenotyper/bin
+COPY cell_profiles.nf nextflow_schema.json requirements-atlas.txt requirements-spatialdata.txt /opt/cellphenotyper/
+COPY lib /opt/cellphenotyper/lib
+COPY resources /opt/cellphenotyper/resources
 COPY modules /opt/cellphenotyper/modules
 COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker

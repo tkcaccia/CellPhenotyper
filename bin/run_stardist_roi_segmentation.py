@@ -44,6 +44,9 @@ from typing import Any, Dict, Iterable, List, Tuple, Optional
 import numpy as np
 import tifffile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hardware_runtime import query_gpu_memory_mib
+
 
 def _safe_float(value) -> float | None:
     if value is None:
@@ -147,15 +150,72 @@ def write_full_labels_zarr(full_out: Path, labels_crop: np.ndarray, x0: int, y0:
 
 import zarr
 
-STARDIST_AVAILABLE = True
+from model_provenance import model_bundle_records
+
+STARDIST_AVAILABLE = False
 STARDIST_IMPORT_ERROR = None
-try:
-    # IMPORTANT: import StarDist early (per Squidpy tutorial)
-    from stardist.models import StarDist2D
-except Exception as e:
+StarDist2D = None
+_STARDIST_RUNTIME_INITIALIZED = False
+
+
+def configure_tensorflow_device(requested: str, tf_module=None) -> str:
+    """Apply an explicit device before importing/initializing a StarDist model.
+
+    CPU hides every TensorFlow GPU, including Metal plugins. CUDA requires a
+    CUDA-capable TensorFlow build and visible GPU; it never falls back to CPU.
+    Standalone ``auto`` deliberately preserves TensorFlow's existing behavior.
+    """
+    requested = str(requested).strip().lower()
+    if requested not in {"auto", "cpu", "cuda"}:
+        raise ValueError("StarDist device must be auto, cpu, or cuda")
+    if requested == "auto":
+        return requested
+    if tf_module is None:
+        import tensorflow as tf_module
+    if requested == "cpu":
+        devices = []
+    else:
+        if not tf_module.test.is_built_with_cuda():
+            raise RuntimeError("StarDist requested CUDA, but TensorFlow is not built with CUDA support")
+        devices = tf_module.config.list_physical_devices("GPU")
+        if not devices:
+            raise RuntimeError("StarDist requested CUDA, but TensorFlow has no visible CUDA GPU")
+    try:
+        tf_module.config.set_visible_devices(devices, "GPU")
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Cannot apply explicit StarDist {requested} device after TensorFlow device initialization"
+        ) from exc
+    visible = tf_module.config.get_visible_devices("GPU")
+    if (requested == "cpu" and visible) or (requested == "cuda" and not visible):
+        raise RuntimeError(f"TensorFlow did not honor explicit StarDist {requested} device selection")
+    return requested
+
+
+def initialize_stardist_runtime(device: str = "auto") -> bool:
+    """Load the optional runtime only after the concrete device is configured."""
+    global STARDIST_AVAILABLE, STARDIST_IMPORT_ERROR, StarDist2D, render_label
+    global _STARDIST_RUNTIME_INITIALIZED
+    _STARDIST_RUNTIME_INITIALIZED = True
     STARDIST_AVAILABLE = False
-    STARDIST_IMPORT_ERROR = e
-    StarDist2D = None
+    STARDIST_IMPORT_ERROR = None
+    try:
+        configure_tensorflow_device(device)
+    except ImportError as exc:
+        # Preserve the existing explicit precomputed-label fallback when the
+        # optional inference framework is absent. Device errors do not fallback.
+        STARDIST_IMPORT_ERROR = exc
+        return False
+    try:
+        from stardist.models import StarDist2D as model_class
+        from stardist.plot import render_label as label_renderer
+    except Exception as exc:
+        STARDIST_IMPORT_ERROR = exc
+        return False
+    StarDist2D = model_class
+    render_label = label_renderer
+    STARDIST_AVAILABLE = True
+    return True
 
 def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
     """
@@ -180,6 +240,35 @@ def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
     return candidates
 
 
+def stardist_model_dir(model_name: str) -> Optional[Path]:
+    candidates = _local_stardist_candidates(model_name)
+    default_root = Path.home() / ".keras" / "models" / "StarDist2D"
+    for name in (model_name, f"python_{model_name}"):
+        candidate = default_root / name
+        if candidate.is_dir() and (str(default_root), name) not in candidates:
+            candidates.append((str(default_root), name))
+    for basedir, name in candidates:
+        candidate = Path(basedir) / name
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def stardist_model_provenance(model_name: str, used_model: bool) -> Dict[str, Any]:
+    model_dir = stardist_model_dir(model_name) if used_model else None
+    standard_release = model_name in {
+        "2D_versatile_he", "2D_versatile_fluo", "2D_paper_dsb2018", "2D_demo"
+    }
+    return {
+        "used_model": bool(used_model),
+        "source_repository": "https://github.com/stardist/stardist",
+        "requested_revision": model_name,
+        "resolved_revision": "release:stardist-models-v0.1" if standard_release and model_dir else None,
+        "cache_path": str(model_dir) if model_dir else None,
+        "checkpoints": model_bundle_records(model_dir) if model_dir else [],
+    }
+
+
 def load_stardist_model_filtered(model_name: str):
     """
     Load a pretrained StarDist model but suppress the line:
@@ -187,6 +276,8 @@ def load_stardist_model_filtered(model_name: str):
     Those values are the model's recommended defaults from thresholds.json and are NOT used
     if you pass your own prob_thresh/nms_thresh to predict_instances().
     """
+    if not _STARDIST_RUNTIME_INITIALIZED:
+        initialize_stardist_runtime()
     if not STARDIST_AVAILABLE:
         raise RuntimeError(f"StarDist import failed: {STARDIST_IMPORT_ERROR}")
 
@@ -1318,27 +1409,10 @@ def estimate_rgb_percentiles(reader: CropSourceReader, p_lo: float = 1.0, p_hi: 
 
 def detect_gpu_memory_gib() -> Optional[float]:
     try:
-        out = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        ).strip()
+        usable_mib, _ = query_gpu_memory_mib(0)
     except Exception:
         return None
-    if not out:
-        return None
-    first = out.splitlines()[0].strip()
-    if not first:
-        return None
-    try:
-        return float(first) / 1024.0
-    except Exception:
-        return None
+    return float(usable_mib) / 1024.0
 
 
 def build_big_block_candidates(requested_block_size: int,
@@ -1490,6 +1564,8 @@ def main() -> None:
 
     ap.add_argument("--model", default="auto",
                     help="auto | 2D_versatile_he | 2D_versatile_fluo | 2D_paper_dsb2018 | 2D_demo")
+    ap.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
+                    help="Inference device. Explicit cpu disables all TensorFlow GPUs (including Metal); cuda requires CUDA. Standalone default auto preserves TensorFlow selection.")
     ap.add_argument("--prob", type=float, default=0.48, help="StarDist prob_thresh (higher = fewer objects)")
     ap.add_argument("--nms", type=float, default=0.30, help="StarDist nms_thresh")
     ap.add_argument("--min-area", type=int, default=0,
@@ -1543,8 +1619,11 @@ def main() -> None:
     ap.add_argument("--max-polygons", type=int, default=0,
                     help="Limit polygons written when --write-polygons (0 = no limit)")
     ap.add_argument("--pad", type=int, default=200, help="Fixed padding (pixels) added on each side of the ROI crop bbox (default 200).")
+    ap.add_argument("--source-shift", default="", help="Shift JSON for a pre-created shared detector crop.")
+    ap.add_argument("--clean-tissue-mask", default="", help="Crop-aligned GrandQC clean-tissue mask used to filter detections.")
 
     args = ap.parse_args()
+    initialize_stardist_runtime(args.device)
 
     in_path = Path(args.in_path)
     roi_path = Path(args.roi)
@@ -1660,15 +1739,28 @@ def main() -> None:
             log("Deferring crop TIFF creation until after blockwise StarDist inference.")
 
         # ---- 3) save shift info for future mapping ----
+        orig_x0, orig_y0 = int(x0), int(y0)
+        full_width, full_height = int(W0), int(H0)
+        original_input = str(in_path)
+        if args.source_shift:
+            parent_shift = json.loads(Path(args.source_shift).read_text())
+            parent_offset = parent_shift.get("offset_crop_to_original", {})
+            orig_x0 += int(parent_offset.get("dx", 0))
+            orig_y0 += int(parent_offset.get("dy", 0))
+            parent_full = parent_shift.get("full_size", {})
+            full_width = int(parent_full.get("width", full_width))
+            full_height = int(parent_full.get("height", full_height))
+            original_input = str(parent_shift.get("input_image", original_input))
+            source_mpp = parent_shift.get("source_mpp", parent_shift.get("microns_per_pixel", source_mpp))
         shift_info = {
-            "input_image": str(in_path),
+            "input_image": original_input,
             "roi_input_geojson": str(roi_path),
             "crop_tif": str(crop_tif),
             "crop_bbox_xyxy": {"x0": int(x0), "y0": int(y0), "x1": int(x1), "y1": int(y1)},
             "pad_pixels_used": int(pad_used),
-            "offset_crop_to_original": {"dx": int(x0), "dy": int(y0)},
+            "offset_crop_to_original": {"dx": int(orig_x0), "dy": int(orig_y0)},
             "crop_size": {"width": int(crop_w), "height": int(crop_h)},
-            "full_size": {"width": int(W0), "height": int(H0)},
+            "full_size": {"width": full_width, "height": full_height},
         }
         if source_mpp and source_mpp > 0:
             shift_info["source_mpp"] = float(source_mpp)
@@ -1776,40 +1868,9 @@ def main() -> None:
             log("Writing large-image QC preview with bounded tiled reads.")
             write_preview_big(crop_reader, labels_arr, (crop_h, crop_w), outdir, max_side=int(args.big_preview_max_side))
             gc.collect()
-            if args.write_full_labels:
-                fmt = str(args.full_format).strip().lower()
-                out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
-                if fmt == "zarr":
-                    write_full_labels_from_crop(
-                        labels_crop=labels_arr,
-                        full_h=H0,
-                        full_w=W0,
-                        x0=x0, y0=y0, x1=x1, y1=y1,
-                        out_path=out_full,
-                        fmt=fmt,
-                        chunk=args.full_chunk,
-                        compression="zlib",
-                        allow_huge_tif=args.allow_huge_tif,
-                    )
-                else:
-                    log("[WARN] Skipping dense full-size TIFF labels export in large-image mode. Use --full-format zarr if a later stage requires full-canvas labels.")
         else:
             assert labels_np is not None and img_yxc is not None and roi_mask is not None
             tifffile.imwrite(outdir / "labels.tif", labels_np, compression="zlib")
-            if args.write_full_labels:
-                fmt = args.full_format
-                out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
-                write_full_labels_from_crop(
-                    labels_crop=labels_np,
-                    full_h=H0,
-                    full_w=W0,
-                    x0=x0, y0=y0, x1=x1, y1=y1,
-                    out_path=out_full,
-                    fmt=fmt,
-                    chunk=args.full_chunk,
-                    compression="zlib",
-                    allow_huge_tif=args.allow_huge_tif,
-                )
 
             props = regionprops_table(
                 labels_np,
@@ -1825,6 +1886,53 @@ def main() -> None:
             })
             save_qc_plots(img_yxc, labels_np, roi_mask, outdir, max_side=int(args.big_preview_max_side))
 
+        # Filter every StarDist output before it can enter consensus or feature extraction.
+        if args.clean_tissue_mask:
+            from grandqc_mask import CropCleanTissueMask, filter_labels_in_place
+            clean_mask = CropCleanTissueMask(args.clean_tissue_mask, outdir / "shift.json")
+            before_count = int(len(df))
+            keep_rows = clean_mask.keep_xy(zip(df["x"], df["y"])) if not df.empty else np.zeros(0, dtype=bool)
+            df = df.loc[keep_rows].copy()
+            keep_labels = set(df["label"].astype(int).tolist()) if not df.empty else set()
+            if use_big:
+                filter_labels_in_place(labels_arr, keep_labels, (crop_h, crop_w), block_size=int(args.big_tiff_tile))
+                write_tiled_tiff_2d(
+                    outdir / "labels.tif", labels_arr, shape=(crop_h, crop_w), dtype=np.uint32,
+                    tile_hw=int(args.big_tiff_tile), compression="zlib",
+                )
+                write_preview_big(crop_reader, labels_arr, (crop_h, crop_w), outdir, max_side=int(args.big_preview_max_side))
+            else:
+                assert labels_np is not None and img_yxc is not None and roi_mask is not None
+                filter_labels_in_place(labels_np, keep_labels, (crop_h, crop_w), block_size=int(args.big_tiff_tile))
+                tifffile.imwrite(outdir / "labels.tif", labels_np, compression="zlib")
+                save_qc_plots(img_yxc, labels_np, roi_mask, outdir, max_side=int(args.big_preview_max_side))
+            filter_summary = {
+                "input_cells": before_count,
+                "retained_cells": int(len(df)),
+                "removed_outside_grandqc_clean_tissue": before_count - int(len(df)),
+                "clean_tissue_mask": str(Path(args.clean_tissue_mask).resolve()),
+            }
+            (outdir / "grandqc_cell_filter_summary.json").write_text(json.dumps(filter_summary, indent=2))
+
+        if args.write_full_labels:
+            fmt = str(args.full_format).strip().lower()
+            out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
+            if use_big and fmt != "zarr":
+                log("[WARN] Skipping dense full-size TIFF labels export in large-image mode. Use --full-format zarr.")
+            else:
+                write_full_labels_from_crop(
+                    labels_crop=labels_arr,
+                    full_h=full_height,
+                    full_w=full_width,
+                    x0=orig_x0, y0=orig_y0,
+                    x1=orig_x0 + crop_w, y1=orig_y0 + crop_h,
+                    out_path=out_full,
+                    fmt=fmt,
+                    chunk=args.full_chunk,
+                    compression="zlib",
+                    allow_huge_tif=args.allow_huge_tif,
+                )
+
         # ---- 6) details / objects / optional polygons ----
         def _jsonable(obj: Any) -> Any:
             if isinstance(obj, np.ndarray):
@@ -1837,16 +1945,23 @@ def main() -> None:
                 return obj
             return str(obj)
 
-        (outdir / "stardist_details.json").write_text(json.dumps(_jsonable(details), indent=2))
+        details_payload = _jsonable(details)
+        if not isinstance(details_payload, dict):
+            details_payload = {"details": details_payload}
+        details_payload["pipeline_model_provenance"] = stardist_model_provenance(
+            model_name,
+            used_model=bool(STARDIST_AVAILABLE),
+        )
+        (outdir / "stardist_details.json").write_text(json.dumps(details_payload, indent=2))
 
         if not df.empty:
-            df["x_orig"] = df["x"] + x0
-            df["y_orig"] = df["y"] + y0
+            df["x_orig"] = df["x"] + orig_x0
+            df["y_orig"] = df["y"] + orig_y0
             if "xmin" in df.columns:
-                df["xmin_orig"] = df["xmin"] + x0
-                df["xmax_orig"] = df["xmax"] + x0
-                df["ymin_orig"] = df["ymin"] + y0
-                df["ymax_orig"] = df["ymax"] + y0
+                df["xmin_orig"] = df["xmin"] + orig_x0
+                df["xmax_orig"] = df["xmax"] + orig_x0
+                df["ymin_orig"] = df["ymin"] + orig_y0
+                df["ymax_orig"] = df["ymax"] + orig_y0
         df.to_csv(outdir / "objects.csv", index=False)
 
         if args.write_polygons:

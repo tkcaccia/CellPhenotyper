@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -188,6 +191,66 @@ def _convert_czi(src: Path, dst: Path, compression: str, tile: int, input_region
     return f"{backend}+{backend_name}(scene={selected_name})"
 
 
+def _convert_vsi(src: Path, dst: Path, compression: str, quality: int, series_index: int) -> str:
+    """Convert an Olympus VSI and its sibling _<stem>_ data directory.
+
+    VSI headers are not self-contained. Bio-Formats resolves the companion
+    directory relative to the header, so fail early with a useful message when
+    a transfer or staging operation omitted it.
+    """
+    companion = src.parent / f"_{src.stem}_"
+    if not companion.is_dir():
+        raise FileNotFoundError(
+            f"Olympus VSI companion directory is missing: {companion}. "
+            f"Keep {src.name} beside _{src.stem}_ when copying or staging the sample."
+        )
+
+    bioformats2raw = shutil.which("bioformats2raw")
+    raw2ometiff = shutil.which("raw2ometiff")
+    if not bioformats2raw or not raw2ometiff:
+        raise RuntimeError(
+            "VSI conversion requires bioformats2raw and raw2ometiff in the runtime image."
+        )
+
+    compression_key = _normalize_compression(compression)
+    ome_compression = {
+        "jpeg": "JPEG",
+        "lzw": "LZW",
+        "none": "UNCOMPRESSED",
+        "uncompressed": "UNCOMPRESSED",
+    }.get(compression_key, "LZW")
+
+    with tempfile.TemporaryDirectory(prefix=f"{src.stem}.bioformats.", dir=str(dst.parent)) as tmp:
+        zarr_dir = Path(tmp) / "pyramid.zarr"
+        subprocess.run(
+            [
+                bioformats2raw,
+                "--overwrite",
+                "--use-existing-resolutions",
+                "-s",
+                str(series_index),
+                "--max-workers",
+                "4",
+                str(src),
+                str(zarr_dir),
+            ],
+            check=True,
+        )
+        command = [
+            raw2ometiff,
+            "--compression",
+            ome_compression,
+            "--max_workers",
+            "4",
+        ]
+        if ome_compression == "JPEG":
+            command.extend(["--quality", str(max(0.0, min(1.0, quality / 100.0)))])
+        command.extend([str(zarr_dir), str(dst)])
+        subprocess.run(command, check=True)
+
+    return f"bioformats2raw+raw2ometiff(series={series_index})"
+
+
 def _convert_with_pyvips(src: Path, dst: Path, compression: str, tile: int, quality: int, pyramid: bool) -> str:
     import pyvips
 
@@ -266,6 +329,12 @@ def main() -> None:
     parser.add_argument("--quality", type=int, default=90, help="JPEG quality for lossy TIFF compression (default: 90).")
     parser.add_argument("--tile", type=int, default=512, help="Tile size for streamed WSI writes (default: 512).")
     parser.add_argument("--pyramid", action="store_true", help="Write a pyramidal TIFF.")
+    parser.add_argument(
+        "--vsi-series-index",
+        type=int,
+        default=1,
+        help="Bio-Formats series containing the primary Olympus VSI WSI (default: 1).",
+    )
     args = parser.parse_args()
 
     src = Path(args.input)
@@ -277,6 +346,14 @@ def main() -> None:
         print(
             f"[INFO] Converted {src.name} -> {dst.name} with {backend} "
             f"(compression={args.compression}, input_region={args.input_region or 'auto'})"
+        )
+        return
+
+    if src.suffix.lower() == ".vsi":
+        backend = _convert_vsi(src, dst, args.compression, args.quality, args.vsi_series_index)
+        print(
+            f"[INFO] Converted {src.name} -> {dst.name} with {backend} "
+            f"(compression={args.compression}, pyramid=True)"
         )
         return
 

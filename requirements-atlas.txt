@@ -1,0 +1,6 @@
+# Optional isolated CPU atlas runtime; never install into the ML environment.
+# Direct dependencies are pinned. This is not a transitive, wheel-hash lock.
+-r requirements-spatialdata.txt
+scikit-learn==1.8.0
+scikit-image==0.26.0
+pillow==12.3.0

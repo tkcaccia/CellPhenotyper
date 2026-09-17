@@ -55,6 +55,10 @@ def main() -> None:
 
     geo = {
         "type": "FeatureCollection",
+        "pipeline_metadata": {
+            "coordinate_space": "level0_pixels",
+            "source_image": image_path.name,
+        },
         "features": [
             {
                 "type": "Feature",

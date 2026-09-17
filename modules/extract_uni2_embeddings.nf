@@ -1,23 +1,26 @@
 process EXTRACT_UNI2_EMBEDDINGS {
+    cache 'deep'
+    ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'extract_uni2_embeddings', params) },
+        source_fingerprint: { ProcessCode.directoryFingerprint([image_tif, mask_tif, resolution_file]) }
     tag "${sample_id}:${embedding_mode}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/09_embeddings/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus {
-      def requested = Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int))
-      def compute = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
-      def maxMemGb = params.max_memory_gb as int
+      def requested = TaskRuntime.cpus(runtime_plan, 'uni2')
+      def compute = TaskRuntime.device(runtime_plan)
+      def maxMemGb = runtime_plan.memory_budget_gb as double
       if (compute != 'gpu' && maxMemGb <= 3) return 1
       return requested
     }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
+    memory { TaskRuntime.memory(runtime_plan, 'uni2') }
     time { params.uni2_time as String }
 
     input:
-    tuple val(sample_id), path(image_tif), path(mask_tif), val(embedding_mode), val(zero_outside_mask), val(mask_context_mode), val(outside_fill)
+    tuple val(sample_id), path(image_tif), path(mask_tif), path(resolution_file), val(embedding_mode), val(zero_outside_mask), val(mask_context_mode), val(outside_fill)
+    val(runtime_plan)
 
     output:
     tuple val(sample_id), val(embedding_mode), path("embeddings_${sample_id}_${embedding_mode}"), emit: embeddings_dir
@@ -33,18 +36,22 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def inner_square_max_flag = "--inner-square-max-px ${params.uni2_inner_square_max_px}"
     def inner_square_fixed_flag = "--inner-square-fixed-px ${params.uni2_inner_square_fixed_px}"
     def tiles_root_path = "embeddings_${sample_id}_${embedding_mode}/${params.uni2_tiles_root}"
-    def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
+    def resolvedComputeDevice = TaskRuntime.device(runtime_plan)
+    def resolvedHardwareProfile = TaskRuntime.profile(runtime_plan)
     def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
-    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, runtime_plan.memory_budget_gb as int)
     def requested_batch = Math.max(1, params.uni2_batch as int)
-    def initial_batch = requested_batch
+    def encoder_batch_cap = ['uni2-h': 256, 'virchow': 16, 'virchow2': 16, 'phikon-v2': 64]
+      .getOrDefault(params.uni2_encoder.toString().toLowerCase(), 1) as int
+    def initial_batch = Math.min(requested_batch, encoder_batch_cap)
     if (device_value == 'cpu') {
       if (task_mem_gb <= 4) initial_batch = Math.min(initial_batch, 2)
       else if (task_mem_gb <= 8) initial_batch = Math.min(initial_batch, 4)
       else if (task_mem_gb <= 12) initial_batch = Math.min(initial_batch, 8)
       else if (task_mem_gb <= 16) initial_batch = Math.min(initial_batch, 16)
     }
-    def resolved_torch_threads = Math.max(1, Math.min(task.cpus as int, params.uni2_torch_threads as int))
+    def configured_torch_threads = params.containsKey('uni2_torch_threads') ? params.uni2_torch_threads : 1
+    def resolved_torch_threads = Math.max(1, Math.min(task.cpus as int, TaskRuntime.setting(runtime_plan, 'uni2_torch_threads', configured_torch_threads) as int))
     if (device_value == 'cpu' && task_mem_gb <= 4) {
       resolved_torch_threads = 1
     }
@@ -53,13 +60,18 @@ process EXTRACT_UNI2_EMBEDDINGS {
       resolved_rows_per_csv = Math.min(resolved_rows_per_csv, 2000)
     }
     def uni2_script = "${projectDir}/${params.uni2_script}"
+    def embeddingStorage = (params.uni2_embedding_storage ?: 'csv').toString()
+    if (!(embeddingStorage in ['csv', 'binary'])) error "uni2_embedding_storage must be csv or binary"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [uni2_script, "${projectDir}/bin/uni2_grid.py"].each { codeDigest.update(new File(it).bytes) }
+    [uni2_script, "${projectDir}/bin/uni2_grid.py", "${projectDir}/bin/uni2_embedding_io.py"].each { codeDigest.update(new File(it).bytes) }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     """
     set -euo pipefail
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     echo "[INFO] UNI2 code fingerprint: ${codeFingerprint}"
+    python -c 'import json,math,sys; d=json.load(open(sys.argv[1])); x=float(d["mpp_x"]); y=float(d["mpp_y"]); (d.get("status")=="pass" and all(math.isfinite(v) and 0.01<=v<=10 for v in (x,y)) and math.isclose(x,y,rel_tol=1e-4)) or sys.exit("UNI2 requires a passed finite isotropic source-resolution report"); all(math.isclose(float(d[k]),(x+y)/2,rel_tol=1e-4) for k in ("source_mpp","source_mpp_x","source_mpp_y","effective_mpp") if d.get(k) is not None) or sys.exit("UNI2 source-resolution aliases conflict")' "${resolution_file}"
 
     TOKEN_ENV_FILE="${token_env_file}"
     TOKEN_VAR_NAME="${params.hf_token_env_var_name ?: 'HF_TOKEN'}"
@@ -98,7 +110,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     export TF_NUM_INTRAOP_THREADS=1
     export TF_NUM_INTEROP_THREADS=1
 
-    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${params.compute_device}" == "gpu" ]]; then
+    if [[ "${params.gpu_debug_diagnostics}" == "true" && "${resolvedComputeDevice}" == "gpu" ]]; then
       echo "[DEBUG] UNI-2 GPU diagnostics"
       nvidia-smi -L || true
       python - <<'PY'
@@ -116,43 +128,59 @@ PY
     ATTEMPT_BATCH=${initial_batch}
     HARDWARE_AUTO="${params.hardware_auto}"
     UNI2_AUTO_HARDWARE="${params.uni2_auto_hardware}"
-    HARDWARE_PROFILE="${params.hardware_profile}"
+    HARDWARE_PROFILE="${resolvedHardwareProfile}"
     UNI2_MAX_AUTO_BATCH="${params.uni2_max_auto_batch}"
+    MODEL_BATCH_CAP=${encoder_batch_cap}
     if [[ "${device_value}" == "cuda" && "\$HARDWARE_AUTO" == "true" && "\$UNI2_AUTO_HARDWARE" == "true" ]]; then
       GPU_TOTAL_MIB=0
+      GPU_FREE_MIB=0
+      GPU_USABLE_MIB=0
       if command -v nvidia-smi >/dev/null 2>&1; then
-        GPU_TOTAL_MIB="\$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | awk '{print int(\$1)}')"
+        GPU_SELECTOR="\${CELLPHENOTYPER_GPU_INDEX:-\${CUDA_VISIBLE_DEVICES:-}}"
+        GPU_SELECTOR="\${GPU_SELECTOR%%,*}"
+        [[ -n "\$GPU_SELECTOR" && "\$GPU_SELECTOR" != "-1" ]] || GPU_SELECTOR=0
+        GPU_MEMORY="\$(nvidia-smi -i "\$GPU_SELECTOR" --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 || true)"
+        GPU_FREE_MIB="\$(awk -F, '{gsub(/ /,"",\$1); print int(\$1)}' <<<"\$GPU_MEMORY")"
+        GPU_TOTAL_MIB="\$(awk -F, '{gsub(/ /,"",\$2); print int(\$2)}' <<<"\$GPU_MEMORY")"
+        GPU_FREE_MIB="\${GPU_FREE_MIB:-0}"
+        GPU_TOTAL_MIB="\${GPU_TOTAL_MIB:-0}"
+        GPU_RESERVE_MIB="\$(awk -v total="\$GPU_TOTAL_MIB" 'BEGIN {r=int(total*0.08); if(r<768)r=768; if(r>4096)r=4096; print r}')"
+        GPU_USABLE_MIB="\$(awk -v free="\$GPU_FREE_MIB" -v reserve="\$GPU_RESERVE_MIB" 'BEGIN {v=free-reserve; print (v>0?v:0)}')"
       fi
       AUTO_BATCH=${requested_batch}
       case "\$HARDWARE_PROFILE" in
         aggressive)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=256
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=192
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=128
-          else AUTO_BATCH=96
-          fi
-          ;;
-        conservative)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=128
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=96
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=64
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=256
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=64
           else AUTO_BATCH=32
           fi
           ;;
+        conservative)
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=96
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=64
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=32
+          else AUTO_BATCH=16
+          fi
+          ;;
         *)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=192
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=128
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=96
-          else AUTO_BATCH=64
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=96
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=64
+          else AUTO_BATCH=32
           fi
           ;;
       esac
       if [[ ${task_mem_gb} -le 16 && "\$AUTO_BATCH" -gt 64 ]]; then AUTO_BATCH=64; fi
       if [[ ${task_mem_gb} -le 24 && "\$AUTO_BATCH" -gt 128 ]]; then AUTO_BATCH=128; fi
       if [[ "\$AUTO_BATCH" -gt "\$UNI2_MAX_AUTO_BATCH" ]]; then AUTO_BATCH="\$UNI2_MAX_AUTO_BATCH"; fi
-      if [[ "\$AUTO_BATCH" -gt "\$ATTEMPT_BATCH" ]]; then ATTEMPT_BATCH="\$AUTO_BATCH"; fi
+      if [[ "\$AUTO_BATCH" -gt "\$MODEL_BATCH_CAP" ]]; then AUTO_BATCH="\$MODEL_BATCH_CAP"; fi
+      ATTEMPT_BATCH="\$AUTO_BATCH"
     fi
-    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
+    echo "[INFO] Foundation encoder runtime tune: encoder=${params.uni2_encoder}, mem_gb=${task_mem_gb}, gpu_free_mib=\${GPU_FREE_MIB:-0}, gpu_usable_mib=\${GPU_USABLE_MIB:-0}, requested_batch=${requested_batch}, model_batch_cap=\$MODEL_BATCH_CAP, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
       mkdir -p "\$OUTDIR"
@@ -162,6 +190,7 @@ PY
       python "${uni2_script}" \\
         --image "${image_tif}" \\
         --mask "${mask_tif}" \\
+        --resolution-json "${resolution_file}" \\
         --outdir "\$OUTDIR" \\
         --image-level ${params.uni2_image_level} \\
         ${force_full_flag} \\
@@ -187,6 +216,8 @@ PY
         --batch "\$ATTEMPT_BATCH" \\
         --torch-threads ${resolved_torch_threads} \\
         --rows-per-csv ${resolved_rows_per_csv} \\
+        --embedding-storage "${embeddingStorage}" \\
+        --embedding-mode "${embedding_mode}" \\
         --mask-block ${params.uni2_mask_block} \\
         2> >(tee "\$ATTEMPT_ERR" >&2)
       RC=\$?
@@ -226,7 +257,10 @@ PY
 
     stub:
     """
+    echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
+    echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "embeddings_${sample_id}_${embedding_mode}"
     touch "embeddings_${sample_id}_${embedding_mode}/embeddings_000000.csv"
+    printf '{"model_provenance":{"used_model":false}}\n' > "embeddings_${sample_id}_${embedding_mode}/.${params.uni2_encoder}_embedding_complete.json"
     """
 }
