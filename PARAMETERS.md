@@ -260,6 +260,7 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `grandqc_artifact_tile_size` | `0` | Artifact inference tile size. `0` uses the official 512 x 512 geometry on every device. Explicit experimental values must be at least 256 and divisible by 32. |
 | `grandqc_artifact_overlap_fraction` | `0.5` | Fractional artifact-tile overlap used for probability blending. |
 | `prepare_crop_memory_gb` | `12` | RAM allocation for the streaming analysis crop created around GrandQC clean tissue intersected with the optional ROI. |
+| `convert_compression` / `convert_jpeg_quality` | `JPEG` / `75` | Shared codec and JPEG quality for both the normalized input OME-TIFF and the pyramidal RGB OME-TIFF analysis crop. |
 | `grandqc_preview_max_side` | `4096` | Maximum long side of GrandQC preview assets. |
 | `grandqc_crop_mask_memory_gb` | `4` | RAM allocation for cropping the low-resolution full-slide clean-tissue mask into the analysis frame. |
 

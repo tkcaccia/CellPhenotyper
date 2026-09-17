@@ -191,6 +191,40 @@ def test_crop_writer_emits_validated_pyramid_for_wsi_sized_crop(tmp_path: Path) 
     assert not list(tmp_path.glob("*.pyramid-*-level-*.dat"))
 
 
+def test_crop_writer_emits_jpeg_compressed_rgb_ome_tiff(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "bin"))
+    spec = importlib.util.spec_from_file_location(
+        "prepare_analysis_crop_jpeg_ome", ROOT / "bin" / "prepare_analysis_crop.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    output = tmp_path / "crop_roi.tif"
+    yy, xx = np.indices((640, 768), dtype=np.uint16)
+    image = np.stack(((xx % 256), (yy % 256), ((xx + yy) % 256)), axis=-1).astype(np.uint8)
+    module.write_pyramidal_rgb_tiff(
+        output,
+        image,
+        source_mpp=0.25,
+        compression="JPEG",
+        jpeg_quality=75,
+    )
+    receipt = module.validate_crop_pyramid(
+        output,
+        (640, 768),
+        source_mpp=0.25,
+        require_ome=True,
+        expected_compression="JPEG",
+    )
+
+    assert receipt["compression"] == "JPEG"
+    with tifffile.TiffFile(output) as tif:
+        assert tif.is_ome
+        assert tif.series[0].axes.replace("S", "C") == "YXC"
+        assert len(tif.series[0].levels) == 2
+
+
 def test_crop_pyramid_validation_rejects_flat_wsi_crop(tmp_path: Path) -> None:
     spec = importlib.util.spec_from_file_location(
         "prepare_analysis_crop_flat_validation", ROOT / "bin" / "prepare_analysis_crop.py"

@@ -31,6 +31,8 @@ process PREPARE_ANALYSIS_CROP {
       --image "${ome_tif}" --roi "${roi_geojson}" \
       --clean-tissue-mask "${clean_tissue_mask}" --outdir prepared_crop \
       --resolution-json "${resolution_json}" \
+      --compression "${params.convert_compression}" \
+      --quality ${params.convert_jpeg_quality} \
       --pad ${params.stardist_crop_pad}
     """
 

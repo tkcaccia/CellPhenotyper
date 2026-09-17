@@ -10,6 +10,8 @@ import math
 import os
 from pathlib import Path
 from typing import Any, Iterable
+from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
 
 
 def iter_xy(value: Any) -> Iterable[tuple[float, float]]:
@@ -245,6 +247,62 @@ def pyramid_level_shapes(height: int, width: int, tile_size: int = 512) -> list[
     return shapes
 
 
+def normalize_tiff_compression(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    normalized = {
+        "jpg": "jpeg",
+        "zlib": "deflate",
+        "adobe_deflate": "deflate",
+        "uncompressed": "none",
+    }.get(normalized, normalized)
+    if normalized not in {"jpeg", "deflate", "lzw", "zstd", "none"}:
+        raise ValueError(f"Unsupported crop TIFF compression: {value!r}")
+    return normalized
+
+
+def rgb_ome_xml(
+    image_name: str,
+    width: int,
+    height: int,
+    dtype_name: str,
+    source_mpp: float | None,
+) -> str:
+    ome_type = {
+        "uchar": "uint8",
+        "uint8": "uint8",
+        "ushort": "uint16",
+        "uint16": "uint16",
+        "char": "int8",
+        "int8": "int8",
+        "short": "int16",
+        "int16": "int16",
+        "float": "float",
+        "float32": "float",
+        "double": "double",
+        "float64": "double",
+    }.get(str(dtype_name).lower())
+    if ome_type is None:
+        raise ValueError(f"Unsupported RGB OME pixel dtype: {dtype_name}")
+    physical = ""
+    if source_mpp:
+        physical = (
+            f' PhysicalSizeX="{source_mpp:.12g}" PhysicalSizeXUnit="&#181;m"'
+            f' PhysicalSizeY="{source_mpp:.12g}" PhysicalSizeYUnit="&#181;m"'
+        )
+    safe_name = escape(image_name, {'"': "&quot;"})
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+        f'<Image ID="Image:0" Name="{safe_name}">'
+        f'<Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="{ome_type}"'
+        f' SizeX="{int(width)}" SizeY="{int(height)}" SizeC="3" SizeZ="1" SizeT="1"'
+        f' Interleaved="true"{physical}>'
+        '<Channel ID="Channel:0:0" Name="RGB" SamplesPerPixel="3"><LightPath/></Channel>'
+        '<TiffData IFD="0" PlaneCount="1"/>'
+        '</Pixels></Image></OME>'
+    )
+
+
 def downsample_rgb_2x_to_memmap(source, output_path: Path, block_rows: int = 64):
     """Create one lossless-base visualization overview with bounded memory.
 
@@ -286,13 +344,16 @@ def write_pyramidal_rgb_tiff(
     source_mpp: float | None,
     compression: str = "zlib",
     tile_size: int = 512,
+    jpeg_quality: int = 75,
 ) -> list[list[int]]:
-    """Write a tiled RGB TIFF with SubIFD overviews and a bit-exact level 0."""
+    """Write a tiled RGB OME-TIFF with SubIFD overviews and the requested codec."""
     import tifffile
 
     height, width, channels = map(int, level0.shape)
     if channels != 3:
         raise ValueError(f"Expected RGB level 0, got {level0.shape}")
+    normalized_compression = normalize_tiff_compression(compression)
+    ome_xml = rgb_ome_xml(output.name, width, height, str(level0.dtype), source_mpp)
     reduced_shapes = pyramid_level_shapes(height, width, tile_size)
     temporary_levels: list[Path] = []
     previous = level0
@@ -300,10 +361,15 @@ def write_pyramidal_rgb_tiff(
         with tifffile.TiffWriter(str(output), bigtiff=True) as tif:
             base_options = {
                 "photometric": "rgb",
-                "compression": compression,
+                "compression": normalized_compression,
                 "tile": (tile_size, tile_size),
                 "metadata": None,
+                "description": ome_xml,
             }
+            if normalized_compression == "jpeg":
+                base_options["compressionargs"] = {"level": int(jpeg_quality)}
+            elif normalized_compression in {"deflate", "lzw"}:
+                base_options["predictor"] = True
             if source_mpp:
                 base_options.update({
                     "resolution": (10000 / source_mpp, 10000 / source_mpp),
@@ -322,6 +388,7 @@ def write_pyramidal_rgb_tiff(
                         f"expected={expected_shape} observed={current.shape[:2]}"
                     )
                 level_options = dict(base_options)
+                level_options.pop("description", None)
                 if source_mpp:
                     factor = 2 ** level_index
                     level_options["resolution"] = (
@@ -348,6 +415,8 @@ def validate_crop_pyramid(
     expected_shape: tuple[int, int],
     source_mpp: float | None,
     tile_size: int = 512,
+    require_ome: bool = False,
+    expected_compression: str | None = None,
 ) -> dict[str, Any]:
     """Fail closed when a WSI-scale crop is not tiled and pyramidal."""
     import tifffile
@@ -388,6 +457,15 @@ def validate_crop_pyramid(
             )
         page = tif.pages[0]
         compression = getattr(page.compression, "name", str(page.compression))
+        if require_ome and (not tif.is_ome or not tif.ome_metadata):
+            raise RuntimeError("ROI crop must be a valid OME-TIFF")
+        if expected_compression:
+            expected_codec = normalize_tiff_compression(expected_compression)
+            observed_codec = normalize_tiff_compression(str(compression))
+            if observed_codec != expected_codec:
+                raise RuntimeError(
+                    f"ROI crop compression mismatch: expected={expected_codec} observed={observed_codec}"
+                )
         resolution_mpp = None
         if source_mpp:
             if "XResolution" not in page.tags or "ResolutionUnit" not in page.tags:
@@ -404,6 +482,18 @@ def validate_crop_pyramid(
                 raise RuntimeError(
                     f"ROI crop MPP mismatch: expected={source_mpp} observed={resolution_mpp}"
                 )
+            if require_ome:
+                root = ET.fromstring(tif.ome_metadata)
+                pixels = next((node for node in root.iter() if node.tag.endswith("Pixels")), None)
+                if pixels is None:
+                    raise RuntimeError("ROI crop OME Pixels metadata is missing")
+                for axis in "XY":
+                    observed_physical = float(pixels.attrib.get(f"PhysicalSize{axis}", "nan"))
+                    if not math.isclose(observed_physical, source_mpp, rel_tol=1e-5, abs_tol=1e-6):
+                        raise RuntimeError(
+                            f"ROI crop OME PhysicalSize{axis} mismatch: "
+                            f"expected={source_mpp} observed={observed_physical}"
+                        )
         return {
             "required": pyramid_required,
             "validated": True,
@@ -423,6 +513,8 @@ def write_crop_with_tifffile_zarr(
     bbox: tuple[int, int, int, int],
     block_rows: int = 512,
     source_mpp: float | None = None,
+    compression: str = "deflate",
+    jpeg_quality: int = 75,
 ) -> str:
     """Write a crop through a disk-backed buffer when libvips cannot decode it.
 
@@ -477,7 +569,14 @@ def write_crop_with_tifffile_zarr(
                     buffer[out_y0:out_y1, out_x0:out_x1] = block[..., :3]
             buffer.flush()
 
-        write_pyramidal_rgb_tiff(output, buffer, source_mpp, compression="zlib", tile_size=512)
+        write_pyramidal_rgb_tiff(
+            output,
+            buffer,
+            source_mpp,
+            compression=compression,
+            tile_size=512,
+            jpeg_quality=jpeg_quality,
+        )
         return f"{backend}_pyramidal_subifd"
     finally:
         if hasattr(store, "close"):
@@ -489,7 +588,14 @@ def write_crop_with_tifffile_zarr(
         buffer_path.unlink(missing_ok=True)
 
 
-def write_crop(source: Path, output: Path, bbox: tuple[int, int, int, int], source_mpp: float | None = None) -> str:
+def write_crop(
+    source: Path,
+    output: Path,
+    bbox: tuple[int, int, int, int],
+    source_mpp: float | None = None,
+    compression: str = "deflate",
+    jpeg_quality: int = 75,
+) -> str:
     x0, y0, x1, y1 = bbox
     try:
         import pyvips
@@ -498,17 +604,29 @@ def write_crop(source: Path, output: Path, bbox: tuple[int, int, int, int], sour
         crop = image.crop(x0, y0, x1 - x0, y1 - y0)
         if source_mpp:
             crop = crop.copy(xres=1000.0 / source_mpp, yres=1000.0 / source_mpp)
-        # Source OME XML has source dimensions/scale, not the crop's geometry.
-        if crop.get_typeof("image-description"):
-            crop.remove("image-description")
-        crop.tiffsave(
-            str(output), tile=True, tile_width=512, tile_height=512,
+        normalized_compression = normalize_tiff_compression(compression)
+        ome_xml = rgb_ome_xml(output.name, crop.width, crop.height, crop.format, source_mpp)
+        crop.set_type(pyvips.GValue.gstr_type, "image-description", ome_xml)
+        save_options = dict(
+            tile=True, tile_width=512, tile_height=512,
             pyramid=True, subifd=True, depth="onetile",
-            compression="deflate", bigtiff=True, resunit="cm",
+            compression=normalized_compression, bigtiff=True, resunit="cm", properties=False,
         )
+        if normalized_compression == "jpeg":
+            save_options["Q"] = int(jpeg_quality)
+        elif normalized_compression in {"deflate", "lzw"}:
+            save_options["predictor"] = "horizontal"
+        crop.tiffsave(str(output), **save_options)
         return "pyvips_streaming_pyramidal_subifd"
     except Exception as vips_error:
-        backend = write_crop_with_tifffile_zarr(source, output, bbox, source_mpp=source_mpp)
+        backend = write_crop_with_tifffile_zarr(
+            source,
+            output,
+            bbox,
+            source_mpp=source_mpp,
+            compression=compression,
+            jpeg_quality=jpeg_quality,
+        )
         return f"tifffile_{backend}_memmap_fallback:{type(vips_error).__name__}"
 
 
@@ -542,6 +660,8 @@ def main() -> None:
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--pad", type=int, default=200)
     parser.add_argument("--resolution-json", help="Passed normalized-image resolution report; authoritative over stale TIFF metadata")
+    parser.add_argument("--compression", default="jpeg", help="Crop OME-TIFF compression; use the converted-input codec.")
+    parser.add_argument("--quality", type=int, default=75, help="JPEG quality when --compression is jpeg.")
     args = parser.parse_args()
 
     image_path = Path(args.image).resolve()
@@ -564,8 +684,21 @@ def main() -> None:
     )
 
     crop_path = outdir / "crop_roi.tif"
-    writer = write_crop(image_path, crop_path, (x0, y0, x1, y1), source_mpp)
-    pyramid = validate_crop_pyramid(crop_path, (y1 - y0, x1 - x0), source_mpp)
+    writer = write_crop(
+        image_path,
+        crop_path,
+        (x0, y0, x1, y1),
+        source_mpp,
+        compression=args.compression,
+        jpeg_quality=args.quality,
+    )
+    pyramid = validate_crop_pyramid(
+        crop_path,
+        (y1 - y0, x1 - x0),
+        source_mpp,
+        require_ome=True,
+        expected_compression=args.compression,
+    )
     shifted_roi = shift_coordinates(roi, -x0, -y0)
     (outdir / "roi_all_crop.geojson").write_text(json.dumps(shifted_roi))
 
