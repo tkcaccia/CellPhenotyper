@@ -280,9 +280,12 @@ marker_quantification_enable: true
 # parent-level shared cache so sibling pipeline clones reuse the same blobs.
 hf_token_env_file: tokens.env
 hf_token_env_var_name: HF_UNI2
-# `cells` preserves nucleus-centred sampling; `grid` uses overlapping context
-# tiles whose calibrated 90-pixel inner squares are adjacent without gaps.
-uni2_sampling_mode: cells # cells | grid | both (grid primary plus cell-centred comparison)
+# `grid` is the production default and uses overlapping context tiles whose
+# calibrated 90-pixel inner squares are adjacent without gaps. `cells` and
+# `both` explicitly opt into the cell-centred route.
+uni2_sampling_mode: grid # grid | cells | both (grid primary plus cell-centred comparison)
+uni2_encoder: uni2-h
+uni2_use_roi_crop: true
 uni2_grid_min_tissue_fraction: 0.05
 uni2_grid_preview_max_side: 2048
 uni2_grid_stride_px: 0 # model-input pixels; 0 follows uni2_inner_square_fixed_px

@@ -323,8 +323,8 @@
         "uni2_sampling_mode": {
           "type": "string",
           "enum": ["cells", "grid", "both"],
-          "default": "cells",
-          "description": "cells and grid are distinct scientific observation units; both is grid-primary with an auxiliary cell comparison."
+          "default": "grid",
+          "description": "grid is the default tissue-domain route; cells explicitly enables nucleus-centred sampling, and both adds an auxiliary cell-centred comparison."
         },
         "uni2_encoder": {"type": "string", "enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"], "default": "uni2-h", "description": "Patch foundation encoder supplied to the unchanged KODAMA workflow. UNI2-h remains the default; alternatives are experimental until ground-truth validation."},
         "uni2_embedding_storage": {"type": "string", "enum": ["csv", "binary"], "default": "csv", "description": "Numerical embedding shard storage. Binary retains exact model float32 values with explicit row metadata and checksums; no change to observation or feature definitions."},

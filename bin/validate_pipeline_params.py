@@ -108,7 +108,7 @@ def cross_field_errors(params: dict[str, Any]) -> list[str]:
             parent_variant = params.get('tissue_hierarchy_parent_variant')
             if parent_variant and parent_variant != params.get('cluster_primary_variant', 'standard'):
                 failures.append('Linked cell hierarchy requires the same primary parent variant')
-        if params.get('uni2_sampling_mode', 'cells') not in {'grid', 'both'}:
+        if params.get('uni2_sampling_mode', 'grid') not in {'grid', 'both'}:
             failures.append('tissue_hierarchy_enable requires grid or both UNI-2 sampling')
         if not params.get('tissue_hierarchy_model_snapshot'):
             failures.append('tissue_hierarchy_enable requires an explicit local model snapshot')

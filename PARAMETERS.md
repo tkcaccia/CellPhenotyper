@@ -409,7 +409,7 @@ Grid sampling controls:
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `uni2_sampling_mode` | `cells` | `cells` uses nucleus-centred observations; `grid` uses regular spatial observations; `both` keeps grid primary and adds a complete namespaced cell-centred route for comparison. |
+| `uni2_sampling_mode` | `grid` | `grid` is the default regular spatial route and does not run cell-centred UNI-2. `cells` explicitly uses nucleus-centred observations; `both` keeps grid primary and adds a complete namespaced cell-centred route for comparison. |
 | `uni2_grid_min_tissue_fraction` | `0.05` | Minimum tissue fraction in the visible inner-square core required to retain a grid observation. |
 | `uni2_grid_stride_px` | `0` | Grid-centre stride in UNI2 model-input pixels. `0` uses `uni2_inner_square_fixed_px`; a positive value separates sampling density from local pooling width. |
 | `uni2_grid_preview_max_side` | `2048` | Maximum grid QC preview dimension. |

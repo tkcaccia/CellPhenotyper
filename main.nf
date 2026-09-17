@@ -276,7 +276,7 @@ if (!grandqc_enabled && stage_index[end_point] >= stage_index['grandqc']) {
 error "GrandQC is a mandatory upstream stage. Remove --grandqc_enable false or restrict the run to --end_point convert."
 }
 def uni2_reuse_existing = (((params.uni2_reuse_existing ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
-def uni2_sampling_mode = (params.uni2_sampling_mode ?: 'cells').toString().trim().toLowerCase()
+def uni2_sampling_mode = (params.uni2_sampling_mode ?: 'grid').toString().trim().toLowerCase()
 if (uni2_sampling_mode in ['cell', 'cell_centered', 'cell-centred', 'cell-centered']) uni2_sampling_mode = 'cells'
 if (!(uni2_sampling_mode in ['cells', 'grid', 'both'])) {
 error "Invalid --uni2_sampling_mode '${params.uni2_sampling_mode}'. Use cells, grid, or both."

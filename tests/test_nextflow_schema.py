@@ -90,6 +90,15 @@ def test_schema_is_valid_draft7_and_defaults_validate() -> None:
     validate(params)
 
 
+def test_grid_is_the_default_uni2_sampling_route() -> None:
+    schema = load_schema()
+    route = schema["definitions"]["representation_options"]["properties"]["uni2_sampling_mode"]
+    assert route["default"] == "grid"
+    assert yaml.safe_load(PARAMS_PATH.read_text(encoding="utf-8"))["uni2_sampling_mode"] == "grid"
+    assert "uni2_sampling_mode             = 'grid'" in (ROOT / "nextflow.config").read_text(encoding="utf-8")
+    assert "params.uni2_sampling_mode ?: 'grid'" in (ROOT / "main.nf").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("storage", ["csv", "binary"])
 def test_uni2_storage_schema(storage):
     validate({"uni2_embedding_storage": storage})
