@@ -53,6 +53,41 @@ workflow {
 
 
 @pytest.mark.skipif(shutil.which("nextflow") is None, reason="Nextflow is unavailable")
+def test_hovernet_reserves_whole_slide_postprocessing_headroom(tmp_path: Path) -> None:
+    project = tmp_path / "hovernet_policy_probe"
+    (project / "lib").mkdir(parents=True)
+    shutil.copy2(ROOT / "lib" / "HardwarePolicy.groovy", project / "lib" / "HardwarePolicy.groovy")
+    (project / "main.nf").write_text(
+        """nextflow.enable.dsl=2
+import groovy.json.JsonOutput
+workflow {
+  def plan = HardwarePolicy.resolve([hardware_auto:true, hardware_profile:'balanced',
+    hovernet_memory_gb:32, cellvit_memory_gb:48], 16, 27, true, 24.0d)
+  println 'POLICY_JSON=' + JsonOutput.toJson(plan)
+}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["nextflow", "run", str(project / "main.nf"), "-ansi-log", "false"],
+        cwd=project,
+        env={**os.environ, "NXF_OFFLINE": "true"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=90,
+        check=True,
+    )
+    payload = json.loads(next(
+        line.split("=", 1)[1] for line in result.stdout.splitlines()
+        if line.startswith("POLICY_JSON=")
+    ))
+    assert payload["stages"]["hovernet"]["memory_gb"] == 23
+    assert payload["stages"]["cellvit"]["memory_gb"] == 11
+    assert payload["stages"]["hovernet"]["memory_gb"] + payload["stages"]["cellvit"]["memory_gb"] > 27
+
+
+@pytest.mark.skipif(shutil.which("nextflow") is None, reason="Nextflow is unavailable")
 def test_atlas_policy_strict_units_low_budgets_and_shared_caps(tmp_path):
     (tmp_path / "lib").mkdir()
     for source in (ROOT / "lib").glob("*.groovy"):

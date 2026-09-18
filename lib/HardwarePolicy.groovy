@@ -88,7 +88,12 @@ class HardwarePolicy {
             prepare_crop:         [cpu: 'prepare_crop_cpus', memory: 'prepare_crop_memory_gb', cpuRatio: 0.25d, maxUseful: 4, minCpu: 1, memRatio: 0.15d, minMem: 4],
             stardist_auto_roi:    [cpu: 'stardist_auto_roi_cpus', memory: 'stardist_auto_roi_memory_gb', cpuRatio: 0.25d, maxUseful: 4, minCpu: 1, memRatio: 0.12d, minMem: 4],
             stardist:             [cpu: 'stardist_cpus', memory: 'stardist_memory_gb', cpuRatio: 0.75d, maxUseful: 16, minCpu: 2, memRatio: 0.40d, minMem: 8],
-            hovernet:             [cpu: 'hovernet_cpus', memory: 'hovernet_memory_gb', cpuRatio: 0.50d, maxUseful: 8, minCpu: 2, memRatio: 0.32d, minMem: 8],
+            // Upstream HoVer-Net materializes large per-chunk instance buffers during
+            // whole-slide post-processing.  A 9 GB auto allocation was sufficient for
+            // inference but was cgroup-killed on a 159k x 128k crop during phase 1.
+            // Reserve most of the usable host envelope so this stage runs alone and
+            // has enough headroom for dense tissue chunks.
+            hovernet:             [cpu: 'hovernet_cpus', memory: 'hovernet_memory_gb', cpuRatio: 0.50d, maxUseful: 8, minCpu: 2, memRatio: 0.82d, minMem: 12],
             cellvit:              [cpu: 'cellvit_cpus', memory: 'cellvit_memory_gb', cpuRatio: 0.75d, maxUseful: 16, minCpu: 4, memRatio: 0.40d, minMem: 10],
             cell_consensus:       [cpu: 'cell_consensus_cpus', memory: 'cell_consensus_memory_gb', cpuRatio: 0.20d, maxUseful: 2, minCpu: 1, memRatio: 0.22d, minMem: 6],
             tma:                  [cpu: 'tma_cpus', memory: 'tma_memory_gb', cpuRatio: 0.15d, maxUseful: 2, minCpu: 1, memRatio: 0.10d, minMem: 3],
