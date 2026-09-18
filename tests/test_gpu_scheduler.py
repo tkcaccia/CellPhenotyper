@@ -26,6 +26,10 @@ def test_scheduler_selects_a_gpu_with_enough_free_memory(tmp_path: Path) -> None
     nvidia_smi.chmod(nvidia_smi.stat().st_mode | stat.S_IXUSR)
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    # Exercise unconstrained host scheduling even when the test itself runs
+    # inside a GPU container whose base image defines an empty CUDA selector.
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+    env.pop("NVIDIA_VISIBLE_DEVICES", None)
     command = (
         f"source '{ROOT / 'bin' / 'acquire_gpu_slot.sh'}'; "
         f"cellphenotyper_acquire_gpu_slot '{tmp_path / 'locks'}' 10 2 2 0 1 5; "

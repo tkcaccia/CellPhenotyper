@@ -59,8 +59,8 @@ def test_real_and_stub_scripts_literally_reference_both_cache_properties(module)
             assert section.count(command) == 1, "Nextflow only hashes explicitly referenced named task.ext properties"
 
 
-def test_inventory_includes_all_current_forty_processes():
-    assert len(MODULES) == 41
+def test_inventory_includes_all_current_processes():
+    assert len(MODULES) == 44
     for module in MODULES:
         assert len(re.findall(r"^process\s+\w+\s*\{", module.read_text(), re.M)) == 1
 

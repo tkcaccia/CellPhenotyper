@@ -152,7 +152,10 @@ class WindowReaderTest(unittest.TestCase):
             path = Path(temp) / "image.zarr"
             group = zarr.open_group(str(path), mode="w")
             image = np.arange(32*48*3, dtype=np.uint16).reshape(32, 48, 3)
-            group.create_array("0", data=image, chunks=(16, 16, 3))
+            if hasattr(group, "create_array"):
+                group.create_array("0", data=image, chunks=(16, 16, 3))
+            else:  # Zarr 2.x, retained by the production image.
+                group.create_dataset("0", data=image, chunks=(16, 16, 3))
             with morphology.WindowReader(path) as reader:
                 np.testing.assert_array_equal(reader.read(12, 4, 22, 15), image[4:15, 12:22])
 

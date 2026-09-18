@@ -78,7 +78,11 @@ def resolve_runtime_paths(image: str, shift: str, repo: str, checkpoint: str, ou
 def require_readable_file(path: Path, label: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"{label} not found: {path}")
-    if not os.access(path, os.R_OK):
+    read_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+    # os.access() returns true for uid 0 even when a file has no read bits.
+    # Checking both makes the preflight deterministic in root-run containers
+    # and still verifies the effective user's access on an HPC host.
+    if not (path.stat().st_mode & read_bits) or not os.access(path, os.R_OK):
         raise PermissionError(f"{label} is not readable by uid {os.geteuid()}: {path}")
 
 

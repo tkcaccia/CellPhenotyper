@@ -158,9 +158,10 @@ def test_grid_cluster_rasterizer_reconstructs_core_labels(tmp_path: Path) -> Non
 
 def test_pipeline_routes_grid_observations_through_uni2_and_kodama() -> None:
     main = (ROOT / "main.nf").read_text(encoding="utf-8")
+    stages = (ROOT / "lib" / "PipelineInputs.groovy").read_text(encoding="utf-8")
     shared = (ROOT / "modules" / "extract_uni2_embeddings_shared.nf").read_text(encoding="utf-8")
     extraction = (ROOT / "subworkflows" / "extract_primary_uni2.nf").read_text(encoding="utf-8")
-    assert "'grid_tiles', 'uni2', 'kodama'" in main
+    assert "'grid_tiles', 'uni2', 'kodama'" in stages
     assert "def analysis_objects_ch = uni2_grid_mode ? grid_objects_ch : objects_assigned_ch" in main
     assert ".join(analysis_objects_ch)" in main
     assert "EXTRACT_PRIMARY_UNI2(" in main

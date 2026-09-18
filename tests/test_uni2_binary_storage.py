@@ -258,10 +258,15 @@ def main_environment(tmp_path, monkeypatch, storage, paired_mode=None, primary_m
                                            stack=lambda values, dim=0: ArrayTensor(np.stack(values, axis=dim))),
                      tqdm=lambda values, **kwargs: values, RegionReader=Reader,
                      load_encoder=lambda **kwargs: (encoder, Transform(), "timm_hf", "cls", "uni2"),
+                     encoder_spec=lambda name: {
+                         "repo_id": "", "model_input_size": 4,
+                         "prefix_tokens_after_cls": 0,
+                         "supports_token_subset": True,
+                     },
                      fingerprint_encoder_state=lambda model: "a" * 64, package_version=lambda name: "synthetic_test",
                      infer_source_mpp=lambda path: .5, compute_global_percentiles=lambda *args, **kwargs: (np.zeros(3), np.full(3, 255)),
                      to_rgb_uint8_global=lambda image, **kwargs: image,
-                     extract_cls_and_patch_tokens=lambda value: (value, object()),
+                     extract_cls_and_patch_tokens=lambda value, **kwargs: (value, object()),
                      pool_from_token_parts=lambda cls, patch, pooling: cls,
                      derive_inner_square_style_embeddings=lambda cls, **kwargs: cls.numpy() + np.float32(.125),
                      assign_rounded_centers_to_grid=assign_rounded_centers_to_grid)
