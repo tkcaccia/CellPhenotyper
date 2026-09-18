@@ -244,8 +244,29 @@ def test_wrapper_forwards_precision_compartments_scale_and_profiles():
     for flag in ("--gigatime-output-channels", "--gigatime-output-dtype", "--gigatime-output-format",
                  "--gigatime-export-ometiff", "--gigatime-export-output-dtype", "--gigatime-blockwise",
                  "--source-mpp", "--gigatime-target-mpp", "--physical-compartments",
-                 "--cell-profiles-enabled", "--cell-neighborhood-radii-um"):
+                 "--cell-profiles-enabled", "--cell-neighborhood-radii-um", "--input-metadata-json",
+                 "--hovernet-execution-mode", "--hovernet-target-mpp", "--hovernet-stream-core-size",
+                 "--hovernet-stream-halo", "--hovernet-stream-batch-tiles", "--hovernet-export-contours"):
         assert flag in source
+
+
+def test_hovernet_streaming_model_removes_slide_wide_arrays(tmp_path, monkeypatch):
+    image = tmp_path / "sample.tif"
+    image.write_bytes(b"dimension fixture")
+    monkeypatch.setattr(storage, "probe_dimensions", lambda _: (20_000, 10_000, "test"))
+    common = [
+        "--input", str(image), "--outdir", str(tmp_path), "--workdir", str(tmp_path),
+        "--output-json", str(tmp_path / "report.json"), "--start-point", "cell_consensus",
+        "--end-point", "cell_consensus", "--source-mpp", ".25", "--min-free-gib", "0",
+    ]
+    streaming = storage.build_report(storage.parser().parse_args(common))["stage_storage_models"]["cell_consensus"]["hovernet"]
+    legacy = storage.build_report(storage.parser().parse_args(common + ["--hovernet-execution-mode", "wsi"]))["stage_storage_models"]["cell_consensus"]["hovernet"]
+    assert streaming["bounded_tile_batch"] is True
+    assert streaming["slide_wide_prediction_bytes"] == 0
+    assert streaming["batch_tiles"] == 15
+    assert legacy["bounded_tile_batch"] is False
+    assert legacy["slide_wide_prediction_bytes"] == legacy["inference_pixels"] * 20
+    assert legacy["scratch_bytes"] > streaming["scratch_bytes"]
 
 
 def test_full_float_store_and_second_export_pyramid_accounted():
@@ -304,6 +325,53 @@ def test_unknown_or_unvalidated_metadata_never_earns_downsampling_discount():
     assert "not_an_upper_bound" in unknown["reason"]
     bigger = storage.inference_pixel_estimate(input_estimate(2., "unvalidated_tiff_resolution_max_axis"), .25)
     assert bigger["inference_area_scale"] == 64
+
+
+def test_selected_vsi_series_metadata_replaces_tiny_header_dimensions(tmp_path):
+    image = tmp_path / "sample.vsi"
+    image.write_bytes(b"tiny header")
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({
+        "schema_version": 1,
+        "inputs": [{
+            "path": str(image),
+            "width_px": 159_319,
+            "height_px": 129_791,
+            "physical_size_x_um": 0.1720394092,
+            "physical_size_y_um": 0.1720398793,
+            "backend": "bioformats_unflattened_series",
+        }],
+    }))
+    args = storage.parser().parse_args([
+        "--input", str(image), "--input-metadata-json", str(metadata),
+        "--outdir", str(tmp_path / "out"), "--workdir", str(tmp_path / "work"),
+        "--output-json", str(tmp_path / "report.json"),
+        "--start-point", "convert", "--end-point", "gigatime",
+        "--gigatime-output-format", "none", "--gigatime-export-ometiff", "false",
+        "--min-free-gib", "0",
+    ])
+    report = storage.build_report(args)
+    estimate = report["inputs"][0]
+    assert estimate["width_px"] == 159_319
+    assert estimate["height_px"] == 129_791
+    assert estimate["dimension_source"] == "bioformats_unflattened_series"
+    assert estimate["active_rgb_bytes"] == 159_319 * 129_791 * 3
+    inference = report["inference_scale_estimates"][0]
+    assert inference["inference_area_scale"] == 1
+    assert inference["reason"] == "selected_series_metadata_without_downsampling_credit"
+    item = storage.InputEstimate(**estimate)
+    expected_cells = math.ceil(159_319 * 129_791 * 0.1720398793 ** 2 * 10_000 / 1e6)
+    assert storage.estimated_cell_count([item], 10_000, 1.0) == expected_cells
+
+
+def test_input_metadata_rejects_invalid_dimensions(tmp_path):
+    metadata = tmp_path / "bad.json"
+    metadata.write_text(json.dumps({
+        "schema_version": 1,
+        "inputs": [{"path": "sample.vsi", "width_px": 0, "height_px": 20}],
+    }))
+    with pytest.raises(ValueError, match="positive integers"):
+        storage.load_input_metadata(metadata)
 
 
 def test_metadata_probe_rejects_thousand_mpp_without_decoding(tmp_path):

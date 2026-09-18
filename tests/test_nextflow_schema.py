@@ -208,6 +208,7 @@ def test_valid_scientific_route_combinations(intent: str, route: str) -> None:
         {"cell_detection_mode": "consensus", "compute_device": "cpu"},
         {"grandqc_enable": False, "end_point": "stardist"},
         {"gigatime_output_format": "jpg"},
+        {"gigatime_output_format": "none", "gigatime_export_ometiff": True},
         {"gigatime_output_dtype": "float16"},
         {"full_format": "tiff"},
         {
@@ -234,6 +235,8 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "convert_compression",
         "convert_jpeg_quality",
         "hovernet_cache_backend",
+        "hovernet_execution_mode",
+        "hovernet_stream_batch_tiles",
         "roi_validation_mode",
         "cell_consensus_fusion_acceptance_policy",
         "gigatime_seam_qc_mode",
@@ -244,6 +247,7 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "pathofmpred_cancer",
         "pathsegmentor_guided_refine_enable",
         "storage_preflight_mode",
+        "storage_preflight_input_metadata",
         "storage_restart_duplication_factor",
     ):
         assert f'"{name}"' in text
@@ -275,6 +279,22 @@ def test_schema_accepts_documented_hovernet_cache_backends(backend: str) -> None
 def test_schema_rejects_unknown_hovernet_cache_backend() -> None:
     with pytest.raises(jsonschema.ValidationError):
         validate({"hovernet_cache_backend": "float16"})
+
+
+@pytest.mark.parametrize("mode", ["streaming_tiles", "wsi"])
+def test_schema_accepts_documented_hovernet_execution_modes(mode: str) -> None:
+    validate({"hovernet_execution_mode": mode})
+
+
+@pytest.mark.parametrize("payload", [
+    {"hovernet_execution_mode": "unbounded"},
+    {"hovernet_stream_batch_tiles": 0},
+    {"hovernet_stream_halo": 91},
+    {"hovernet_tile_jpeg_quality": 101},
+])
+def test_schema_rejects_invalid_hovernet_streaming_settings(payload: dict) -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate(payload)
 
 
 def test_yaml_unquoted_off_is_normalized_for_storage_preflight(tmp_path: Path) -> None:

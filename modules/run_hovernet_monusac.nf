@@ -17,7 +17,7 @@ process RUN_HOVERNET_MONUSAC {
     val(runtime_plan)
 
     output:
-    tuple val(sample_id), path("hovernet_${sample_id}/hovernet_cells.json"), emit: cells_json
+    tuple val(sample_id), path("hovernet_${sample_id}/hovernet_cells.json.gz"), emit: cells_json
     tuple val(sample_id), path("hovernet_${sample_id}"), emit: hovernet_dir
 
     script:
@@ -41,6 +41,8 @@ process RUN_HOVERNET_MONUSAC {
         "hovernet_${sample_id}/cache" \
         "hovernet_${sample_id}/input" \
         "hovernet_${sample_id}/input_mask" \
+        "hovernet_${sample_id}/raw" \
+        "hovernet_${sample_id}/raw_cells" \
         "hovernet_${sample_id}/runtime_cache" \
         "hovernet_${sample_id}/hovernet_runtime"
     }
@@ -62,7 +64,13 @@ process RUN_HOVERNET_MONUSAC {
       --gpu ${params.hovernet_gpu} --batch-size ${params.hovernet_batch_size} \
       --inference-workers ${task.cpus} --postproc-workers ${postprocWorkers} \
       --chunk-shape ${params.hovernet_chunk_shape} --tile-shape ${params.hovernet_tile_shape} \
-      --cache-backend ${params.hovernet_cache_backend} ${predictionCacheArg}
+      --cache-backend ${params.hovernet_cache_backend} \
+      --execution-mode ${params.hovernet_execution_mode} \
+      --stream-core-size ${params.hovernet_stream_core_size} \
+      --stream-halo ${params.hovernet_stream_halo} \
+      --stream-batch-tiles ${params.hovernet_stream_batch_tiles} \
+      --tile-jpeg-quality ${params.hovernet_tile_jpeg_quality} \
+      ${params.hovernet_export_contours as boolean ? '--export-contours' : ''} ${predictionCacheArg}
     """
 
     stub:
@@ -70,7 +78,7 @@ process RUN_HOVERNET_MONUSAC {
     echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
     echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "hovernet_${sample_id}"
-    printf '{"model":"HoVer-Net","checkpoint":"MoNuSAC","cells":[]}' > "hovernet_${sample_id}/hovernet_cells.json"
+    printf '{"model":"HoVer-Net","checkpoint":"MoNuSAC","cells":[]}' | gzip -c > "hovernet_${sample_id}/hovernet_cells.json.gz"
     printf '{"model_provenance":{"used_model":false}}\n' > "hovernet_${sample_id}/hovernet_metadata.json"
     """
 }

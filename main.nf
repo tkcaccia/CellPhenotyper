@@ -254,6 +254,11 @@ source_ch
 
 def gigatime_enabled = (((params.gigatime_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def marker_quantification_enabled = (((params.marker_quantification_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def gigatime_output_format = (params.gigatime_output_format ?: 'none').toString().trim().toLowerCase()
+def gigatime_export_ometiff_enabled = (((params.gigatime_export_ometiff ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+if (gigatime_export_ometiff_enabled && gigatime_output_format != 'zarr') {
+error 'gigatime_export_ometiff=true requires gigatime_output_format=zarr; use ome_tiff for a direct dense TIFF or none for integrated tables only.'
+}
 def gigatime_kodama_enabled = ((((params.gigatime_kodama_enable == null) ? true : params.gigatime_kodama_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def grandqc_enabled = (((params.grandqc_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def pathsegmentor_enabled = (((params.pathsegmentor_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
@@ -919,7 +924,7 @@ if (run_gigatime) {
   if (run_marker_quantification) {
     marker_quant_output_ch = requireStageOutput('marker_quantification', gigatime_quant_dir_ch)
   }
-  if (params.gigatime_export_ometiff as boolean) {
+  if (gigatime_export_ometiff_enabled) {
     EXPORT_GIGATIME_OMETIFF(gigatime_image_ch)
   }
 }

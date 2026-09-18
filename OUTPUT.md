@@ -43,7 +43,7 @@ refinement outputs must be regenerated before strict sidecar-dependent restarts.
 
 ## Named Cell Types
 
-`03b_hovernet_monusac/<sample>/hovernet_<sample>/hovernet_cells.json` records both `type_id` and `type`. The MoNuSAC map is:
+`03b_hovernet_monusac/<sample>/hovernet_<sample>/hovernet_cells.json.gz` records both `type_id` and `type` in gzip-compressed JSON. The MoNuSAC map is:
 
 - `0`: `background`
 - `1`: `epithelial`

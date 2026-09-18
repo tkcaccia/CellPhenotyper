@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import hashlib
 import json
 import math
@@ -61,6 +62,9 @@ def load_stardist(path: Path) -> list[Cell]:
 
 
 def load_cells(path: Path, source: str, *, source_bytes: bytes | None = None) -> list[Cell]:
+    if source_bytes is None and path.suffix == ".gz":
+        with gzip.open(path, "rb") as handle:
+            source_bytes = handle.read()
     payload = json.loads(path.read_bytes() if source_bytes is None else source_bytes)
     cells = payload.get("cells", payload)
     if isinstance(cells, dict):

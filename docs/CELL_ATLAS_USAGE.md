@@ -587,7 +587,7 @@ For source-verified review, additionally provide all four startup paths:
 
 ```bash
 --candidate-stardist-objects /data/stardist/objects.csv \
---candidate-hovernet-cells /data/hovernet/hovernet_cells.json \
+--candidate-hovernet-cells /data/hovernet/hovernet_cells.json.gz \
 --candidate-cellvit-cells /data/cellvit/cellvit_cells.json \
 --candidate-alignment-csv /data/consensus/alignment.csv
 ```
@@ -614,7 +614,7 @@ source result. Choose a fresh output path:
 ```bash
 python bin/detector_candidate_review.py \
   --stardist-objects /data/stardist/objects.csv \
-  --hovernet-cells /data/hovernet/hovernet_cells.json \
+  --hovernet-cells /data/hovernet/hovernet_cells.json.gz \
   --cellvit-cells /data/cellvit/cellvit_cells.json \
   --alignment-csv /data/consensus/alignment.csv \
   --labels /data/consensus/labels.tif --image /data/crop.tif \

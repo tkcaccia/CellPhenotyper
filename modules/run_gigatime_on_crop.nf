@@ -37,7 +37,7 @@ process RUN_GIGATIME_ON_CROP {
     def predictor_flag = params.gigatime_output_predictor ? '--predictor' : ''
     def skip_background_flag = params.gigatime_skip_background_blocks ? '--skip-background-blocks' : ''
     def jpg_save_tiles_flag = params.gigatime_jpg_save_tiles ? '--jpg-save-tiles' : ''
-    def output_format = params.gigatime_output_format ?: 'ome_tiff'
+    def output_format = params.gigatime_output_format ?: 'none'
     def global_auto_hardware = params.containsKey('hardware_auto') ? params.hardware_auto : true
     def resolved_auto_hardware = params.gigatime_auto_hardware == null ? global_auto_hardware : params.gigatime_auto_hardware
     // The explicit value input carries the resolved policy into both command

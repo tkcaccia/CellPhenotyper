@@ -89,7 +89,7 @@ dag.enabled = false
 
 def assert_selection(evidence, profile, device):
     assert evidence is not None
-    expected = ("ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64" if device == "gpu"
+    expected = ("ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64" if device == "gpu"
                 else "ghcr.io/tkcaccia/cellphenotyper:2.2-amd64")
     if profile == "singularity":
         expected = "docker://" + expected

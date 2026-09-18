@@ -221,6 +221,11 @@
         "storage_safety_factor": {"type": "number", "minimum": 1, "default": 1.25},
         "storage_restart_duplication_factor": {"type": "number", "minimum": 0, "default": 1.0},
         "storage_source_expansion_factor": {"type": "number", "minimum": 1, "default": 8.0},
+        "storage_preflight_input_metadata": {
+          "type": "string",
+          "default": "",
+          "description": "Optional trusted selected-series dimension/MPP JSON; the VSI batch launcher generates this automatically with Bio-Formats."
+        },
         "gpu_scheduler_enable": {"type": "boolean", "default": true},
         "gpu_memory_reserve_gb": {"type": "number", "minimum": 0, "default": 2.0},
         "gpu_max_tasks_per_device": {"type": "integer", "minimum": 0, "default": 0}
@@ -302,6 +307,17 @@
           "default": "zarr",
           "description": "Lossless on-disk storage for transient whole-slide HoVer-Net maps. Zarr uses chunked Blosc/Zstd compression; numpy preserves the uncompressed upstream format."
         },
+        "hovernet_execution_mode": {
+          "type": "string",
+          "enum": ["streaming_tiles", "wsi"],
+          "default": "streaming_tiles",
+          "description": "Bounded-disk overlapping tile inference by default; wsi preserves the official slide-wide cache route."
+        },
+        "hovernet_stream_core_size": {"type": "integer", "minimum": 512, "maximum": 4816, "default": 4096},
+        "hovernet_stream_halo": {"type": "integer", "minimum": 92, "maximum": 2244, "default": 256},
+        "hovernet_stream_batch_tiles": {"type": "integer", "minimum": 1, "default": 64},
+        "hovernet_tile_jpeg_quality": {"type": "integer", "minimum": 1, "maximum": 100, "default": 92},
+        "hovernet_export_contours": {"type": "boolean", "default": false},
         "expand_um": {"oneOf": [{"const": -1}, {"type": "number", "minimum": 0}], "default": 3.0},
         "stardist_prob": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.52},
         "stardist_nms": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.28},
@@ -318,11 +334,11 @@
         "gigatime_enable": {"type": "boolean", "default": true},
         "gigatime_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
         "gigatime_strict_target_mpp": {"type": "boolean", "default": true},
-        "gigatime_output_format": {"type": "string", "enum": ["zarr", "ome_tiff", "none"], "default": "zarr"},
+        "gigatime_output_format": {"type": "string", "enum": ["zarr", "ome_tiff", "none"], "default": "none"},
         "gigatime_output_dtype": {"type": "string", "enum": ["uint8", "uint16", "float32"], "default": "float32"},
         "gigatime_output_channels": {"type": "string", "default": "", "description": "Empty selects all model channels; subsets or integer quantization are not equivalent full-panel restart inputs."},
         "gigatime_output_pyramid": {"type": "boolean", "default": true},
-        "gigatime_export_ometiff": {"type": "boolean", "default": true},
+        "gigatime_export_ometiff": {"type": "boolean", "default": false},
         "gigatime_skip_background_blocks": {
           "type": "boolean",
           "default": false,
@@ -497,6 +513,10 @@
     {
       "if": {"properties": {"analysis_intent": {"const": "virtual_staining"}}, "required": ["analysis_intent"]},
       "then": {"properties": {"gigatime_enable": {"const": true}}, "required": ["gigatime_enable"]}
+    },
+    {
+      "if": {"properties": {"gigatime_export_ometiff": {"const": true}}, "required": ["gigatime_export_ometiff"]},
+      "then": {"properties": {"gigatime_output_format": {"const": "zarr"}}, "required": ["gigatime_output_format"]}
     },
     {
       "if": {"properties": {"analysis_intent": {"const": "outcome_prediction"}}, "required": ["analysis_intent"]},

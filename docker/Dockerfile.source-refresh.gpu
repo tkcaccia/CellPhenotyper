@@ -1,6 +1,11 @@
 ARG BASE_IMAGE=cellphenotyper-local:2.7-final-gpu-amd64
 FROM ${BASE_IMAGE}
 
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.source="https://github.com/tkcaccia/CellPhenotyper" \
+      org.opencontainers.image.version="2.8" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}"
+
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
@@ -21,5 +26,6 @@ COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+COPY tests /opt/cellphenotyper/tests
 
 CMD ["/bin/bash"]

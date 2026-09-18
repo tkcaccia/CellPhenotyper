@@ -173,8 +173,8 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. The current validated GPU amd64 runtime is `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference. Local SIFs can be built from either verified Docker tag.
-The current amd64 SIF builds are larger than ordinary GitHub release asset limits, so prefer local `apptainer pull` / `singularity pull` from the verified Docker tags.
+Use published runtime images. The current validated GPU amd64 runtime is available as native SIF `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64` and OCI fallback `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference.
+The amd64 GPU SIF is larger than the GitHub Release asset limit, so obtain it from the verified GHCR/ORAS reference rather than expecting a GitHub Release attachment.
 
 Container rule:
 
@@ -185,13 +185,13 @@ Container rule:
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`
 
 Published GHCR/ORAS SIF references:
 
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
-- `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-amd64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
 
 The arm64 GPU SIF is a legacy artifact and must be validated against the target GPU compute capability; GB10-class (`sm_121`) systems require a compatible rebuilt image.
@@ -213,14 +213,14 @@ PY
 
 No manual pull command is required.
 When you run with `-profile singularity`, Nextflow resolves and pulls `params.singularity_image` automatically.
-Default behavior is `runtime_image_mode: auto`, `singularity_image_source: auto` for CPU roles, and `singularity_gpu_image_source: docker` for GPU roles.
-For a stable run, prefer a manually specified local `.sif` created from one of the verified Docker tags above.
+Default behavior is `runtime_image_mode: auto`, `singularity_image_source: auto` for CPU roles, and `singularity_gpu_image_source: oras` for amd64 GPU roles.
+For a stable repeated HPC run, pre-pull the verified ORAS SIF to shared storage and pass its absolute path explicitly.
 
 Default automatic runtime settings in `pipeline_paramers.yml`:
 
 - `runtime_image_mode: auto`
 - `singularity_image_source: auto`
-- `singularity_gpu_image_source: docker`
+- `singularity_gpu_image_source: oras`
 - `singularity_image: ""`
 
 To force a specific manual image, set:
@@ -253,12 +253,12 @@ Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64
 ```
 
 Use:
 - `2.2-amd64` on Linux x86_64/amd64
-- `cellphenotyper-runtime:2.7-gpu-amd64` on Linux amd64 with NVIDIA
+- `cellphenotyper-runtime:2.8-gpu-amd64` on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -403,4 +403,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64` in `pipeline_paramers.yml`

@@ -40,7 +40,7 @@ def run_probe(tmp_path, runtime, targets, overrides=None):
         shutil.copy2(ROOT / "modules" / f"{module}.nf", tmp_path / "modules" / f"{module}.nf")
     (tmp_path / "bin").symlink_to(ROOT / "bin", target_is_directory=True)
     recorder = tmp_path / "record_detection_arguments.py"
-    recorder.write_text("""import argparse, json, os
+    recorder.write_text("""import argparse, gzip, json, os
 from pathlib import Path
 p = argparse.ArgumentParser(allow_abbrev=False)
 p.add_argument('--image', '--in', dest='image')
@@ -49,9 +49,11 @@ p.add_argument('--device')
 p.add_argument('--sample-id')
 p.add_argument('--gpu')
 p.add_argument('--cache-backend')
+p.add_argument('--execution-mode')
+p.add_argument('--export-contours', action='store_true')
 for name in ['memory-budget-gb','min-area','prob','nms','artifact-overlap-fraction','target-mpp']:
     p.add_argument('--'+name, type=float)
-for name in ['big-block-size','inference-workers','postproc-workers','patch-size','artifact-tile-size','batch-size','chunk-shape','tile-shape']:
+for name in ['big-block-size','inference-workers','postproc-workers','patch-size','artifact-tile-size','batch-size','chunk-shape','tile-shape','stream-core-size','stream-halo','stream-batch-tiles','tile-jpeg-quality']:
     p.add_argument('--'+name, type=int)
 p.add_argument('--tiles', nargs=2, type=int)
 p.add_argument('--big-tiles', nargs=2, type=int)
@@ -66,11 +68,14 @@ if args.sample_id:
 elif output.name == 'stardist_out':
     names = ['crop_roi.tif','labels.tif','objects.csv','roi_all_crop.geojson','shift.json']
 else:
-    names = ['hovernet_cells.json']
-    for transient in ['cache','input','input_mask','runtime_cache','hovernet_runtime']:
+    names = ['hovernet_cells.json.gz']
+    for transient in ['cache','input','input_mask','raw','raw_cells','runtime_cache','hovernet_runtime']:
         path = output/transient; path.mkdir(); (path/'large-transient-sentinel').write_text('temporary')
 for name in names:
-    (output/name).write_text('MODEL-FREE RUNTIME COMMAND FIXTURE; NOT BIOLOGICAL RESULTS\\n')
+    if name.endswith('.gz'):
+        with gzip.open(output/name, 'wt') as handle: handle.write('{"cells":[]}')
+    else:
+        (output/name).write_text('MODEL-FREE RUNTIME COMMAND FIXTURE; NOT BIOLOGICAL RESULTS\\n')
 """)
     for name in ("image.tif", "roi.geojson", "shift.json", "tissue.tif"):
         (tmp_path / name).write_text("model-free command fixture; no inference\n")
@@ -98,7 +103,11 @@ for name in names:
         "hovernet_script": recorder.name, "hovernet_time": "1m", "hovernet_cpus": 48, "hovernet_memory_gb": 96,
         "hovernet_postproc_workers": 1, "hovernet_prediction_cache": "", "hovernet_cache_backend": "zarr", "hovernet_repo_dir": "unused-model-free",
         "hovernet_monusac_checkpoint": "unused-model-free", "hovernet_target_mpp": 0.25, "hovernet_default_mpp": 0.5,
-        "hovernet_gpu": 0, "hovernet_batch_size": 8, "hovernet_chunk_shape": 8192, "hovernet_tile_shape": 2048})
+        "hovernet_gpu": 0, "hovernet_batch_size": 8, "hovernet_chunk_shape": 8192, "hovernet_tile_shape": 2048,
+        "hovernet_execution_mode": "streaming_tiles", "hovernet_stream_core_size": 4096,
+        "hovernet_stream_halo": 256, "hovernet_stream_batch_tiles": 64,
+        "hovernet_tile_jpeg_quality": 92,
+        "hovernet_export_contours": False})
     params.update(overrides or {})
     (tmp_path / "params.json").write_text(json.dumps(params))
     includes = "\n".join(f"include {{ {MODULES[key][1]} }} from './modules/{MODULES[key][0]}'" for key in targets)
@@ -161,6 +170,8 @@ def test_actual_gpu_commands_use_plan_caps_and_preserve_scientific_options(tmp_p
     assert star["environment"]["CUDA_VISIBLE_DEVICES"] == "GPU-model-free-sentinel"
     assert hover["inference_workers"] == 3 and hover["postproc_workers"] == 1
     assert hover["cache_backend"] == "zarr"
+    assert hover["execution_mode"] == "streaming_tiles"
+    assert (hover["stream_core_size"], hover["stream_halo"], hover["stream_batch_tiles"]) == (4096, 256, 64)
     assert (hover["target_mpp"], hover["batch_size"], hover["chunk_shape"], hover["tile_shape"]) == (0.25, 8, 8192, 2048)
     assert all(not record["used_model"] for record in records.values())
     assert all("aggressive" in script for script in scripts)
@@ -215,11 +226,11 @@ def test_hovernet_plan_worker_setting_is_capped_by_cpus_and_ram(tmp_path):
     assert records["hovernet"]["postproc_workers"] == 3  # not stale param=1, nor requested=5 > task.cpus
 
 
-def test_hovernet_task_cleans_whole_slide_transients_on_exit(tmp_path):
+def test_hovernet_task_cleans_all_transients_on_exit(tmp_path):
     text = (ROOT / "modules" / "run_hovernet_monusac.nf").read_text(encoding="utf-8")
     assert "trap cleanup_hovernet_transients EXIT" in text
     assert "trap 'exit 143' TERM" in text
-    for transient in ("cache", "input", "input_mask", "runtime_cache", "hovernet_runtime"):
+    for transient in ("cache", "input", "input_mask", "raw", "raw_cells", "runtime_cache", "hovernet_runtime"):
         assert f'"hovernet_${{sample_id}}/{transient}"' in text
     result, records, _, _ = run_probe(tmp_path, plan(memory=36), ["hovernet"])
     assert result.returncode == 0, result.stdout + result.stderr

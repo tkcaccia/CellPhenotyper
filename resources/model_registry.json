@@ -51,7 +51,7 @@
       "license_status": "checkpoint_terms_unverified",
       "training_domain": "MoNuSAC epithelial, lymphocyte, macrophage and neutrophil nuclei; non-exhaustive ontology",
       "metadata_globs": ["03b_hovernet_monusac/**/hovernet_metadata.json"],
-      "stage_presence_globs": ["03b_hovernet_monusac/**/hovernet_cells.json"]
+      "stage_presence_globs": ["03b_hovernet_monusac/**/hovernet_cells.json.gz"]
     },
     {
       "component_id": "cellvitpp",

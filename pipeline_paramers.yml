@@ -16,6 +16,7 @@ folder_input: Data
 # Endpoint (outputs)
 outdir_base: results_full
 storage_preflight_mode: fail  # off | warn | fail; fail blocks expected demand, warning records restart risk
+storage_preflight_input_metadata: ''  # normally generated automatically by the serial VSI batch launcher
 storage_min_free_gib: 20.0
 storage_safety_factor: 1.25
 storage_restart_duplication_factor: 1.0
@@ -50,19 +51,19 @@ container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime
 container_cpu_tag: 2.2-amd64   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 2.2-amd64
 container_cpu_tag_arm64: 0.2.0
-container_gpu_tag: 2.7-gpu-amd64
+container_gpu_tag: 2.8-gpu-amd64
 singularity_image_source: auto   # auto | oras | release | docker
-singularity_gpu_image_source: docker   # use the verified GPU OCI runtime through Singularity/Apptainer
+singularity_gpu_image_source: oras   # use the verified native GPU SIF from GHCR
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
 singularity_cpu_oras_tag_amd64: 2.2-sif-amd64
 singularity_cpu_oras_tag_arm64: 2.2-sif-arm64
-singularity_gpu_oras_tag_amd64: 2.2-sif-gpu-amd64
+singularity_gpu_oras_tag_amd64: 2.8-sif-gpu-amd64
 singularity_gpu_oras_tag_arm64: 2.2-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v2.2
 singularity_cpu_asset_amd64: cellphenotyper-2.2-amd64.sif
 singularity_cpu_asset_arm64: cellphenotyper-2.2-arm64.sif
-singularity_gpu_asset_amd64: cellphenotyper-2.2-gpu-amd64.sif
+singularity_gpu_asset_amd64: cellphenotyper-2.8-gpu-amd64.sif
 singularity_gpu_asset_arm64: cellphenotyper-2.2-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
@@ -134,6 +135,12 @@ hovernet_batch_size: 0   # 0 = auto-scale from live free VRAM on the assigned GP
 hovernet_postproc_workers: 0
 hovernet_prediction_cache: ''
 hovernet_cache_backend: zarr  # zarr (lossless compressed, default) | numpy (upstream compatibility)
+hovernet_execution_mode: streaming_tiles  # bounded-disk default; wsi retains official slide-wide arrays
+hovernet_stream_core_size: 4096
+hovernet_stream_halo: 256
+hovernet_stream_batch_tiles: 64  # at most this many normalized JPEG tiles exist at once
+hovernet_tile_jpeg_quality: 92
+hovernet_export_contours: false  # broad-pair consensus uses CellViT++ geometry; HoVer-Net is scoped support
 hovernet_chunk_shape: 8192  # bounded-memory WSI post-processing; 4 x 2048-pixel tiles per side
 hovernet_tile_shape: 2048
 cellvit_model: HIPT
@@ -244,11 +251,11 @@ input_roi_mask_preview_alpha: 0.45
 gigatime_enable: true
 gigatime_target_mpp: 0.25
 gigatime_strict_target_mpp: true
-gigatime_output_format: zarr
+gigatime_output_format: none  # no dense WSI by default; integrated 23-marker cell tables are still written
 gigatime_output_dtype: float32
 gigatime_output_channels: ''  # complete model panel; selected uint8 exports are not equivalent restart inputs
 gigatime_output_pyramid: true
-gigatime_export_ometiff: true
+gigatime_export_ometiff: false  # opt in only when a dense visualization stack is required and storage is sufficient
 gigatime_export_channels: ''
 gigatime_export_output_dtype: auto
 gigatime_export_compression: deflate

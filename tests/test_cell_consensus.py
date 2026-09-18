@@ -1,4 +1,6 @@
 import importlib.util
+import gzip
+import json
 import sys
 import tempfile
 import unittest
@@ -18,6 +20,16 @@ def cell(source, source_id, x, y, contour=None):
 
 
 class ConsensusMatchingTest(unittest.TestCase):
+    def test_load_cells_accepts_compressed_hovernet_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hovernet_cells.json.gz"
+            with gzip.open(path, "wt") as handle:
+                json.dump({"cells": [{"id": "h1", "centroid": [2, 3],
+                                      "type_id": 2, "type": "lymphocyte"}]}, handle)
+            cells = consensus.load_cells(path, "hovernet")
+        self.assertEqual(len(cells), 1)
+        self.assertEqual((cells[0].source_id, cells[0].x, cells[0].y), ("h1", 2.0, 3.0))
+
     def test_count_qc_accounts_for_non_exhaustive_monusac_scope(self):
         by_source = {
             "stardist": list(range(100)),

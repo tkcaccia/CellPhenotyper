@@ -84,7 +84,7 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 
 - Docker profile uses GHCR images.
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
-- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: docker` by default, selecting the verified `2.7-gpu-amd64` OCI runtime instead of legacy GPU SIF metadata.
+- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: oras` by default, selecting the verified native `2.8-sif-gpu-amd64` SIF from GHCR.
 - GPU-capable stages select their image and GPU access per task, honoring supported stage-specific device overrides. KODAMA's CUDA backend also uses this route; CPU KODAMA does not reserve a GPU.
 - On arm64, a requested GPU task requires a compatible GPU image; it fails rather than silently selecting a CPU or amd64 image. An explicitly selected CPU-compatible route such as `cell_detection_mode=stardist` remains available.
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
@@ -101,20 +101,20 @@ verification scope and remaining limitations.
 
 Currently verified and published:
 
-- Docker GPU amd64 (`v2.7`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`
+- Docker GPU amd64 (`v2.8`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 - Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
-- Published GHCR/ORAS SIF artifacts: `2.2-sif-amd64`, `2.2-sif-arm64`, `2.2-sif-gpu-amd64`, and `2.2-sif-gpu-arm64` under `ghcr.io/tkcaccia/cellphenotyper`.
+- Published GHCR/ORAS SIF artifacts include the HPC-validated amd64 GPU image `2.8-sif-gpu-amd64`; the existing 2.2 CPU/arm64 assets remain available under `ghcr.io/tkcaccia/cellphenotyper`.
 
 The legacy arm64 GPU artifact is published but is not suitable for every GPU generation. In particular, GB10-class (`sm_121`) systems require a rebuilt arm64 GPU SIF with a compatible CUDA/PyTorch stack.
-The currently built amd64 SIF files are too large for ordinary GitHub release assets, so the stable amd64 Singularity workflow is still local `apptainer pull` / `singularity pull` from the verified Docker tags.
+The amd64 GPU SIF exceeds the GitHub Release 2 GiB asset limit and is therefore distributed natively through GHCR/ORAS. Clusters may pull it once to shared storage and reuse the checksum-verified local file.
 
 Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64
 ```
 
 ## UNI-2 token setup (required)
@@ -339,7 +339,7 @@ nextflow run main.nf \
   --outdir_base results_example_gpu \
   --compute_device gpu \
   --host_arch amd64 \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```
@@ -454,7 +454,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, automatic resolution may still probe multiple sources, but the verified manual path today is a local `.sif` created from `docker://ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` or `docker://ghcr.io/tkcaccia/cellphenotyper-runtime:2.7-gpu-amd64`.
+- In `-profile singularity`, amd64 GPU roles resolve `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64` by default. A cluster may instead pre-pull `cellphenotyper-2.8-gpu-amd64.sif` to shared storage and pass its absolute path through `--gpu_container_image`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
@@ -576,7 +576,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 docker push "${IMAGE}"
 ```
-Cell identification has an explicit, hardware-independent scientific mode. `cell_detection_mode=consensus` runs StarDist, HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask; HoVer-Net receives that mask during upstream WSI inference rather than generating an independent Otsu mask. The detectors have no inter-detector dependency and fusion alone waits for all three. By default, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved. `cell_detection_mode=stardist` must be selected explicitly for a StarDist-only analysis; the pipeline never changes the cell population merely because hardware differs.
+Cell identification has an explicit, hardware-independent scientific mode. `cell_detection_mode=consensus` runs StarDist, HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask. HoVer-Net defaults to a bounded-disk overlap-tiled route: only GrandQC-supported 4,096-pixel cores run, a 256-pixel halo preserves local context, and centroid ownership removes halo duplicates without slide-wide prediction maps. At most 64 normalized input tiles exist simultaneously. The detectors have no inter-detector dependency and fusion alone waits for all three. By default, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. Its compact gzip JSON therefore omits redundant contours by default. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved. `cell_detection_mode=stardist` must be selected explicitly for a StarDist-only analysis; the pipeline never changes the cell population merely because hardware differs.
 
 Every run writes `00_execution/analysis_contract.json` and `00_execution/validation_readiness.json`. An optional `--study_manifest` based on `resources/study_manifest.template.json` declares the intended use, primary endpoint, statistical unit, cohort independence, reference standard and prespecification. `--evidence_gate_mode warn` keeps exploratory runs usable while limiting claims in the report; `fail` rejects an incomplete testing declaration. Passing this schema check does not verify accuracy or clinical validity.
 
@@ -625,9 +625,16 @@ python bin/run_sample_batch.py \
   --input-dir /data/cohort \
   --output-root /results/cohort \
   --profile docker \
-  --clean-work-on-success \
   -- --run_full_pipeline true --compute_device gpu
 ```
+
+The launcher runs samples serially and removes each successful sample's
+isolated Nextflow work directory by default, after its outputs and completion
+marker are durable. Failed or interrupted sample work is retained for
+`-resume`. On a later batch invocation, a sample is skipped only when its
+completion marker matches the input inventory, resolved parameters, forwarded
+arguments and pipeline-source digest. Use `--keep-work-on-success` for
+debugging or `--rerun-completed` to ignore matching completion markers.
 
 Olympus `.vsi` inputs are supported when the VSI header and its required
 `_<sample>_` companion directory remain together in the input folder. When the
@@ -635,7 +642,11 @@ selected series is stored as three grayscale planes, CellPhenotyper joins them
 into explicit RGB automatically. The source planes are assumed to be `RGB`; use
 `--convert_channel_order BGR` (or another RGB permutation) only when scanner
 metadata or visual QC establishes a different source order. The published
-OME-TIFF is always canonical RGB.
+OME-TIFF is always canonical RGB. Before each serial VSI run, the launcher uses
+the configured runtime image to query the same unflattened Bio-Formats series
+selected for conversion and supplies its full dimensions and physical pixel
+sizes to storage preflight. This prevents the small preview stored in the VSI
+header from being budgeted as if it were the whole slide.
 
 Input and analysis-crop storage compression is configurable with
 `--convert_compression JPEG|LZW|DEFLATE|NONE`. `JPEG` is lossy and uses
@@ -643,5 +654,12 @@ Input and analysis-crop storage compression is configurable with
 codec is used for the converted OME-TIFF and the tiled, pyramidal
 `crop_roi.tif`. Downstream models, including HoVer-Net, read those compressed
 TIFFs directly and decode only the tiles needed for computation.
+
+GigaTIME still predicts all 23 virtual-marker channels and performs integrated
+full-precision nucleus, cytoplasm and perinuclear-ring quantification during
+the tiled pass. To keep whole-slide cohorts tractable, the default does not
+also persist a dense 23-channel WSI (`gigatime_output_format=none`,
+`gigatime_export_ometiff=false`). Dense Zarr and pyramidal OME-TIFF exports are
+explicit opt-ins and are capacity-checked before inference.
 
 See `OUTPUT.md` for the complete stage 16-18 artifacts and `PARAMETERS.md` for restart points. A restart at `titan` reuses stage 16; a restart at `pathofmpred` reuses the existing TITAN CSV.

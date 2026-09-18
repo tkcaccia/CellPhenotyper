@@ -120,6 +120,7 @@ nextflow run main.nf -profile singularity \
 | `vsi_series_index` | `1` | Bio-Formats series containing the primary whole-slide image for Olympus VSI input. The prostate VSI files use series 1; change only after inspecting another scanner export. |
 | `convert_channel_order` | `RGB` | Meaning of source planes when a three-plane brightfield image must be joined. Accepts `RGB`, `RBG`, `GRB`, `GBR`, `BRG`, or `BGR`; the normalized pyramidal OME-TIFF always decodes to canonical RGB. JPEG-in-TIFF uses standard `YCbCr` storage, while lossless codecs retain an `RGB` photometric tag. |
 | `storage_preflight_mode` | `fail` | `off`, `warn`, or `fail`. The default rejects expected output/work/cache demand that cannot fit while restart-only insufficiency is a review warning. |
+| `storage_preflight_input_metadata` | empty | Optional schema-versioned selected-series dimensions and physical sizes. The serial VSI launcher generates this automatically with the same unflattened Bio-Formats series used by conversion, preventing the small VSI header preview from being mistaken for the whole slide. |
 | `storage_min_free_gib` | `20.0` | Per-filesystem free-space reserve retained after estimated demand. |
 | `storage_safety_factor` | `1.25` | Safety multiplier for expected published-output and Nextflow-work growth. |
 | `storage_restart_duplication_factor` | `1.0` | Additional retained-work allowance in the restart worst-case estimate. |
@@ -141,19 +142,19 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag` | `2.2-amd64` | Legacy generic fallback. Architecture-specific CPU tags below remain authoritative. |
 | `container_cpu_tag_amd64` | `2.2-amd64` | Published CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | Published CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `2.7-gpu-amd64` | Validated amd64 GPU tag used when `compute_device` resolves to GPU. |
+| `container_gpu_tag` | `2.8-gpu-amd64` | Validated amd64 GPU OCI fallback used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` tries local `.sif`, then GHCR ORAS SIF tags, then legacy release assets, then `docker://` fallback. Valid values: `auto`, `oras`, `release`, `docker`. |
-| `singularity_gpu_image_source` | `docker` | GPU-specific Singularity/Apptainer source. The verified `2.7-gpu-amd64` runtime is pulled from its Docker OCI image by default. |
+| `singularity_gpu_image_source` | `oras` | GPU-specific Singularity/Apptainer source. The verified native `2.8-sif-gpu-amd64` artifact is pulled from GHCR by default. |
 | `singularity_oras_repo` | `ghcr.io/tkcaccia/cellphenotyper` | GHCR repository used to resolve ORAS-hosted `.sif` tags. |
 | `singularity_cpu_oras_tag_amd64` | `2.2-sif-amd64` | CPU ORAS tag for amd64 hosts. |
 | `singularity_cpu_oras_tag_arm64` | `2.2-sif-arm64` | CPU ORAS tag for arm64 hosts. |
-| `singularity_gpu_oras_tag_amd64` | `2.2-sif-gpu-amd64` | GPU ORAS tag for amd64 hosts. |
+| `singularity_gpu_oras_tag_amd64` | `2.8-sif-gpu-amd64` | HPC-validated GPU ORAS tag for amd64 hosts. |
 | `singularity_gpu_oras_tag_arm64` | `2.2-sif-gpu-arm64` | GPU ORAS tag for arm64 hosts. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v2.2` | Legacy GitHub release tag containing smaller `.sif` assets when available. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-2.2-amd64.sif` | Legacy CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-2.2-arm64.sif` | Legacy CPU Singularity asset name for arm64 hosts. |
-| `singularity_gpu_asset_amd64` | `cellphenotyper-2.2-gpu-amd64.sif` | Legacy GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_amd64` | `cellphenotyper-2.8-gpu-amd64.sif` | Native GPU Singularity asset name for amd64 hosts. |
 | `singularity_gpu_asset_arm64` | `cellphenotyper-2.2-gpu-arm64.sif` | Legacy GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before ORAS/release/docker fallback. |
 | `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |
@@ -330,9 +331,9 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `gigatime_seam_qc_min_affected_fraction` | `0.05` | Minimum sampled boundary fraction required to trigger the seam gate. |
 | `gigatime_strict_target_mpp` | `true` | Enforce the requested GigaTIME physical scale from image metadata with exact floating-point resampling. This includes upsampling when the source MPP is coarser than the model target; GigaTIME fails if MPP cannot be resolved and does not coarsen the image to satisfy the output-size budget. |
 | `gigatime_max_output_gib` | `8.0` | Maximum estimated uncompressed persisted GigaTIME image size before automatic extra downsampling is applied when strict target MPP is disabled. |
-| `gigatime_output_format` | `zarr` | Persist the GigaTIME virtual-marker score image as chunked `gigatime_probs.zarr` by default. The filename is retained for compatibility; scores are not calibrated probabilities. When `ome_tiff` is requested, the saved `gigatime_probs.ome.tif` is pyramidal by default for QuPath/WSI viewing. |
+| `gigatime_output_format` | `none` | Do not persist a dense multichannel WSI by default. All 23 model channels are still reduced at float32/float64 precision into authoritative nucleus, cytoplasm and perinuclear-ring tables during tiled inference, and bounded JPEG previews remain available. Select `zarr` or `ome_tiff` explicitly only when a dense virtual-marker field is required and storage preflight confirms capacity. |
 | `gigatime_output_channels` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels persisted in the GigaTIME image store. Integrated single-cell quantification is still computed from all GigaTIME model channels. |
-| `gigatime_export_ometiff` | `true` | Export the GigaTIME store to a pyramidal multichannel `gigatime_probs.ome.tif` after prediction. This keeps inference reliable with Zarr while still producing a QuPath-ready OME-TIFF. |
+| `gigatime_export_ometiff` | `false` | Optionally export a persisted GigaTIME Zarr store to a pyramidal multichannel `gigatime_probs.ome.tif`. It is disabled by default to avoid duplicating a potentially terabyte-scale dense WSI; it requires `gigatime_output_format=zarr`. |
 | `gigatime_integrated_quantification` | `true` | Quantify all 23 GigaTIME model markers over nuclei and cytoplasm during the same tiled inference pass. The persisted image may remain a smaller selected channel subset; full-marker quantification does not require storing a 23-channel WSI. |
 | `gigatime_kodama_enable` | `true` | Run an independent PCA/KODAMA analysis on all matched nuclei and cytoplasm marker means. Requires integrated quantification. |
 | `gigatime_jpg_markers` | `DAPI,PD-1,CD3,CD8,PD-L1` | Marker channels exported as lightweight JPEG previews for visual QC. |
@@ -474,15 +475,21 @@ Additional automatic outputs:
 
 `cell_detection_mode=consensus` enables GPU-only multi-detector instance fusion; `cell_detection_mode=stardist` explicitly selects the single-detector route. The deprecated `cell_consensus_enable` parameter is read only as a compatibility fallback when `cell_detection_mode` is absent. A consensus request on CPU fails rather than silently changing the analyzed cell population. StarDist, HoVer-Net MoNuSAC, and CellViT++ have no inter-detector channel dependency and can run in parallel from the same shared crop and GrandQC mask; fusion waits for all three. `cell_consensus_fusion_acceptance_policy=broad_pair` requires the broad-scope StarDist and CellViT++ pair for a canonical instance; HoVer-Net remains scoped support. `any_two` reproduces the legacy policy and must be treated as a sensitivity analysis. `cell_consensus_min_support` remains an additional minimum-source gate (default `2`). `cell_consensus_match_radius_um` is the direct broad-pair maximum centroid distance in physical units (default `4.0` microns); it is converted to pixels from `shift.json`. `cell_consensus_geometry_priority` deterministically selects the preferred available contour for each accepted component. `cell_consensus_min_agreement_score` can add a stricter broad-detector geometric gate. Instance geometry, broad support, scoped support and detector-specific phenotype evidence are reported separately: the pipeline does not vote incompatible detector taxonomies into a synthetic cell type. `cell_consensus_count_ratio_warning` defaults to `2.0` and reports count imbalance separately for all detectors and for the broad-scope StarDist/CellViT++ pair. Because detector contours can overlap completely, the raster writer reserves one unique centroid-near seed pixel per canonical cell and verifies that every ID in `objects.csv` is present in `labels.tif` before publishing the stage. Pairwise match fractions, centroid distances, polygon IoU and Hausdorff distances are detector-agreement benchmarks, not reference-standard accuracy or calibrated confidence estimates.
 
-HoVer-Net uses `hovernet_target_mpp=0.25`, the official `fast` MoNuSAC checkpoint, and the resource parameters prefixed by `hovernet_`. The MoNuSAC positive classes do not cover all nuclei, so its count is not expected to match StarDist or CellViT++. The wrapper passes the shared GrandQC clean-tissue mask into HoVer-Net WSI inference, records checkpoint/upstream provenance and the model-scope limitation, then applies the same mask again as a centroid-level output invariant. `hovernet_postproc_workers=0` selects a memory-aware worker count (one worker per 6 GB of allocated memory); an explicit value is still capped by that safety limit. HoVer-Net's slide-sized prediction and instance maps are transient implementation files and are deleted whenever the task exits, including after a failure or cancellation; valid published cell results are unaffected. `hovernet_prediction_cache` remains an explicit expert recovery input for a separately preserved, completed upstream `pred_map.npy`, but failed task caches are not retained automatically. CellViT++ uses `cellvit_model` (`HIPT` by default), `cellvit_taxonomy`, mixed precision via `cellvit_amp`, and resource parameters prefixed by `cellvit_`. `cellvit_ray_workers` defaults to `1` because CellViT++ 1.0.9 fails with its upstream zero-worker default; `cellvit_ray_worker_cpus=0` divides the allocated task CPUs automatically. The HIPT weights and classifiers are baked once into `cellvit_cache_dir` inside the versioned GPU image, avoiding duplicate downloads across tasks and runs.
+HoVer-Net uses `hovernet_target_mpp=0.25`, the official `fast` MoNuSAC checkpoint, and the resource parameters prefixed by `hovernet_`. The bounded-disk default is `hovernet_execution_mode=streaming_tiles`: 4,096-pixel ownership cores receive a 256-pixel context halo, only GrandQC-supported cores run, and no slide-wide prediction or instance map is allocated. `hovernet_stream_batch_tiles=64` bounds simultaneously materialized JPEG inputs. Half-open core ownership retains each centroid once. The output is gzip-compressed JSON; contours are omitted by default because HoVer-Net supplies scoped phenotype support while CellViT++ supplies canonical geometry under `broad_pair`. Set `hovernet_export_contours=true` for an explicit geometry sensitivity analysis. `hovernet_execution_mode=wsi` retains the official slide-wide implementation and its expert recovery cache. `hovernet_postproc_workers=0` selects a memory-aware worker count (one worker per 6 GB of allocated memory); an explicit value is still capped by that safety limit. The MoNuSAC positive classes do not cover all nuclei, so its count is not expected to match StarDist or CellViT++. CellViT++ uses `cellvit_model` (`HIPT` by default), `cellvit_taxonomy`, mixed precision via `cellvit_amp`, and resource parameters prefixed by `cellvit_`. `cellvit_ray_workers` defaults to `1` because CellViT++ 1.0.9 fails with its upstream zero-worker default; `cellvit_ray_worker_cpus=0` divides the allocated task CPUs automatically. The HIPT weights and classifiers are baked once into `cellvit_cache_dir` inside the versioned GPU image, avoiding duplicate downloads across tasks and runs.
 
-`hovernet_cache_backend=zarr` keeps the exact float32 predictions and int32
+In compatibility WSI mode, `hovernet_cache_backend=zarr` keeps the exact float32 predictions and int32
 instance IDs in bounded 1,024-pixel, losslessly Blosc/Zstd-compressed transient
 arrays; each prediction block is written once and needs at most a 16 MiB
 assembly buffer.
 `numpy` selects the uncompressed upstream representation for compatibility
 comparisons and is required when `hovernet_prediction_cache` points to an
 explicitly preserved upstream `pred_map.npy`.
+
+The streaming defaults are `hovernet_stream_core_size=4096`,
+`hovernet_stream_halo=256`, `hovernet_stream_batch_tiles=64`, and
+`hovernet_tile_jpeg_quality=92`. The invariant
+`core_size + 2 * halo <= 5000` is enforced because the pinned upstream tile
+runner supports images smaller than 5,000 pixels per side.
 
 See [HoVer-Net transient storage](docs/HOVERNET_STORAGE.md) for cleanup
 semantics and the real-tissue lossless-backend equivalence benchmark.

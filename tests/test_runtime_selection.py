@@ -18,9 +18,9 @@ GPU_MODULES = (
 
 def test_verified_gpu_runtime_is_the_default() -> None:
     assert "default_container_gpu_repo = 'ghcr.io/tkcaccia/cellphenotyper-runtime'" in CONFIG
-    assert "default_container_gpu_tag = '2.7-gpu-amd64'" in CONFIG
+    assert "default_container_gpu_tag = '2.8-gpu-amd64'" in CONFIG
     assert "container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime" in PARAMETERS
-    assert "container_gpu_tag: 2.7-gpu-amd64" in PARAMETERS
+    assert "container_gpu_tag: 2.8-gpu-amd64" in PARAMETERS
 
 
 def test_published_cpu_runtimes_are_the_defaults() -> None:
@@ -51,8 +51,8 @@ def test_sif_publisher_requires_an_explicit_version() -> None:
 
 
 def test_singularity_gpu_roles_use_the_verified_oci_runtime() -> None:
-    assert "singularity_gpu_image_source   = 'docker'" in CONFIG
-    assert "singularity_gpu_image_source: docker" in PARAMETERS
+    assert "singularity_gpu_image_source   = 'oras'" in CONFIG
+    assert "singularity_gpu_image_source: oras" in PARAMETERS
     assert CONFIG.count('"docker://${gpuRepo}:${gpuTag}"') >= 2
 
 
@@ -91,7 +91,7 @@ def test_target_cluster_count_is_wired_to_clustering() -> None:
     assert "--target-clusters ${params.cluster_target_clusters}" in module
     assert 'flag == "--target-clusters"' in script
     assert "collapse_clusters_to_target" in script
-    assert "nearest_centroid_merge_in_kodama_space" in script
+    assert 'paste0("nearest_centroid_merge_in_", cluster_representation, "_space")' in script
     assert "cluster_forced_count_sensitivity_acknowledged" in module
     assert "sensitivity_forced_cluster_count" in script
     assert "SENSITIVITY ONLY" in script

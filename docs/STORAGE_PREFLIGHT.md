@@ -9,6 +9,7 @@ CellPhenotyper estimates disk demand before scheduling image-processing stages. 
 - source file size, probed level-0 dimensions, metadata probe method and estimated active RGB bytes for every input;
 - an ROI bounding-box adjustment when a matching GeoJSON is available before execution;
 - separate stage-window coefficients for durable published output and retained/transient Nextflow work;
+- an explicit HoVer-Net peak-disk model: the default streaming route budgets one bounded tile batch plus the incrementally written final result, while `hovernet_execution_mode=wsi` budgets the complete float32 prediction and int32 instance maps;
 - the effect of `publish_dir_mode=copy` versus `rellink`;
 - conservative remaining allowances for StarDist, GrandQC, Hugging Face, TITAN, PathoFMPred and Singularity caches when relevant;
 - expected incremental demand and a restart worst case;

@@ -1,4 +1,6 @@
 import importlib.util
+import gzip
+import io
 import json
 import os
 import sys
@@ -51,7 +53,7 @@ class MonusacTypeInfoTest(unittest.TestCase):
         mask_dir = Path("/tmp/hovernet-mask")
         self.assertEqual(
             hovernet.inference_mask_args(mask_dir),
-            [f"--input_mask_dir={mask_dir}", "--save_mask", "--save_thumb"],
+            [f"--input_mask_dir={mask_dir}"],
         )
         self.assertEqual(hovernet.inference_mask_args(None), [])
 
@@ -131,6 +133,27 @@ class MonusacTypeInfoTest(unittest.TestCase):
         self.assertIn("patches_by_storage_chunk", patched)
         self.assertIn("storage_block = np.zeros", patched)
 
+    def test_streaming_tile_patch_removes_bulky_outputs_and_compresses_json(self):
+        constants = tuple(
+            value for value in hovernet.enable_lightweight_tile_runtime.__code__.co_consts
+            if isinstance(value, str)
+        )
+        directories = next(value for value in constants if "rm_n_mkdir(self.output_dir + '/mat/')" in value)
+        bulky = next(value for value in constants if 'mat_dict = {' in value)
+        json_writer = next(value for value in constants if 'self.__save_json(save_path, inst_info_dict, None)' in value)
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "infer").mkdir()
+            (runtime / "infer" / "tile.py").write_text(
+                "import glob\n" + directories + "\n" + bulky + "\n" + json_writer + "\n"
+            )
+            hovernet.enable_lightweight_tile_runtime(runtime)
+            patched = (runtime / "infer" / "tile.py").read_text()
+        self.assertIn('gzip.open(save_path + ".gz"', patched)
+        self.assertNotIn("sio.savemat(save_path, mat_dict)", patched)
+        self.assertNotIn("cv2.imwrite(save_path, cv2.cvtColor(overlaid_img", patched)
+        self.assertNotIn("rm_n_mkdir(self.output_dir + '/mat/')", patched)
+
     def test_cache_measurement_patch_is_explicitly_opt_in(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
@@ -141,6 +164,67 @@ class MonusacTypeInfoTest(unittest.TestCase):
             patched = (runtime / "infer" / "wsi.py").read_text()
         self.assertIn('HOVERNET_MEASURE_CACHE_STORAGE', patched)
         self.assertIn("rm_n_mkdir(self.cache_path)", patched)
+
+    def test_streaming_merge_owns_halo_cells_once_and_omits_contours(self):
+        class Mask:
+            def contains_xy(self, x, y):
+                return x < 150 and y < 150
+
+        records = [
+            {"name": "tile_0000000", "tile_origin_xy": [0, 0],
+             "core_xyxy": [0, 0, 100, 100]},
+            {"name": "tile_0000001", "tile_origin_xy": [80, 0],
+             "core_xyxy": [100, 0, 200, 100]},
+        ]
+        payloads = [
+            {"nuc": {"1": {"centroid": [90, 40], "contour": [[89, 39]], "type": 2, "type_prob": .9},
+                     "2": {"centroid": [110, 40], "contour": [[109, 39]], "type": 1, "type_prob": .8}}},
+            {"nuc": {"1": {"centroid": [10, 40], "contour": [[9, 39]], "type": 2, "type_prob": .9},
+                     "2": {"centroid": [30, 40], "contour": [[29, 39]], "type": 1, "type_prob": .8}}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw" / "json"
+            raw.mkdir(parents=True)
+            for record, payload in zip(records, payloads):
+                with gzip.open(raw / f"{record['name']}.json.gz", "wt") as handle:
+                    json.dump(payload, handle)
+            output = root / "cells.json.gz"
+            summary = hovernet.normalize_streaming_tiles(
+                records, root / "raw", output, 1.0, {"execution_mode": "streaming_tiles"},
+                clean_mask=Mask(), include_contours=False,
+            )
+            with gzip.open(output, "rt") as handle:
+                result = json.load(handle)
+        self.assertEqual([cell["centroid"] for cell in result["cells"]], [[90.0, 40.0], [110.0, 40.0]])
+        self.assertTrue(all("contour" not in cell for cell in result["cells"]))
+        self.assertEqual(summary["input_tile_cells_including_halo_duplicates"], 4)
+        self.assertEqual(summary["retained_unique_core_cells"], 2)
+
+    def test_streaming_batches_append_valid_json_without_retaining_raw_records(self):
+        records = [
+            {"name": "tile_0000000", "tile_origin_xy": [0, 0], "core_xyxy": [0, 0, 10, 10]},
+            {"name": "tile_0000001", "tile_origin_xy": [10, 0], "core_xyxy": [10, 0, 20, 10]},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "raw" / "json"
+            raw.mkdir(parents=True)
+            for index, record in enumerate(records):
+                with gzip.open(raw / f"{record['name']}.json.gz", "wt") as handle:
+                    json.dump({"nuc": {"1": {"centroid": [5, 5], "type": index + 1}}}, handle)
+            stream = io.StringIO()
+            first = True
+            for index, record in enumerate(records):
+                _, retained, first = hovernet.append_streaming_cells(
+                    [record], Path(directory) / "raw", stream, 1.0,
+                    clean_mask=None, include_contours=False,
+                    tile_index_offset=index, first=first,
+                )
+                self.assertEqual(retained, 1)
+            cells = json.loads(f"[{stream.getvalue()}]")
+            self.assertFalse(any(raw.iterdir()))
+        self.assertEqual([cell["id"] for cell in cells], ["0:1", "1:1"])
+        self.assertEqual([cell["centroid"] for cell in cells], [[5.0, 5.0], [15.0, 5.0]])
 
     def test_normal_runtime_is_copied_to_writable_output_directory(self):
         with tempfile.TemporaryDirectory() as directory:

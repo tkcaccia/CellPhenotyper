@@ -170,6 +170,35 @@ def probe_source_mpp(path: Path) -> tuple[float | None, str]:
         return None, "unknown"
 
 
+def load_input_metadata(path: Path | None) -> dict[str, dict]:
+    """Load selected-series metadata produced by a trusted format reader."""
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != 1 or not isinstance(payload.get("inputs"), list):
+        raise ValueError("Storage preflight input metadata must use schema_version 1 and an inputs list")
+    result: dict[str, dict] = {}
+    for record in payload["inputs"]:
+        if not isinstance(record, dict):
+            raise ValueError("Storage preflight input metadata records must be objects")
+        raw_path = record.get("path")
+        width = record.get("width_px")
+        height = record.get("height_px")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("Storage preflight input metadata requires nonempty paths")
+        if type(width) is not int or type(height) is not int or width < 1 or height < 1:
+            raise ValueError("Storage preflight input dimensions must be positive integers")
+        mpp_values = [record.get("physical_size_x_um"), record.get("physical_size_y_um")]
+        if any(value is not None and (not isinstance(value, (int, float)) or not .01 <= float(value) <= 10.)
+               for value in mpp_values):
+            raise ValueError("Storage preflight physical sizes must be null or within 0.01..10 micrometres/pixel")
+        canonical = str(Path(raw_path).resolve())
+        if canonical in result:
+            raise ValueError(f"Duplicate storage preflight metadata path: {canonical}")
+        result[canonical] = record
+    return result
+
+
 def resolve_channel_count(spec: str | None, count: int | None = None) -> int:
     """Empty output selection means the complete model panel, never one channel."""
     if spec is not None:
@@ -233,9 +262,15 @@ def estimate_input(
     input_count: int,
     fallback_expansion: float,
     source_mpp: float = 0.,
+    selected_series_metadata: dict | None = None,
 ) -> InputEstimate:
     source_bytes = path.stat().st_size
-    width, height, source = probe_dimensions(path)
+    if selected_series_metadata is not None:
+        width = int(selected_series_metadata["width_px"])
+        height = int(selected_series_metadata["height_px"])
+        source = str(selected_series_metadata.get("backend") or "selected_series_metadata")
+    else:
+        width, height, source = probe_dimensions(path)
     roi = matching_roi(path, explicit_roi, input_count)
     fraction = roi_bbox_fraction(roi, width, height)
     if width and height:
@@ -245,7 +280,15 @@ def estimate_input(
         full_rgb = int(source_bytes * fallback_expansion)
         basis = f"source bytes x fallback expansion {fallback_expansion:g}"
     active_rgb = max(source_bytes, int(math.ceil(full_rgb * fraction)))
-    mpp, mpp_source = (source_mpp, "explicit_override") if source_mpp > 0 else probe_source_mpp(path)
+    if source_mpp > 0:
+        mpp, mpp_source = source_mpp, "explicit_override"
+    elif selected_series_metadata is not None:
+        values = [selected_series_metadata.get("physical_size_x_um"), selected_series_metadata.get("physical_size_y_um")]
+        valid = [float(value) for value in values if value is not None]
+        mpp = max(valid) if valid else None
+        mpp_source = "bioformats_selected_series_metadata" if mpp is not None else "selected_series_metadata_without_mpp"
+    else:
+        mpp, mpp_source = probe_source_mpp(path)
     return InputEstimate(
         path=str(path.absolute()),
         source_bytes=source_bytes,
@@ -271,6 +314,12 @@ def inference_pixel_estimate(item: InputEstimate, target_mpp: float,
     elif mpp is None:
         scale = max(1., (unknown_source_mpp / target_mpp) ** 2)
         reason = "unknown_mpp_declared_allowance_not_an_upper_bound"
+    elif item.mpp_source == "bioformats_selected_series_metadata":
+        # The same selected-series reader drives conversion. Use its pixel
+        # dimensions but never claim a downsampling storage discount before
+        # the converted-resolution validator has run.
+        scale = max(1., (mpp / target_mpp) ** 2)
+        reason = "selected_series_metadata_without_downsampling_credit"
     else:
         scale = (mpp / target_mpp) ** 2
         reason = "explicit_override_target_mpp"
@@ -338,6 +387,102 @@ def compartment_storage_model(pixels: int, physical: bool = True) -> dict:
             "scratch_bytes": scratch, "work_bytes": retained + scratch}
 
 
+def hovernet_storage_model(
+    items: list[InputEstimate],
+    *,
+    execution_mode: str,
+    target_mpp: float,
+    core_size: int,
+    halo: int,
+    batch_tiles: int,
+    export_contours: bool,
+    density_per_mm2: float,
+    unknown_source_mpp: float,
+) -> dict:
+    """Expose HoVer-Net's peak-disk shape without claiming measured compression.
+
+    The streaming route is deliberately modelled as one bounded tile batch plus
+    the incrementally accumulated compressed cell records.  The legacy WSI
+    route retains the upstream full-slide float32x4 and int32 arrays.
+    """
+    if execution_mode not in {"streaming_tiles", "wsi"}:
+        raise ValueError("HoVer-Net execution mode must be streaming_tiles or wsi")
+    if not math.isfinite(target_mpp) or target_mpp <= 0:
+        raise ValueError("HoVer-Net target MPP must be finite and positive")
+    if core_size < 512 or halo < 92 or core_size + 2 * halo > 5000:
+        raise ValueError("HoVer-Net streaming geometry requires core>=512, halo>=92, core+2*halo<=5000")
+    if batch_tiles < 1:
+        raise ValueError("HoVer-Net streaming batch size must be positive")
+
+    inference = [inference_pixel_estimate(item, target_mpp, unknown_source_mpp) for item in items]
+    inference_pixels = sum(row["inference_pixels"] for row in inference)
+    cells = estimated_cell_count(items, density_per_mm2, unknown_source_mpp)
+    # Planning allowances include JSON keys and variable-length IDs. The raw
+    # upstream records contain contours even when the final compact output does
+    # not; gzip ratios are intentionally not treated as guarantees.
+    final_cell_record_bytes = 1024 if export_contours else 256
+    published = cells * final_cell_record_bytes
+    runtime_copy = 256 * 1024**2
+
+    if execution_mode == "wsi":
+        slide_wide = inference_pixels * (4 * 4 + 4)
+        raw_json = cells * 4096
+        scratch = slide_wide + raw_json + runtime_copy
+        return {
+            "basis": "uncompressed_slide_wide_float32x4_int32_arrays_and_raw_cell_JSON_allowance",
+            "execution_mode": execution_mode,
+            "inference_pixels": inference_pixels,
+            "estimated_cells": cells,
+            "slide_wide_prediction_bytes": slide_wide,
+            "published_bytes": published,
+            "retained_work_bytes": published,
+            "scratch_bytes": scratch,
+            "work_bytes": published + scratch,
+            "bounded_tile_batch": False,
+        }
+
+    tile_side = core_size + 2 * halo
+    tile_pixels = tile_side**2
+    tile_count = 0
+    for item, row in zip(items, inference):
+        if item.width_px and item.height_px:
+            linear_scale = math.sqrt(row["inference_area_scale"])
+            tile_count += (
+                math.ceil(item.width_px * linear_scale / core_size)
+                * math.ceil(item.height_px * linear_scale / core_size)
+            )
+        else:
+            tile_count += math.ceil(row["inference_pixels"] / core_size**2)
+    tile_count = max(1, tile_count)
+    active_batch_tiles = min(batch_tiles, tile_count)
+    input_batch = active_batch_tiles * tile_pixels * 3
+    cells_per_tile = math.ceil(tile_pixels * target_mpp**2 * density_per_mm2 / 1e6)
+    raw_batch_json = active_batch_tiles * cells_per_tile * 4096
+    scratch = input_batch + raw_batch_json + runtime_copy
+    return {
+        "basis": "bounded_uncompressed_tile_batch_plus_incremental_final_output_allowance",
+        "execution_mode": execution_mode,
+        "inference_pixels": inference_pixels,
+        "estimated_cells": cells,
+        "core_size_px": core_size,
+        "halo_px": halo,
+        "tile_side_px": tile_side,
+        "tile_count_without_tissue_sparsity_credit": tile_count,
+        "batch_tiles": active_batch_tiles,
+        "batch_input_upper_bound_bytes": input_batch,
+        "batch_raw_json_upper_bound_bytes": raw_batch_json,
+        "accumulated_raw_cell_records_bytes": 0,
+        "slide_wide_prediction_bytes": 0,
+        "published_bytes": published,
+        "retained_work_bytes": published,
+        "scratch_bytes": scratch,
+        "work_bytes": published + scratch,
+        "bounded_tile_batch": True,
+        "raw_tile_records_deleted_after_each_batch": True,
+        "contours_exported": export_contours,
+    }
+
+
 def cell_profile_storage_model(items: list[InputEstimate], *, uni2: bool, markers: bool,
                                cellvit: bool, radii_um: list[float], density_per_mm2: float,
                                unknown_source_mpp: float, feature_storage: str = "table") -> dict:
@@ -403,7 +548,7 @@ def estimated_cell_count(items: list[InputEstimate], density_per_mm2: float,
     cells = 0
     for item in items:
         mpp = item.source_mpp or unknown_source_mpp
-        if item.mpp_source != "explicit_override":
+        if item.mpp_source not in {"explicit_override", "bioformats_selected_series_metadata"}:
             mpp = max(mpp, unknown_source_mpp)
         cells += math.ceil(item.active_rgb_bytes / 3. * mpp ** 2 * density_per_mm2 / 1e6)
     return cells
@@ -460,7 +605,7 @@ def hierarchy_storage_model(items, *, model_tile_size, inner_size, target_mpp,
     grids = []
     for item in items:
         mpp = item.source_mpp or unknown_source_mpp
-        if item.mpp_source != "explicit_override":
+        if item.mpp_source not in {"explicit_override", "bioformats_selected_series_metadata"}:
             mpp = max(mpp, unknown_source_mpp)
         field_pixels = max(1, round(model_tile_size * target_mpp / mpp))
         stride = min(field_pixels, max(1, round(inner_size * field_pixels / model_tile_size)))
@@ -805,6 +950,8 @@ def build_report(args: argparse.Namespace) -> dict:
     if missing:
         raise ValueError(f"Input files do not exist: {', '.join(missing)}")
     roi = Path(args.roi_geojson) if args.roi_geojson else None
+    metadata_path = Path(args.input_metadata_json) if args.input_metadata_json else None
+    input_metadata = load_input_metadata(metadata_path)
     estimates = [
         estimate_input(
             path,
@@ -812,6 +959,7 @@ def build_report(args: argparse.Namespace) -> dict:
             input_count=len(inputs),
             fallback_expansion=args.source_expansion_factor,
             source_mpp=args.source_mpp,
+            selected_series_metadata=input_metadata.get(str(path.resolve())),
         )
         for path in inputs
     ]
@@ -858,6 +1006,23 @@ def build_report(args: argparse.Namespace) -> dict:
     if "cytoplasm" in factors:
         stage_models["cytoplasm"] = compartment_storage_model(math.ceil(active_rgb_bytes / 3.),
                                                               parse_bool(args.physical_compartments))
+    if "cell_consensus" in stage_models and args.cell_detection_mode == "consensus":
+        hovernet = hovernet_storage_model(
+            estimates,
+            execution_mode=args.hovernet_execution_mode,
+            target_mpp=args.hovernet_target_mpp,
+            core_size=args.hovernet_stream_core_size,
+            halo=args.hovernet_stream_halo,
+            batch_tiles=args.hovernet_stream_batch_tiles,
+            export_contours=parse_bool(args.hovernet_export_contours),
+            density_per_mm2=args.cell_density_per_mm2,
+            unknown_source_mpp=args.unknown_source_mpp,
+        )
+        consensus = stage_models["cell_consensus"]
+        consensus["hovernet"] = hovernet
+        consensus["basis"] = "historical_consensus_output_prior_with_explicit_hovernet_peak_disk_model"
+        consensus["published_bytes"] = max(consensus["published_bytes"], hovernet["published_bytes"])
+        consensus["work_bytes"] = max(consensus["work_bytes"], hovernet["work_bytes"])
     if "marker_quantification" in factors:
         cells = estimated_cell_count(estimates, args.cell_density_per_mm2, args.unknown_source_mpp)
         compartments = 3 if parse_bool(args.physical_compartments) else 2
@@ -1075,6 +1240,12 @@ def build_report(args: argparse.Namespace) -> dict:
         "configuration": {
             "publish_dir_mode": args.publish_dir_mode,
             "cell_detection_mode": args.cell_detection_mode,
+            "hovernet_execution_mode": args.hovernet_execution_mode,
+            "hovernet_target_mpp": args.hovernet_target_mpp,
+            "hovernet_stream_core_size": args.hovernet_stream_core_size,
+            "hovernet_stream_halo": args.hovernet_stream_halo,
+            "hovernet_stream_batch_tiles": args.hovernet_stream_batch_tiles,
+            "hovernet_export_contours": parse_bool(args.hovernet_export_contours),
             "uni2_sampling_mode": args.uni2_sampling_mode,
             "gigatime_enabled": parse_bool(args.gigatime_enabled),
             "marker_quantification_enabled": parse_bool(args.marker_quantification_enabled),
@@ -1088,6 +1259,7 @@ def build_report(args: argparse.Namespace) -> dict:
             "gigatime_blockwise": parse_bool(args.gigatime_blockwise),
             "gigatime_target_mpp": args.gigatime_target_mpp,
             "source_mpp_override": args.source_mpp,
+            "input_metadata_json": str(metadata_path.resolve()) if metadata_path else None,
             "unknown_source_mpp_allowance": args.unknown_source_mpp,
             "physical_compartments": parse_bool(args.physical_compartments),
             "cell_profiles_enabled": parse_bool(args.cell_profiles_enabled),
@@ -1122,6 +1294,8 @@ def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input", action="append", default=[])
     ap.add_argument("--roi-geojson", default="")
+    ap.add_argument("--input-metadata-json", default="",
+                    help="Selected-series dimensions/physical sizes produced by a trusted format reader.")
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--output-json", required=True)
@@ -1129,6 +1303,12 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--end-point", choices=STAGE_ORDER, required=True)
     ap.add_argument("--publish-dir-mode", choices=("copy", "rellink"), default="copy")
     ap.add_argument("--cell-detection-mode", choices=("consensus", "stardist"), default="consensus")
+    ap.add_argument("--hovernet-execution-mode", choices=("streaming_tiles", "wsi"), default="streaming_tiles")
+    ap.add_argument("--hovernet-target-mpp", type=float, default=.25)
+    ap.add_argument("--hovernet-stream-core-size", type=int, default=4096)
+    ap.add_argument("--hovernet-stream-halo", type=int, default=256)
+    ap.add_argument("--hovernet-stream-batch-tiles", type=int, default=64)
+    ap.add_argument("--hovernet-export-contours", default="false")
     ap.add_argument("--uni2-sampling-mode", choices=("cells", "grid", "both"), default="cells")
     ap.add_argument("--gigatime-enabled", default="true")
     ap.add_argument("--marker-quantification-enabled", default="true")
@@ -1136,9 +1316,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--gigatime-output-channels", default=None,
                     help="Comma-separated names; an empty string means all 23 channels. Overrides channel count.")
     ap.add_argument("--gigatime-output-dtype", choices=DTYPE_BYTES, default="float32")
-    ap.add_argument("--gigatime-output-format", choices=("zarr", "ome_tiff", "none"), default="zarr")
+    ap.add_argument("--gigatime-output-format", choices=("zarr", "ome_tiff", "none"), default="none")
     ap.add_argument("--gigatime-output-pyramid", default="true")
-    ap.add_argument("--gigatime-export-ometiff", default="true")
+    ap.add_argument("--gigatime-export-ometiff", default="false")
     ap.add_argument("--gigatime-export-channels", default="")
     ap.add_argument("--gigatime-export-output-dtype", choices=("auto", *DTYPE_BYTES), default="auto")
     ap.add_argument("--gigatime-blockwise", default="true")
