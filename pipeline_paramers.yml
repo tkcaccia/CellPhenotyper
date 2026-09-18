@@ -8,6 +8,8 @@
 image_input: null
 vsi_series_index: 1  # Olympus VSI primary whole-slide series; these prostate scans use series 1
 convert_channel_order: RGB  # source-plane order; output is always canonical interleaved RGB
+convert_compression: JPEG  # JPEG | LZW | DEFLATE | NONE; also used for crop_roi.tif
+convert_jpeg_quality: 75  # 1-100; used only when convert_compression is JPEG
 roi_geojson: null
 folder_input: Data
 

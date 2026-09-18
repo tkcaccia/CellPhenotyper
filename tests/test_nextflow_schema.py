@@ -231,6 +231,8 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "evidence_gate_mode",
         "input_resolution_max_metadata_conflict_fraction",
         "convert_channel_order",
+        "convert_compression",
+        "convert_jpeg_quality",
         "roi_validation_mode",
         "cell_consensus_fusion_acceptance_policy",
         "gigatime_seam_qc_mode",
@@ -244,6 +246,24 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "storage_restart_duplication_factor",
     ):
         assert f'"{name}"' in text
+
+
+@pytest.mark.parametrize("compression", ["JPEG", "LZW", "DEFLATE", "NONE", "UNCOMPRESSED"])
+def test_schema_accepts_documented_input_compression_options(compression: str) -> None:
+    validate({"convert_compression": compression, "convert_jpeg_quality": 95})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"convert_compression": "ZIP"},
+        {"convert_jpeg_quality": 0},
+        {"convert_jpeg_quality": 101},
+    ],
+)
+def test_schema_rejects_invalid_input_compression_options(payload: dict) -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate(payload)
 
 
 def test_yaml_unquoted_off_is_normalized_for_storage_preflight(tmp_path: Path) -> None:

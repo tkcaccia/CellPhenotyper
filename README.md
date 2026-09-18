@@ -637,4 +637,11 @@ into explicit RGB automatically. The source planes are assumed to be `RGB`; use
 metadata or visual QC establishes a different source order. The published
 OME-TIFF is always canonical RGB.
 
+Input and analysis-crop storage compression is configurable with
+`--convert_compression JPEG|LZW|DEFLATE|NONE`. `JPEG` is lossy and uses
+`--convert_jpeg_quality` (1-100); `LZW` and `DEFLATE` are lossless. The same
+codec is used for the converted OME-TIFF and the tiled, pyramidal
+`crop_roi.tif`. Downstream models, including HoVer-Net, read those compressed
+TIFFs directly and decode only the tiles needed for computation.
+
 See `OUTPUT.md` for the complete stage 16-18 artifacts and `PARAMETERS.md` for restart points. A restart at `titan` reuses stage 16; a restart at `pathofmpred` reuses the existing TITAN CSV.

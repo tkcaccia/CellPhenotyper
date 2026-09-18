@@ -145,6 +145,19 @@
           "default": "RGB",
           "description": "Meaning of the three source planes during planar colour conversion. Output always decodes to canonical RGB; JPEG-in-TIFF may use standard YCbCr storage."
         },
+        "convert_compression": {
+          "type": "string",
+          "enum": ["JPEG", "LZW", "DEFLATE", "NONE", "UNCOMPRESSED"],
+          "default": "JPEG",
+          "description": "TIFF storage codec shared by the converted OME-TIFF and crop_roi.tif. JPEG is lossy; LZW and DEFLATE are lossless."
+        },
+        "convert_jpeg_quality": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 75,
+          "description": "JPEG quality used when convert_compression is JPEG; ignored by lossless codecs."
+        },
         "publish_dir_mode": {
           "type": "string",
           "enum": ["copy", "rellink"],

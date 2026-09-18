@@ -239,7 +239,8 @@ The `convert` stage validates physical pixel size before doing expensive convers
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `convert_compression` | `JPEG` | Compression mode. JPEG-in-TIFF stores canonical colour as `YCbCr` and readers decode it to RGB; choose a lossless codec when a literal `RGB` photometric tag is required. |
+| `convert_compression` | `JPEG` | Shared converted-image and analysis-crop codec: `JPEG`, `LZW`, `DEFLATE`, `NONE`, or `UNCOMPRESSED`. JPEG-in-TIFF stores canonical colour as `YCbCr` and readers decode it to RGB; `LZW` and `DEFLATE` are lossless. |
+| `convert_jpeg_quality` | `75` | JPEG quality from 1 to 100. It applies to the converted OME-TIFF and `crop_roi.tif` when `convert_compression=JPEG`; lossless codecs ignore it. |
 | `convert_downsample` | `GAUSSIAN` | Pyramid downsample algorithm. |
 | `convert_rgb` | `true` | Convert to RGB. |
 | `convert_overwrite` | `true` | Overwrite output if existing. |
