@@ -233,6 +233,7 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "convert_channel_order",
         "convert_compression",
         "convert_jpeg_quality",
+        "hovernet_cache_backend",
         "roi_validation_mode",
         "cell_consensus_fusion_acceptance_policy",
         "gigatime_seam_qc_mode",
@@ -264,6 +265,16 @@ def test_schema_accepts_documented_input_compression_options(compression: str) -
 def test_schema_rejects_invalid_input_compression_options(payload: dict) -> None:
     with pytest.raises(jsonschema.ValidationError):
         validate(payload)
+
+
+@pytest.mark.parametrize("backend", ["zarr", "numpy"])
+def test_schema_accepts_documented_hovernet_cache_backends(backend: str) -> None:
+    validate({"hovernet_cache_backend": backend})
+
+
+def test_schema_rejects_unknown_hovernet_cache_backend() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate({"hovernet_cache_backend": "float16"})
 
 
 def test_yaml_unquoted_off_is_normalized_for_storage_preflight(tmp_path: Path) -> None:

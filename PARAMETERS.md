@@ -476,6 +476,17 @@ Additional automatic outputs:
 
 HoVer-Net uses `hovernet_target_mpp=0.25`, the official `fast` MoNuSAC checkpoint, and the resource parameters prefixed by `hovernet_`. The MoNuSAC positive classes do not cover all nuclei, so its count is not expected to match StarDist or CellViT++. The wrapper passes the shared GrandQC clean-tissue mask into HoVer-Net WSI inference, records checkpoint/upstream provenance and the model-scope limitation, then applies the same mask again as a centroid-level output invariant. `hovernet_postproc_workers=0` selects a memory-aware worker count (one worker per 6 GB of allocated memory); an explicit value is still capped by that safety limit. HoVer-Net's slide-sized prediction and instance maps are transient implementation files and are deleted whenever the task exits, including after a failure or cancellation; valid published cell results are unaffected. `hovernet_prediction_cache` remains an explicit expert recovery input for a separately preserved, completed upstream `pred_map.npy`, but failed task caches are not retained automatically. CellViT++ uses `cellvit_model` (`HIPT` by default), `cellvit_taxonomy`, mixed precision via `cellvit_amp`, and resource parameters prefixed by `cellvit_`. `cellvit_ray_workers` defaults to `1` because CellViT++ 1.0.9 fails with its upstream zero-worker default; `cellvit_ray_worker_cpus=0` divides the allocated task CPUs automatically. The HIPT weights and classifiers are baked once into `cellvit_cache_dir` inside the versioned GPU image, avoiding duplicate downloads across tasks and runs.
 
+`hovernet_cache_backend=zarr` keeps the exact float32 predictions and int32
+instance IDs in bounded 1,024-pixel, losslessly Blosc/Zstd-compressed transient
+arrays; each prediction block is written once and needs at most a 16 MiB
+assembly buffer.
+`numpy` selects the uncompressed upstream representation for compatibility
+comparisons and is required when `hovernet_prediction_cache` points to an
+explicitly preserved upstream `pred_map.npy`.
+
+See [HoVer-Net transient storage](docs/HOVERNET_STORAGE.md) for cleanup
+semantics and the real-tissue lossless-backend equivalence benchmark.
+
 The stage name is `cell_consensus`; aliases `hovernet`, `cellvit`, and `consensus` select the same aggregate stage because both inference branches are required to build the result.
 
 `cellvit_export_embeddings=true` requests optional source-bound numeric graph

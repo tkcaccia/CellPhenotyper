@@ -64,6 +64,17 @@ class MonusacTypeInfoTest(unittest.TestCase):
                 "47320987f9a49d5b00119b960f247a956773f57543982b8bfcb6da5bb3afd9ef",
             )
 
+    def test_transient_cache_storage_reports_logical_and_allocated_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "nested").mkdir()
+            (root / "a.bin").write_bytes(b"a" * 17)
+            (root / "nested" / "b.bin").write_bytes(b"b" * 31)
+            usage = hovernet.directory_storage(root)
+        self.assertEqual(usage["logical_bytes"], 48)
+        self.assertEqual(usage["files"], 2)
+        self.assertGreaterEqual(usage["allocated_bytes"], usage["logical_bytes"])
+
     def test_cache_resume_patches_only_an_isolated_runtime_copy(self):
         allocation = '''        self.wsi_pred_map = np.lib.format.open_memmap(
             "%s/pred_map.npy" % self.cache_path,
@@ -93,6 +104,43 @@ class MonusacTypeInfoTest(unittest.TestCase):
             self.assertIn("skipping raw inference", patched)
             self.assertTrue((cache / "pred_map.npy").is_symlink())
             self.assertEqual((cache / "pred_map.npy").resolve(), (prediction_cache / "pred_map.npy").resolve())
+
+    def test_zarr_patch_preserves_float32_and_int32_storage(self):
+        constants = tuple(
+            value for value in hovernet.enable_zarr_cache_runtime.__code__.co_consts
+            if isinstance(value, str)
+        )
+        assemble = next(value for value in constants if value.startswith("def _assemble_and_flush"))
+        allocation = next(value for value in constants if "self.wsi_inst_map = np.lib.format.open_memmap" in value)
+        postproc_load = '    wsi_pred_map_ptr = np.load(pred_map_mmap_path, mmap_mode="r")'
+        pred_path = 'wsi_pred_map_mmap_path = "%s/pred_map.npy" % self.cache_path'
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "infer").mkdir()
+            source = "import numpy as np\n" + assemble + postproc_load + "\n" + allocation + "\n" + pred_path + "\n" + pred_path
+            (runtime / "infer" / "wsi.py").write_text(source)
+            hovernet.enable_zarr_cache_runtime(runtime)
+            patched = (runtime / "infer" / "wsi.py").read_text()
+        self.assertIn("pred_map.zarr", patched)
+        self.assertIn("pred_inst.zarr", patched)
+        self.assertIn("dtype=np.float32", patched)
+        self.assertIn("dtype=np.int32", patched)
+        self.assertIn("Blosc.BITSHUFFLE", patched)
+        self.assertIn("min(1024, int(tile_shape[idx])", patched)
+        self.assertNotIn("chunk_pred_map = np.zeros", patched)
+        self.assertIn("patches_by_storage_chunk", patched)
+        self.assertIn("storage_block = np.zeros", patched)
+
+    def test_cache_measurement_patch_is_explicitly_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "infer").mkdir()
+            upstream = "        rm_n_mkdir(self.cache_path)  # clean up all cache\n"
+            (runtime / "infer" / "wsi.py").write_text(upstream)
+            hovernet.enable_cache_measurement_runtime(runtime)
+            patched = (runtime / "infer" / "wsi.py").read_text()
+        self.assertIn('HOVERNET_MEASURE_CACHE_STORAGE', patched)
+        self.assertIn("rm_n_mkdir(self.cache_path)", patched)
 
     def test_normal_runtime_is_copied_to_writable_output_directory(self):
         with tempfile.TemporaryDirectory() as directory:

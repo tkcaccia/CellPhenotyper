@@ -48,6 +48,7 @@ p.add_argument('--outdir', required=True)
 p.add_argument('--device')
 p.add_argument('--sample-id')
 p.add_argument('--gpu')
+p.add_argument('--cache-backend')
 for name in ['memory-budget-gb','min-area','prob','nms','artifact-overlap-fraction','target-mpp']:
     p.add_argument('--'+name, type=float)
 for name in ['big-block-size','inference-workers','postproc-workers','patch-size','artifact-tile-size','batch-size','chunk-shape','tile-shape']:
@@ -95,7 +96,7 @@ for name in names:
         "write_full_labels": False, "full_format": "tif", "allow_huge_tif": False,
         "stardist_prob": 0.42, "stardist_nms": 0.31, "stardist_min_area": 11, "stardist_big_mode": "auto",
         "hovernet_script": recorder.name, "hovernet_time": "1m", "hovernet_cpus": 48, "hovernet_memory_gb": 96,
-        "hovernet_postproc_workers": 1, "hovernet_prediction_cache": "", "hovernet_repo_dir": "unused-model-free",
+        "hovernet_postproc_workers": 1, "hovernet_prediction_cache": "", "hovernet_cache_backend": "zarr", "hovernet_repo_dir": "unused-model-free",
         "hovernet_monusac_checkpoint": "unused-model-free", "hovernet_target_mpp": 0.25, "hovernet_default_mpp": 0.5,
         "hovernet_gpu": 0, "hovernet_batch_size": 8, "hovernet_chunk_shape": 8192, "hovernet_tile_shape": 2048})
     params.update(overrides or {})
@@ -159,6 +160,7 @@ def test_actual_gpu_commands_use_plan_caps_and_preserve_scientific_options(tmp_p
     assert (star["prob"], star["nms"], star["min_area"]) == (0.42, 0.31, 11)
     assert star["environment"]["CUDA_VISIBLE_DEVICES"] == "GPU-model-free-sentinel"
     assert hover["inference_workers"] == 3 and hover["postproc_workers"] == 1
+    assert hover["cache_backend"] == "zarr"
     assert (hover["target_mpp"], hover["batch_size"], hover["chunk_shape"], hover["tile_shape"]) == (0.25, 8, 8192, 2048)
     assert all(not record["used_model"] for record in records.values())
     assert all("aggressive" in script for script in scripts)

@@ -89,6 +89,21 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def directory_storage(path: Path) -> dict[str, int]:
+    """Return logical and allocated bytes for a transient cache tree."""
+    logical = allocated = files = 0
+    if not path.exists():
+        return {"logical_bytes": 0, "allocated_bytes": 0, "files": 0}
+    for candidate in path.rglob("*"):
+        if not candidate.is_file():
+            continue
+        stat_result = candidate.stat()
+        logical += int(stat_result.st_size)
+        allocated += int(getattr(stat_result, "st_blocks", 0)) * 512
+        files += 1
+    return {"logical_bytes": logical, "allocated_bytes": allocated, "files": files}
+
+
 def git_revision(repo: Path) -> str | None:
     try:
         return subprocess.run(
@@ -149,6 +164,172 @@ def enable_cache_resume_runtime(runtime_repo: Path, cache_dir: Path, prediction_
         raise RuntimeError("Unsupported HoVer-Net wsi.py layout for prediction-cache resume")
     wsi_path.write_text(source.replace(allocation, resumed_allocation).replace(inference, resumed_inference))
     (cache_dir / "pred_map.npy").symlink_to(pred_map.resolve())
+
+
+def enable_zarr_cache_runtime(runtime_repo: Path) -> None:
+    """Patch an isolated upstream copy to use lossless chunk-compressed maps.
+
+    Upstream allocates one float32 four-channel prediction map and one int32
+    instance map over the complete processed WSI rectangle. Zarr preserves the
+    exact dtypes and slice semantics while Blosc/Zstd compresses each tile on
+    disk, especially background and spatially coherent instance labels.
+    """
+    wsi_path = runtime_repo / "infer" / "wsi.py"
+    source = wsi_path.read_text()
+
+    import_anchor = "import numpy as np\n"
+    if source.count(import_anchor) != 1:
+        raise RuntimeError("Unsupported HoVer-Net wsi.py imports for Zarr cache")
+    source = source.replace(
+        import_anchor,
+        import_anchor + "import zarr\nfrom numcodecs import Blosc\n",
+    )
+
+    old_assemble = '''def _assemble_and_flush(wsi_pred_map_mmap_path, chunk_info, patch_output_list):
+    """Assemble the results. Write to newly created holder for this wsi"""
+    wsi_pred_map_ptr = np.load(wsi_pred_map_mmap_path, mmap_mode="r+")
+    chunk_pred_map = wsi_pred_map_ptr[
+        chunk_info[1][0][0] : chunk_info[1][1][0],
+        chunk_info[1][0][1] : chunk_info[1][1][1],
+    ]
+    if patch_output_list is None:
+        # chunk_pred_map[:] = 0 # zero flush when there is no-results
+        # print(chunk_info.flatten(), 'flush 0')
+        return
+
+    for pinfo in patch_output_list:
+        pcoord, pdata = pinfo
+        pdata = np.squeeze(pdata)
+        pcoord = np.squeeze(pcoord)[:2]
+        chunk_pred_map[
+            pcoord[0] : pcoord[0] + pdata.shape[0],
+            pcoord[1] : pcoord[1] + pdata.shape[1],
+        ] = pdata
+    # print(chunk_info.flatten(), 'pass')
+    return
+'''
+    new_assemble = '''def _assemble_and_flush(wsi_pred_map_mmap_path, chunk_info, patch_output_list):
+    """Losslessly flush each storage block once with bounded memory."""
+    if patch_output_list is None:
+        return
+    wsi_pred_map_ptr = zarr.open_array(wsi_pred_map_mmap_path, mode="r+")
+    chunk_tl = chunk_info[1][0]
+    storage_shape = np.asarray(wsi_pred_map_ptr.chunks[:2], dtype=np.int64)
+    patches_by_storage_chunk = {}
+    for pinfo in patch_output_list:
+        pcoord, pdata = pinfo
+        pdata = np.squeeze(pdata)
+        pcoord = np.squeeze(pcoord)[:2]
+        absolute_tl = chunk_tl + pcoord
+        absolute_br = absolute_tl + np.asarray(pdata.shape[:2], dtype=np.int64)
+        first_chunk = absolute_tl // storage_shape
+        last_chunk = (absolute_br - 1) // storage_shape
+        for row in range(int(first_chunk[0]), int(last_chunk[0]) + 1):
+            for col in range(int(first_chunk[1]), int(last_chunk[1]) + 1):
+                patches_by_storage_chunk.setdefault((row, col), []).append(
+                    (absolute_tl, absolute_br, pdata)
+                )
+    array_shape = np.asarray(wsi_pred_map_ptr.shape[:2], dtype=np.int64)
+    for storage_index, patches in patches_by_storage_chunk.items():
+        storage_tl = np.asarray(storage_index, dtype=np.int64) * storage_shape
+        storage_br = np.minimum(storage_tl + storage_shape, array_shape)
+        storage_block = np.zeros(
+            tuple(storage_br - storage_tl) + (wsi_pred_map_ptr.shape[-1],),
+            dtype=np.float32,
+        )
+        for absolute_tl, absolute_br, pdata in patches:
+            overlap_tl = np.maximum(storage_tl, absolute_tl)
+            overlap_br = np.minimum(storage_br, absolute_br)
+            dst_tl = overlap_tl - storage_tl
+            dst_br = overlap_br - storage_tl
+            src_tl = overlap_tl - absolute_tl
+            src_br = overlap_br - absolute_tl
+            storage_block[
+                dst_tl[0] : dst_br[0], dst_tl[1] : dst_br[1]
+            ] = pdata[src_tl[0] : src_br[0], src_tl[1] : src_br[1]]
+        wsi_pred_map_ptr[
+            storage_tl[0] : storage_br[0], storage_tl[1] : storage_br[1]
+        ] = storage_block
+    return
+'''
+    if source.count(old_assemble) != 1:
+        raise RuntimeError("Unsupported HoVer-Net cache assembler for Zarr cache")
+    source = source.replace(old_assemble, new_assemble)
+
+    postproc_load = '    wsi_pred_map_ptr = np.load(pred_map_mmap_path, mmap_mode="r")'
+    if source.count(postproc_load) != 1:
+        raise RuntimeError("Unsupported HoVer-Net post-processing loader for Zarr cache")
+    source = source.replace(
+        postproc_load,
+        '    wsi_pred_map_ptr = zarr.open_array(pred_map_mmap_path, mode="r")',
+    )
+
+    allocation = '''        self.wsi_inst_map = np.lib.format.open_memmap(
+            "%s/pred_inst.npy" % self.cache_path,
+            mode="w+",
+            shape=tuple(self.wsi_proc_shape),
+            dtype=np.int32,
+        )
+        # self.wsi_inst_map[:] = 0 # flush fill
+
+        # warning, the value within this is uninitialized
+        self.wsi_pred_map = np.lib.format.open_memmap(
+            "%s/pred_map.npy" % self.cache_path,
+            mode="w+",
+            shape=tuple(self.wsi_proc_shape) + (out_ch,),
+            dtype=np.float32,
+        )'''
+    compressed_allocation = '''        # Each storage block is assembled once, bounding prediction-map memory
+        # to 16 MiB at float32x4 while avoiding repeated recompression.
+        cache_chunks = tuple(
+            max(1, min(1024, int(tile_shape[idx]), int(self.wsi_proc_shape[idx])))
+            for idx in range(2)
+        )
+        cache_compressor = Blosc(
+            cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE
+        )
+        self.wsi_inst_map = zarr.open_array(
+            "%s/pred_inst.zarr" % self.cache_path,
+            mode="w",
+            shape=tuple(self.wsi_proc_shape),
+            chunks=cache_chunks,
+            dtype=np.int32,
+            compressor=cache_compressor,
+            fill_value=0,
+        )
+        self.wsi_pred_map = zarr.open_array(
+            "%s/pred_map.zarr" % self.cache_path,
+            mode="w",
+            shape=tuple(self.wsi_proc_shape) + (out_ch,),
+            chunks=cache_chunks + (out_ch,),
+            dtype=np.float32,
+            compressor=cache_compressor,
+            fill_value=0.0,
+        )'''
+    if source.count(allocation) != 1:
+        raise RuntimeError("Unsupported HoVer-Net WSI allocation for Zarr cache")
+    source = source.replace(allocation, compressed_allocation)
+
+    pred_path = 'wsi_pred_map_mmap_path = "%s/pred_map.npy" % self.cache_path'
+    if source.count(pred_path) != 2:
+        raise RuntimeError("Unsupported HoVer-Net prediction-map paths for Zarr cache")
+    source = source.replace(
+        pred_path,
+        'wsi_pred_map_mmap_path = "%s/pred_map.zarr" % self.cache_path',
+    )
+    wsi_path.write_text(source)
+
+
+def enable_cache_measurement_runtime(runtime_repo: Path) -> None:
+    """Allow an explicit benchmark to inspect cache size before cleanup."""
+    wsi_path = runtime_repo / "infer" / "wsi.py"
+    source = wsi_path.read_text()
+    cleanup = "        rm_n_mkdir(self.cache_path)  # clean up all cache"
+    measured_cleanup = '''        if os.environ.get("HOVERNET_MEASURE_CACHE_STORAGE") != "1":
+            rm_n_mkdir(self.cache_path)  # clean up all cache'''
+    if source.count(cleanup) != 1:
+        raise RuntimeError("Unsupported HoVer-Net cache cleanup for storage measurement")
+    wsi_path.write_text(source.replace(cleanup, measured_cleanup))
 
 
 def prepare_cache_resume_runtime(repo: Path, outdir: Path, cache_dir: Path, prediction_cache: Path) -> Path:
@@ -243,6 +424,8 @@ def main() -> None:
     parser.add_argument("--chunk-shape", type=int, default=10000)
     parser.add_argument("--tile-shape", type=int, default=2048)
     parser.add_argument("--prediction-cache", default="")
+    parser.add_argument("--cache-backend", choices=("numpy", "zarr"), default="zarr")
+    parser.add_argument("--measure-cache-storage", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--clean-tissue-mask", default="")
     args = parser.parse_args()
 
@@ -276,9 +459,15 @@ def main() -> None:
     # Upstream initializes debug.log in its current directory. The bundled
     # repository is read-only in Singularity, so always run an isolated copy.
     runtime_repo = prepare_runtime_repo(repo, outdir)
+    if args.cache_backend == "zarr":
+        if args.prediction_cache:
+            raise ValueError("--prediction-cache currently requires --cache-backend numpy")
+        enable_zarr_cache_runtime(runtime_repo)
     if args.prediction_cache:
         prediction_cache = Path(args.prediction_cache).resolve()
         enable_cache_resume_runtime(runtime_repo, cache_dir, prediction_cache)
+    if args.measure_cache_storage:
+        enable_cache_measurement_runtime(runtime_repo)
     type_info_path = outdir / "monusac_type_info.json"
     type_info_path.write_text(json.dumps(MONUSAC_TYPE_INFO, indent=2))
     compatibility_launcher = (
@@ -305,7 +494,10 @@ def main() -> None:
     env["XDG_CACHE_HOME"] = str(runtime_cache_dir)
     if args.prediction_cache:
         env["HOVERNET_RESUME_PRED_MAP"] = "1"
+    if args.measure_cache_storage:
+        env["HOVERNET_MEASURE_CACHE_STORAGE"] = "1"
     subprocess.run(cmd, cwd=runtime_repo, env=env, check=True)
+    transient_cache_storage = directory_storage(cache_dir) if args.measure_cache_storage else None
     candidates = sorted(raw_dir.rglob("*.json"))
     if not candidates:
         raise RuntimeError(f"HoVer-Net produced no instance JSON under {raw_dir}")
@@ -315,6 +507,7 @@ def main() -> None:
     metadata = {
         "source_mpp": source_mpp, "target_mpp": args.target_mpp, "coordinate_scale": scale,
         "source_width": width, "source_height": height, "batch_size": batch_size,
+        "cache_backend": args.cache_backend,
         "checkpoint_path": str(checkpoint),
         "checkpoint_sha256": checkpoint_sha256,
         "upstream_revision": upstream_revision,
@@ -339,6 +532,8 @@ def main() -> None:
             "shape_xy": list(inference_mask_shape) if inference_mask_shape is not None else None,
         },
     }
+    if transient_cache_storage is not None:
+        metadata["transient_cache_storage"] = transient_cache_storage
     # Always emit one stable schema, even when no coordinate rescaling is needed.
     normalized_path = outdir / "hovernet_cells.json"
     normalize_output(raw_json, normalized_path, 1.0 / scale, metadata)

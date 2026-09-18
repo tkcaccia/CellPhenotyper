@@ -296,6 +296,12 @@
           "description": "broad_pair is the role-aware default; any_two is a legacy sensitivity analysis."
         },
         "cell_consensus_match_radius_um": {"type": "number", "exclusiveMinimum": 0, "default": 4.0},
+        "hovernet_cache_backend": {
+          "type": "string",
+          "enum": ["zarr", "numpy"],
+          "default": "zarr",
+          "description": "Lossless on-disk storage for transient whole-slide HoVer-Net maps. Zarr uses chunked Blosc/Zstd compression; numpy preserves the uncompressed upstream format."
+        },
         "expand_um": {"oneOf": [{"const": -1}, {"type": "number", "minimum": 0}], "default": 3.0},
         "stardist_prob": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.52},
         "stardist_nms": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.28},

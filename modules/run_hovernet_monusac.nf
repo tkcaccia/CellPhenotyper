@@ -61,7 +61,8 @@ process RUN_HOVERNET_MONUSAC {
       --target-mpp ${params.hovernet_target_mpp} --default-mpp ${params.hovernet_default_mpp} \
       --gpu ${params.hovernet_gpu} --batch-size ${params.hovernet_batch_size} \
       --inference-workers ${task.cpus} --postproc-workers ${postprocWorkers} \
-      --chunk-shape ${params.hovernet_chunk_shape} --tile-shape ${params.hovernet_tile_shape} ${predictionCacheArg}
+      --chunk-shape ${params.hovernet_chunk_shape} --tile-shape ${params.hovernet_tile_shape} \
+      --cache-backend ${params.hovernet_cache_backend} ${predictionCacheArg}
     """
 
     stub:

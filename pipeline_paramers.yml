@@ -133,6 +133,7 @@ hovernet_default_mpp: 0.25
 hovernet_batch_size: 0   # 0 = auto-scale from live free VRAM on the assigned GPU
 hovernet_postproc_workers: 0
 hovernet_prediction_cache: ''
+hovernet_cache_backend: zarr  # zarr (lossless compressed, default) | numpy (upstream compatibility)
 hovernet_chunk_shape: 8192  # bounded-memory WSI post-processing; 4 x 2048-pixel tiles per side
 hovernet_tile_shape: 2048
 cellvit_model: HIPT
