@@ -33,6 +33,21 @@ process RUN_HOVERNET_MONUSAC {
     def postprocWorkers = requestedPostprocWorkers > 0 ? Math.min(requestedPostprocWorkers, postprocCap) : postprocCap
     """
     set -euo pipefail
+    cleanup_hovernet_transients() {
+      # These slide-sized maps and runtime copies are implementation details,
+      # never published outputs. Do not leave them in the Nextflow cache after
+      # success, failure, or scheduler cancellation.
+      rm -rf -- \
+        "hovernet_${sample_id}/cache" \
+        "hovernet_${sample_id}/input" \
+        "hovernet_${sample_id}/input_mask" \
+        "hovernet_${sample_id}/runtime_cache" \
+        "hovernet_${sample_id}/hovernet_runtime"
+    }
+    trap cleanup_hovernet_transients EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
     echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     echo "[INFO] HoVer-Net wrapper code fingerprint: ${codeFingerprint}"

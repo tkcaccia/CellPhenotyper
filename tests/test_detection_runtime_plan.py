@@ -66,6 +66,8 @@ elif output.name == 'stardist_out':
     names = ['crop_roi.tif','labels.tif','objects.csv','roi_all_crop.geojson','shift.json']
 else:
     names = ['hovernet_cells.json']
+    for transient in ['cache','input','input_mask','runtime_cache','hovernet_runtime']:
+        path = output/transient; path.mkdir(); (path/'large-transient-sentinel').write_text('temporary')
 for name in names:
     (output/name).write_text('MODEL-FREE RUNTIME COMMAND FIXTURE; NOT BIOLOGICAL RESULTS\\n')
 """)
@@ -209,6 +211,18 @@ def test_hovernet_plan_worker_setting_is_capped_by_cpus_and_ram(tmp_path):
     result, records, _, _ = run_probe(tmp_path, runtime, ["hovernet"])
     assert result.returncode == 0, result.stdout + result.stderr
     assert records["hovernet"]["postproc_workers"] == 3  # not stale param=1, nor requested=5 > task.cpus
+
+
+def test_hovernet_task_cleans_whole_slide_transients_on_exit(tmp_path):
+    text = (ROOT / "modules" / "run_hovernet_monusac.nf").read_text(encoding="utf-8")
+    assert "trap cleanup_hovernet_transients EXIT" in text
+    assert "trap 'exit 143' TERM" in text
+    for transient in ("cache", "input", "input_mask", "runtime_cache", "hovernet_runtime"):
+        assert f'"hovernet_${{sample_id}}/{transient}"' in text
+    result, records, _, _ = run_probe(tmp_path, plan(memory=36), ["hovernet"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "hovernet" in records
+    assert not list((tmp_path / "work").glob("*/*/hovernet_hovernet/*/large-transient-sentinel"))
 
 
 def test_hovernet_cpu_plan_fails_before_model_free_recorder(tmp_path):
