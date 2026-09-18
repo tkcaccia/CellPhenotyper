@@ -15,6 +15,12 @@ ENV R_LIBS_USER=/opt/cellphenotyper/empty-r-library
 ENV R_ENVIRON_USER=/dev/null
 ENV R_PROFILE_USER=/dev/null
 
+# Runtime libraries used by the cohort/profile workflows and their schema
+# gates were absent from the prior source-refresh base even though they are
+# part of the declared pipeline environments.
+RUN micromamba run -n stardist python -m pip install --no-cache-dir \
+      pyarrow==23.0.1 jsonschema==4.21.1
+
 WORKDIR /opt/cellphenotyper
 COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md UPSTREAM_DIFFS.md /opt/cellphenotyper/
 COPY bin /opt/cellphenotyper/bin
@@ -26,6 +32,9 @@ COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+COPY docs /opt/cellphenotyper/docs
+COPY audits /opt/cellphenotyper/audits
+COPY .github /opt/cellphenotyper/.github
 COPY tests /opt/cellphenotyper/tests
 
 CMD ["/bin/bash"]

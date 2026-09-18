@@ -1,5 +1,4 @@
 .git
-.github
 .nextflow*
 .apptainer_cache
 .hf_cache
