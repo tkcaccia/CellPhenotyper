@@ -153,6 +153,34 @@ def test_rejects_conflicting_mpp_metadata_without_override(tmp_path):
     assert any("conflicting physical-resolution" in message for message in report["failures"])
 
 
+def test_ignores_implausible_generic_tiff_resolution_when_ome_mpp_is_valid(tmp_path):
+    image = tmp_path / "ome_with_screen_dpi.tif"
+    tifffile.imwrite(
+        image,
+        np.zeros((32, 48, 3), dtype=np.uint8),
+        photometric="rgb",
+        description=(
+            '<OME><Image><Pixels PhysicalSizeX="0.2737752" PhysicalSizeXUnit="um" '
+            'PhysicalSizeY="0.2737744" PhysicalSizeYUnit="um"/></Image></OME>'
+        ),
+        resolution=(96.0, 96.0),
+        resolutionunit="INCH",
+    )
+
+    report, accepted = MODULE.validate(args_for(image, tmp_path / "report.json"))
+
+    assert accepted
+    assert report["mpp_conflicts"] == []
+    assert report["out_of_range_mpp_candidates"] == [
+        {
+            "source": "tiff-resolution-tags",
+            "mpp_x": 25_400.0 / 96.0,
+            "mpp_y": 25_400.0 / 96.0,
+        }
+    ]
+    assert any("outside the configured cell-analysis sanity range" in item for item in report["warnings"])
+
+
 def test_explicit_override_resolves_conflicting_mpp_metadata(tmp_path):
     image = tmp_path / "conflicting_override.tif"
     tifffile.imwrite(

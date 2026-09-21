@@ -451,8 +451,17 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     )
     layout, inspection_errors = inspect_image_layout(path)
     mpp_candidates, mpp_inspection_errors = inspect_mpp_candidates(path)
+    plausible_mpp_candidates = [
+        candidate
+        for candidate in mpp_candidates
+        if args.min_mpp <= candidate["mpp_x"] <= args.max_mpp
+        and args.min_mpp <= candidate["mpp_y"] <= args.max_mpp
+    ]
+    out_of_range_mpp_candidates = [
+        candidate for candidate in mpp_candidates if candidate not in plausible_mpp_candidates
+    ]
     mpp_conflicts = find_mpp_conflicts(
-        mpp_candidates, max_metadata_conflict_fraction
+        plausible_mpp_candidates, max_metadata_conflict_fraction
     )
     file_sha256 = None
     if hash_file:
@@ -487,6 +496,16 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             failures.append(message + " Supply an independently verified --override-mpp.")
         else:
             warnings.append(message + " The explicit override is authoritative for this run.")
+    if out_of_range_mpp_candidates and plausible_mpp_candidates:
+        ignored_sources = ", ".join(
+            f"{candidate['source']}=({candidate['mpp_x']:.6g}, {candidate['mpp_y']:.6g})"
+            for candidate in out_of_range_mpp_candidates
+        )
+        warnings.append(
+            "Excluded physical-resolution candidate(s) outside the configured cell-analysis "
+            f"sanity range [{args.min_mpp:g}, {args.max_mpp:g}] µm/px from metadata conflict "
+            f"testing: {ignored_sources}."
+        )
 
     color_interpretation = str(layout.get("color_interpretation") or "").upper()
     channel_count = layout.get("channel_count")
@@ -582,6 +601,8 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         **asdict(info),
         "effective_mpp": effective_mpp,
         "mpp_candidates": mpp_candidates,
+        "plausible_mpp_candidates": plausible_mpp_candidates,
+        "out_of_range_mpp_candidates": out_of_range_mpp_candidates,
         "mpp_inspection_errors": mpp_inspection_errors,
         "mpp_conflicts": mpp_conflicts,
         "cell_target_mpp": args.cell_target_mpp,
