@@ -72,6 +72,13 @@ def test_auto_device_is_pipeline_wide_default() -> None:
     assert "docker.runOptions = dockerExtraOptions" in CONFIG
 
 
+def test_singularity_never_binds_a_missing_optional_cache_directory() -> None:
+    assert "def nearest_existing_bind_target" in CONFIG
+    assert "while (target != null && !target.exists())" in CONFIG
+    assert "def target = nearest_existing_bind_target(file)" in CONFIG
+    assert "target.exists() ? target.getCanonicalPath() : target.getAbsolutePath()" not in CONFIG
+
+
 def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
     assert "kodama_landmarks: 10000" in PARAMETERS
     assert "cluster_snn_k: 50" in PARAMETERS
