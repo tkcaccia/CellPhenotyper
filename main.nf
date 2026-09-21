@@ -1,4 +1,3 @@
-import groovy.io.FileType
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 
@@ -418,167 +417,20 @@ if (missingKodamaModes) {
 println "Runtime: arch=${detected_arch}, device=${resolved_compute_device}, image_mode=${runtime_image_mode}."
 println "Pipeline stage window: ${start_point} -> ${end_point}"
 
-def supported_image_suffixes = PipelineInputs.IMAGE_SUFFIXES
-def detectImageSuffix = { String fileName -> PipelineInputs.imageSuffix(fileName) }
-def imageSuffixPriority = { String suffix -> PipelineInputs.imageSuffixPriority(suffix) }
-def deriveSampleId = { imageFile -> PipelineInputs.sampleId(imageFile) }
-def extractCziRegionLabel = { String rawName -> PipelineInputs.cziRegionLabel(rawName) }
-def extractCziRegionOrder = { String rawName -> PipelineInputs.cziRegionOrder(rawName) }
-
-def buildSampleId = { imageFile, String regionLabel = '' ->
-def baseId = deriveSampleId(imageFile)
-def rawId = regionLabel ? "${baseId}__${regionLabel}" : baseId
-def safeId = rawId.replaceAll(/[^A-Za-z0-9._-]+/, '_').replaceAll(/^_+|_+$/, '')
-safeId ?: 'sample'
-}
-
-def folder_input = (params.folder_input ?: '').toString().trim()
-def image_input_param = (params.image_input ?: '').toString().trim()
-def roi_geojson_param = (params.roi_geojson ?: '').toString().trim()
-def require_matching_roi = (((params.require_matching_roi ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
-def sample_rows = []
-
-if (folder_input) {
-if (image_input_param || roi_geojson_param) {
-  println "WARN: --folder_input is set; --image_input/--roi_geojson are ignored."
-}
-def input_dir = new File(folder_input).canonicalFile
-if (!input_dir.exists()) {
-  error "--folder_input does not exist: ${input_dir}"
-}
-if (!input_dir.isDirectory()) {
-  error "--folder_input must be a directory. Got: ${input_dir}"
-}
-
-def candidates = []
-input_dir.eachFile(FileType.FILES) { File f ->
-  def suffix = detectImageSuffix(f.name)
-  if (suffix) {
-    candidates << [file: f, suffix: suffix]
-  }
-}
-if (!candidates) {
-  error "No supported images found in --folder_input ${input_dir}."
-}
-
-def sample_map = [:]
-candidates.each { def candidate ->
-  def f = candidate.file as File
-  def suffix = candidate.suffix as String
-  def sample_id = deriveSampleId(f)
-  def priority = imageSuffixPriority(suffix)
-  def prev = sample_map[sample_id]
-  if (prev == null || priority > prev.priority) {
-    sample_map[sample_id] = [file: f, priority: priority]
-  }
-}
-
-sample_map.keySet().sort().each { sample_id ->
-  def image_file = sample_map[sample_id].file as File
-  def suffix = detectImageSuffix(image_file.name)
-  def input_support = file(PipelineInputs.inputSupport(image_file, baseDir), checkIfExists: true)
-  if (suffix == '.czi') {
-    def czi_geojsons = []
-    input_dir.eachFile(FileType.FILES) { File roiFile ->
-      if (!roiFile.name.toLowerCase().endsWith('.geojson')) {
-        return
-      }
-      def matchesImagePrefix = roiFile.name.startsWith("${image_file.name} - ")
-      if (!matchesImagePrefix) {
-        return
-      }
-      def regionLabel = extractCziRegionLabel(roiFile.name)
-      if (!regionLabel) {
-        return
-      }
-      czi_geojsons << [file: roiFile, region: regionLabel, order: extractCziRegionOrder(roiFile.name)]
-    }
-
-    if (czi_geojsons) {
-      czi_geojsons
-        .sort { a, b -> (a.order as int) <=> (b.order as int) ?: (a.file.name as String) <=> (b.file.name as String) }
-        .each { entry ->
-          def roi_file = entry.file as File
-          def region_label = entry.region as String
-          def region_sample_id = buildSampleId(image_file, region_label)
-          sample_rows << tuple(
-            region_sample_id,
-            file(image_file.absolutePath, checkIfExists: true),
-            region_label,
-            roi_file.name,
-            roi_file.bytes.encodeBase64().toString(),
-            input_support
-          )
-        }
-      return
-    }
-
-    if (require_matching_roi) {
-      println "WARN: Skipping CZI input ${image_file.name} because no region-specific ScanRegion GeoJSON files were found and --require_matching_roi is enabled."
-      return
-    }
-    println "WARN: No region-specific ScanRegion GeoJSON files found for CZI input ${image_file.name}. The pipeline will treat it as a single sample."
-  }
-
-  def roi_candidate = new File(input_dir, "${sample_id}.geojson")
-  if (!roi_candidate.exists() && require_matching_roi) {
-    println "WARN: Skipping image ${image_file.name} because matching ROI GeoJSON ${sample_id}.geojson was not found and --require_matching_roi is enabled."
-    return
-  }
-  def roi_hint_name = roi_candidate.exists() ? roi_candidate.name : ''
-  def roi_hint_b64 = roi_candidate.exists() ? roi_candidate.bytes.encodeBase64().toString() : ''
-  sample_rows << tuple(buildSampleId(image_file), file(image_file.absolutePath, checkIfExists: true), '', roi_hint_name, roi_hint_b64, input_support)
-}
-} else {
-if (!image_input_param) {
-  error "Set either --folder_input (directory with images) or --image_input (single image file)."
-}
-def image_file = file(image_input_param, checkIfExists: true)
-def single_suffix = detectImageSuffix(image_file.name)
-if (!single_suffix) {
-  error "Unsupported image extension for --image_input '${image_file.name}'. Supported extensions: ${supported_image_suffixes.collect { it.suffix }.join(', ')}"
-}
-def base_sample_id = deriveSampleId(image_file)
-def roi_hint_name = ''
-def roi_hint_b64 = ''
-def input_region = ''
-if (roi_geojson_param) {
-  def roi_file = file(roi_geojson_param, checkIfExists: true)
-  roi_hint_name = roi_file.name
-  roi_hint_b64 = roi_file.bytes.encodeBase64().toString()
-  if (single_suffix == '.czi') {
-    input_region = extractCziRegionLabel(roi_file.name)
-    if (!input_region) {
-      println "WARN: --roi_geojson ${roi_file.name} does not contain a ScanRegion selector for CZI input ${image_file.name}."
-    }
-  }
-} else {
-  def image_file_obj = image_file instanceof File ? image_file : new File(image_file.toString())
-  def roi_candidate = new File(image_file_obj.parentFile, "${base_sample_id}.geojson")
-  if (roi_candidate.exists()) {
-    roi_hint_name = roi_candidate.name
-    roi_hint_b64 = roi_candidate.bytes.encodeBase64().toString()
-    if (single_suffix == '.czi') {
-      input_region = extractCziRegionLabel(roi_candidate.name)
-    }
-  } else if (require_matching_roi) {
-    error "Matching ROI GeoJSON not found for ${image_file.name} and --require_matching_roi is enabled. Expected: ${roi_candidate}"
-  }
-}
-def sample_id = buildSampleId(image_file, input_region)
-def input_support = file(PipelineInputs.inputSupport(image_file, baseDir), checkIfExists: true)
-sample_rows << tuple(sample_id, image_file, input_region, roi_hint_name, roi_hint_b64, input_support)
-}
-
-if (!sample_rows) {
-error "No input samples were resolved."
+def sample_specs = PipelineInputs.resolveSamples(
+  params.folder_input,
+  params.image_input,
+  params.roi_geojson,
+  params.require_matching_roi,
+  baseDir,
+)
+def sample_rows = sample_specs.collect { spec ->
+  tuple(spec.sampleId, file(spec.image, checkIfExists: true), spec.inputRegion ?: '',
+    spec.roiName ?: '', spec.roiBase64 ?: '', file(spec.inputSupport, checkIfExists: true))
 }
 println "Resolved input samples (${sample_rows.size()}): ${sample_rows.collect { it[0] }.join(', ')}"
-
 StoragePreflight.run(params, sample_rows.collect { it[1].toString() }, baseDir, workflow.workDir, workflow.profile)
-
-Channel
-.fromList(sample_rows)
+Channel.fromList(sample_rows)
 .set { input_spec_ch }
 
 def convert_input_ch = input_spec_ch

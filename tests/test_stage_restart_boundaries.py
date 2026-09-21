@@ -43,6 +43,15 @@ def test_github_workflows_run_the_pytest_suite() -> None:
     assert "unittest discover" not in RELEASE_WORKFLOW
 
 
+def test_main_workflow_stays_below_nextflow_groovy_constant_limit() -> None:
+    # Nextflow 25.10 compiles most of the DSL2 workflow body into one Groovy
+    # string constant. Keep input discovery in PipelineInputs so that constant
+    # remains safely below the JVM's 65,535-byte class-file limit.
+    assert "PipelineInputs.resolveSamples(" in MAIN
+    assert "static List<Map<String, Object>> resolveSamples(" in PIPELINE_INPUTS
+    assert len(MAIN.encode("utf-8")) < 66_000
+
+
 def test_clustering_restart_reuses_published_marker_quantification() -> None:
     assert "def published_gigatime_quant_dir_ch" in MAIN
     assert 'quantification_${sample_id}", checkIfExists: true' in MAIN
