@@ -99,6 +99,28 @@ def test_grid_is_the_default_uni2_sampling_route() -> None:
     assert "params.uni2_sampling_mode ?: 'grid'" in (ROOT / "main.nf").read_text(encoding="utf-8")
 
 
+def test_optional_model_branches_are_disabled_by_default() -> None:
+    schema = load_schema()
+    params = yaml.safe_load(PARAMS_PATH.read_text(encoding="utf-8"))
+    config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
+    main = (ROOT / "main.nf").read_text(encoding="utf-8")
+
+    cell = schema["definitions"]["cell_options"]["properties"]
+    gigatime = schema["definitions"]["gigatime_options"]["properties"]
+    assert cell["cell_detection_mode"]["default"] == "stardist"
+    assert params["cell_detection_mode"] == "stardist"
+    assert params["cell_consensus_enable"] is False
+    assert "cell_detection_mode           = 'stardist'" in config
+    assert "cell_consensus_enable         = false" in config
+    assert "? false : params.cell_consensus_enable" in main
+
+    for name in ("gigatime_enable", "marker_quantification_enable", "gigatime_kodama_enable"):
+        assert gigatime[name]["default"] is False
+        assert params[name] is False
+        assert f"{name}" in config
+    assert "? false : params.gigatime_kodama_enable" in main
+
+
 @pytest.mark.parametrize("storage", ["csv", "binary"])
 def test_uni2_storage_schema(storage):
     validate({"uni2_embedding_storage": storage})

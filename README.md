@@ -194,9 +194,9 @@ When an input ROI GeoJSON is present, the pipeline writes a crop-aligned mask to
 
 After StarDist, the optional `04_TMA` step detects whether the crop behaves like a tissue microarray by segmenting compact separated tissue cores on a thumbnail and checking spot count, spot-size consistency, and grid-like layout. When a TMA is detected it writes `04_TMA/<sample>/tma_<sample>/<sample>_tma_spots.geojson`; in all cases it writes `04_TMA/<sample>/tma_<sample>/<sample>_objects_tma_assigned.csv`, preserving the StarDist object rows and appending `tma_spot_*` columns.
 
-## GigaTIME marker quantification
+## Optional GigaTIME marker quantification
 
-GigaTIME is enabled by default, so the pipeline also quantifies the crop-aligned GigaTIME marker stack over:
+GigaTIME is disabled by default. When explicitly enabled, the pipeline quantifies the crop-aligned GigaTIME marker stack over:
 
 - canonical nuclei labels (consensus or explicit StarDist route)
 - whole-cell approximations, retaining the legacy `cyto` filename
@@ -204,7 +204,7 @@ GigaTIME is enabled by default, so the pipeline also quantifies the crop-aligned
 
 Physical expansion defaults to `expand_um=3.0`, is constrained by tissue support,
 and records crowding/truncation QC. These masks are not inferred cell membranes.
-Default stored marker output now retains all 23 channels in float32; versioned
+When enabled, the default stored marker output retains all 23 channels in float32; versioned
 schema/checkpoint/precision/mask checks reject non-equivalent restarts. Old
 subset/uint8 outputs remain historical research artifacts, not equivalent sources
 for authoritative requantification. See the [atlas migration notes](docs/CELL_ATLAS_USAGE.md).
@@ -576,7 +576,9 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 docker push "${IMAGE}"
 ```
-Cell identification has an explicit, hardware-independent scientific mode. `cell_detection_mode=consensus` runs StarDist, HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask. HoVer-Net defaults to a bounded-disk overlap-tiled route: only GrandQC-supported 4,096-pixel cores run, a 256-pixel halo preserves local context, and centroid ownership removes halo duplicates without slide-wide prediction maps. At most 64 normalized input tiles exist simultaneously. The detectors have no inter-detector dependency and fusion alone waits for all three. By default, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. Its compact gzip JSON therefore omits redundant contours by default. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved. `cell_detection_mode=stardist` must be selected explicitly for a StarDist-only analysis; the pipeline never changes the cell population merely because hardware differs.
+Cell identification has an explicit, hardware-independent scientific mode. The shipped default, `cell_detection_mode=stardist`, runs only StarDist. The optional `cell_detection_mode=consensus` route adds HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask. HoVer-Net defaults to a bounded-disk overlap-tiled route: only GrandQC-supported 4,096-pixel cores run, a 256-pixel halo preserves local context, and centroid ownership removes halo duplicates without slide-wide prediction maps. At most 64 normalized input tiles exist simultaneously. The detectors have no inter-detector dependency and fusion alone waits for all three. In consensus mode, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors by default. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. Its compact gzip JSON therefore omits redundant contours by default. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved; the pipeline never changes the cell population merely because hardware differs.
+
+GigaTIME is also optional and disabled by default. A normal run does not require a GigaTIME model path or token and does not schedule virtual-marker inference, marker quantification, or marker-derived KODAMA. Enable the branch explicitly with `--gigatime_enable true`; enable its dependent outputs separately when required.
 
 Every run writes `00_execution/analysis_contract.json` and `00_execution/validation_readiness.json`. An optional `--study_manifest` based on `resources/study_manifest.template.json` declares the intended use, primary endpoint, statistical unit, cohort independence, reference standard and prespecification. `--evidence_gate_mode warn` keeps exploratory runs usable while limiting claims in the report; `fail` rejects an incomplete testing declaration. Passing this schema check does not verify accuracy or clinical validity.
 

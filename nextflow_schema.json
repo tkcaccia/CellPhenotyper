@@ -291,8 +291,8 @@
         "cell_detection_mode": {
           "type": "string",
           "enum": ["consensus", "stardist"],
-          "default": "consensus",
-          "description": "Scientific detector-population choice; hardware must not change it."
+          "default": "stardist",
+          "description": "Scientific detector-population choice. StarDist is the default; consensus is an explicit GPU-only opt-in. Hardware must not change the selected mode."
         },
         "cell_consensus_fusion_acceptance_policy": {
           "type": "string",
@@ -331,7 +331,7 @@
       "title": "GigaTIME virtual markers",
       "type": "object",
       "properties": {
-        "gigatime_enable": {"type": "boolean", "default": true},
+        "gigatime_enable": {"type": "boolean", "default": false},
         "gigatime_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
         "gigatime_strict_target_mpp": {"type": "boolean", "default": true},
         "gigatime_output_format": {"type": "string", "enum": ["zarr", "ome_tiff", "none"], "default": "none"},
@@ -347,8 +347,8 @@
         "gigatime_seam_qc_mode": {"type": "string", "enum": ["off", "warn", "fail"], "default": "fail"},
         "gigatime_seam_qc_max_p95_excess": {"type": "number", "minimum": 0, "default": 0.1},
         "gigatime_seam_qc_min_affected_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
-        "marker_quantification_enable": {"type": "boolean", "default": true},
-        "gigatime_kodama_enable": {"type": "boolean", "default": true}
+        "marker_quantification_enable": {"type": "boolean", "default": false},
+        "gigatime_kodama_enable": {"type": "boolean", "default": false}
       }
     },
     "representation_options": {

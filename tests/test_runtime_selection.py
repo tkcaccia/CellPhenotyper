@@ -130,9 +130,9 @@ def test_medsam_auto_device_and_retry_follow_pipeline_policy() -> None:
     assert "requestedMedsamDevice == 'auto'" in module
 
 
-def test_consensus_mode_is_explicit_and_does_not_change_with_hardware() -> None:
-    assert "cell_detection_mode           = 'consensus'" in CONFIG
-    assert "cell_detection_mode: consensus" in PARAMETERS
+def test_stardist_is_default_and_consensus_does_not_change_with_hardware() -> None:
+    assert "cell_detection_mode           = 'stardist'" in CONFIG
+    assert "cell_detection_mode: stardist" in PARAMETERS
     assert "cell_detection_mode=consensus requires GPU execution" in MAIN
     assert "falling back to StarDist-only" not in MAIN
 

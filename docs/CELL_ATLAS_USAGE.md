@@ -373,7 +373,8 @@ perinuclear ring, and a whole-cell approximation including the nucleus.
 not inferred membranes. Crowding, image/tissue truncation and retained nuclear
 pixels outside support are recorded in compartment QC and joined into profiles.
 
-GigaTIME storage defaults to all 23 channels in float32. Two background channels
+When the optional GigaTIME branch is enabled, storage defaults to all 23 channels
+in float32. Two background channels
 are kept for QC but excluded from default biological-marker feature blocks.
 Integrated tables use the blended float32 field with float64 reductions;
 actual model arithmetic is recorded separately. Marker restart validates the

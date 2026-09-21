@@ -259,7 +259,7 @@ def gigatime_export_ometiff_enabled = (((params.gigatime_export_ometiff ?: false
 if (gigatime_export_ometiff_enabled && gigatime_output_format != 'zarr') {
 error 'gigatime_export_ometiff=true requires gigatime_output_format=zarr; use ome_tiff for a direct dense TIFF or none for integrated tables only.'
 }
-def gigatime_kodama_enabled = ((((params.gigatime_kodama_enable == null) ? true : params.gigatime_kodama_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def gigatime_kodama_enabled = ((((params.gigatime_kodama_enable == null) ? false : params.gigatime_kodama_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def grandqc_enabled = (((params.grandqc_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def pathsegmentor_enabled = (((params.pathsegmentor_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def pathsegmentor_refine_enabled = (((params.pathsegmentor_guided_refine_enable ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
@@ -267,7 +267,7 @@ if (pathsegmentor_refine_enabled && !pathsegmentor_enabled) {
 error 'pathsegmentor_guided_refine_enable requires pathsegmentor_enable=true'
 }
 def tma_enabled = ((((params.tma_enable == null) ? true : params.tma_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
-def legacy_consensus_enabled = ((((params.cell_consensus_enable == null) ? true : params.cell_consensus_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
+def legacy_consensus_enabled = ((((params.cell_consensus_enable == null) ? false : params.cell_consensus_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def cell_detection_mode = (params.cell_detection_mode ?: (legacy_consensus_enabled ? 'consensus' : 'stardist')).toString().trim().toLowerCase()
 if (!(cell_detection_mode in ['consensus', 'stardist'])) {
 error "Invalid --cell_detection_mode '${params.cell_detection_mode}'. Use consensus or stardist."
