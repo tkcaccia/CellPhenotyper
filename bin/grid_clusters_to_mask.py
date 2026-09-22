@@ -78,10 +78,21 @@ def main() -> None:
         prefer_interpretable=False,
     )
     uncertainty_mapping = load_uncertainty_map(args.map)
+    cluster_records = pd.read_csv(args.map)
+    cluster_records.columns = [c.strip().strip('"').strip("'") for c in cluster_records.columns]
+    if "exclude_from_downstream" in cluster_records.columns:
+        exclusion_values = cluster_records["exclude_from_downstream"].astype(str).str.strip().str.lower()
+        exclude_by_label = pd.Series(
+            exclusion_values.isin({"true", "1", "yes", "y"}).to_numpy(),
+            index=pd.to_numeric(cluster_records["label"], errors="raise").astype(np.int64),
+        )
+    else:
+        exclude_by_label = pd.Series(False, index=mapping["label"], dtype=bool)
     cluster_by_label = mapping.set_index("label")["cluster"]
     uncertainty_by_label = uncertainty_mapping.set_index("label")["uncertainty_code"]
     grid["cluster"] = grid["label"].map(cluster_by_label)
     grid["uncertainty_code"] = grid["label"].map(uncertainty_by_label)
+    grid["exclude_from_downstream"] = grid["label"].map(exclude_by_label).fillna(False).astype(bool)
     missing_labels = grid.loc[grid["cluster"].isna(), "label"].tolist()
     if missing_labels:
         raise ValueError(
@@ -136,6 +147,8 @@ def main() -> None:
             if x1 <= x0:
                 continue
             scanline[x0:x1] = int(record.cluster)
+            if bool(record.exclude_from_downstream):
+                scanline[x0:x1] = int(args.default)
             uncertainty_scanline[x0:x1] = int(record.uncertainty_code)
             written_pixels += (x1 - x0) * (y1 - y0)
             if int(record.uncertainty_code) > 0:
@@ -176,12 +189,14 @@ def main() -> None:
         for code, count in grid["uncertainty_code"].value_counts().sort_index().items()
     }
     abstained_observations = int((grid["uncertainty_code"] > 0).sum())
+    excluded_observations = int(grid["exclude_from_downstream"].sum())
     summary = {
         "schema_version": 2,
         "observation_type": "spatial_grid",
         "grid_observations": int(len(grid)),
         "accepted_observations": int(len(grid) - abstained_observations),
         "abstained_observations": abstained_observations,
+        "excluded_grandqc_candidate_kodama_outlier_observations": excluded_observations,
         "accepted_observation_fraction": float(
             (len(grid) - abstained_observations) / max(1, len(grid))
         ),
@@ -190,6 +205,7 @@ def main() -> None:
             str(code): name for code, name in UNCERTAINTY_STATUS_NAMES.items()
         },
         "abstained_assignment_policy": "retain_raw_kodama_cluster_with_uncertainty",
+        "grandqc_candidate_policy": "exclude_only_when_cluster_conditioned_kodama_plot_outlier",
         "clusters": observed_clusters,
         "written_core_pixels": int(written_pixels),
         "abstained_core_pixels": int(abstained_pixels),

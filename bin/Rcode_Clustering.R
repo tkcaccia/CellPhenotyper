@@ -15,7 +15,10 @@ if (length(args) < 2L) {
     "[--profile standard|fine] [--seed N] [--stability-runs N]",
     "[--auto-selection minimum_abstention|quality_score]",
     "[--assignment-min-vote-margin X] [--stability-min-fraction X]",
-    "[--abstain-uncertain true|false]"
+    "[--abstain-uncertain true|false] [--observations CSV]",
+    "[--grandqc-kodama-outlier-enable true|false] [--grandqc-kodama-outlier-knn N]",
+    "[--grandqc-kodama-outlier-quantile X] [--grandqc-kodama-outlier-mad-multiplier X]",
+    "[--grandqc-kodama-outlier-min-reference N]"
   ))
 }
 
@@ -51,6 +54,12 @@ auto_selection <- "minimum_abstention"
 assignment_min_vote_margin <- 0.10
 stability_min_fraction <- 0.67
 abstain_uncertain <- FALSE
+observations_csv <- NULL
+grandqc_kodama_outlier_enable <- TRUE
+grandqc_kodama_outlier_knn <- 15L
+grandqc_kodama_outlier_quantile <- 0.995
+grandqc_kodama_outlier_mad_multiplier <- 6.0
+grandqc_kodama_outlier_min_reference <- 50L
 active_seed <- clustering_seed
 fine_resolution_multiplier <- 1.35
 fine_score_margin <- 0.03
@@ -193,6 +202,36 @@ if (length(args) > 2L) {
       i <- i + 2L
       next
     }
+    if (flag == "--observations" && i + 1L <= length(args)) {
+      observations_csv <- args[i + 1L]
+      i <- i + 2L
+      next
+    }
+    if (flag == "--grandqc-kodama-outlier-enable" && i + 1L <= length(args)) {
+      grandqc_kodama_outlier_enable <- tolower(args[i + 1L]) %in% c("true", "1", "yes", "y", "on")
+      i <- i + 2L
+      next
+    }
+    if (flag == "--grandqc-kodama-outlier-knn" && i + 1L <= length(args)) {
+      grandqc_kodama_outlier_knn <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--grandqc-kodama-outlier-quantile" && i + 1L <= length(args)) {
+      grandqc_kodama_outlier_quantile <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--grandqc-kodama-outlier-mad-multiplier" && i + 1L <= length(args)) {
+      grandqc_kodama_outlier_mad_multiplier <- as.numeric(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--grandqc-kodama-outlier-min-reference" && i + 1L <= length(args)) {
+      grandqc_kodama_outlier_min_reference <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
     if (flag == "--fine-multiplier" && i + 1L <= length(args)) {
       fine_resolution_multiplier <- as.numeric(args[i + 1L])
       i <- i + 2L
@@ -321,6 +360,18 @@ if (!is.finite(assignment_min_vote_margin) || assignment_min_vote_margin < 0 || 
 }
 if (!is.finite(stability_min_fraction) || stability_min_fraction < 0 || stability_min_fraction > 1) {
   stop("--stability-min-fraction must be between 0 and 1.")
+}
+if (!is.finite(grandqc_kodama_outlier_knn) || grandqc_kodama_outlier_knn < 1L) {
+  stop("--grandqc-kodama-outlier-knn must be an integer >= 1")
+}
+if (!is.finite(grandqc_kodama_outlier_quantile) || grandqc_kodama_outlier_quantile <= 0 || grandqc_kodama_outlier_quantile >= 1) {
+  stop("--grandqc-kodama-outlier-quantile must be strictly between 0 and 1")
+}
+if (!is.finite(grandqc_kodama_outlier_mad_multiplier) || grandqc_kodama_outlier_mad_multiplier < 0) {
+  stop("--grandqc-kodama-outlier-mad-multiplier must be >= 0")
+}
+if (!is.finite(grandqc_kodama_outlier_min_reference) || grandqc_kodama_outlier_min_reference < 3L) {
+  stop("--grandqc-kodama-outlier-min-reference must be an integer >= 3")
 }
 
 require_namespace <- function(pkg) {
@@ -957,10 +1008,11 @@ draw_uncertainty_plot <- function(vis, uncertainty_reason, is_abstained, assignm
     "none",
     "ambiguous_assignment",
     "seed_instability",
-    "ambiguous_assignment_and_seed_instability"
+    "ambiguous_assignment_and_seed_instability",
+    "grandqc_artifact_kodama_outlier"
   )
-  status_colors <- c("#BDBDBD", "#E69F00", "#56B4E9", "#CC79A7")
-  status_labels <- c("no threshold violation", "ambiguous assignment", "seed instability", "assignment + instability")
+  status_colors <- c("#BDBDBD", "#E69F00", "#56B4E9", "#CC79A7", "#D73027")
+  status_labels <- c("no threshold violation", "ambiguous assignment", "seed instability", "assignment + instability", "GrandQC candidate + KODAMA outlier")
   status[!(status %in% status_levels)] <- "other"
   status_levels <- c(status_levels, "other")
   status_colors <- c(status_colors, "#333333")
@@ -1009,6 +1061,47 @@ draw_uncertainty_plot <- function(vis, uncertainty_reason, is_abstained, assignm
     col = c(confidence_palette[1], confidence_palette[100]), pch = 16, bty = "n", cex = 0.68
   )
   if (!is.null(main)) mtext(main, side = 3, outer = TRUE, line = 0.2, cex = 0.9)
+}
+
+detect_grandqc_kodama_outliers <- function(
+  kodama_plot, membership, artifact_candidate, requested_k, threshold_quantile,
+  mad_multiplier, min_reference
+) {
+  n <- nrow(kodama_plot)
+  result <- list(
+    is_outlier = rep(FALSE, n),
+    mean_knn_distance = rep(NA_real_, n),
+    cluster_threshold = rep(NA_real_, n),
+    score = rep(NA_real_, n),
+    reference_count = rep(0L, n)
+  )
+  if (!any(artifact_candidate)) return(result)
+  require_namespace("BiocNeighbors")
+  for (cluster_id in sort(unique(as.integer(membership)))) {
+    cluster_idx <- which(as.integer(membership) == cluster_id)
+    candidate_idx <- cluster_idx[artifact_candidate[cluster_idx]]
+    reference_idx <- cluster_idx[!artifact_candidate[cluster_idx]]
+    if (!length(candidate_idx)) next
+    result$reference_count[candidate_idx] <- length(reference_idx)
+    # Fail open when GrandQC marked nearly the complete cluster: KODAMA has no
+    # adequate normal-tissue reference from which to establish an outlier.
+    if (length(reference_idx) < min_reference) next
+    reference <- kodama_plot[reference_idx, , drop = FALSE]
+    candidate <- kodama_plot[candidate_idx, , drop = FALSE]
+    k_reference <- min(as.integer(requested_k), nrow(reference) - 1L)
+    k_query <- min(as.integer(requested_k), nrow(reference))
+    if (k_reference < 1L || k_query < 1L) next
+    reference_distance <- rowMeans(BiocNeighbors::findKNN(reference, k = k_reference)$distance)
+    candidate_distance <- rowMeans(BiocNeighbors::queryKNN(reference, candidate, k = k_query)$distance)
+    robust_limit <- stats::median(reference_distance) + mad_multiplier * stats::mad(reference_distance)
+    quantile_limit <- as.numeric(stats::quantile(reference_distance, probs = threshold_quantile, names = FALSE, type = 8))
+    threshold <- max(robust_limit, quantile_limit, .Machine$double.eps, na.rm = TRUE)
+    result$mean_knn_distance[candidate_idx] <- candidate_distance
+    result$cluster_threshold[candidate_idx] <- threshold
+    result$score[candidate_idx] <- candidate_distance / threshold
+    result$is_outlier[candidate_idx] <- is.finite(candidate_distance) & candidate_distance > threshold
+  }
+  result
 }
 
 preferred_cluster_cap <- function(n_cells) {
@@ -1469,6 +1562,34 @@ if (ncol(plot_vis) < 2L || !all(is.finite(plot_vis)) || anyDuplicated(rownames(p
   stop("Visualization requires >=2 finite columns and unique observation IDs")
 }
 
+grandqc_artifact_candidate <- rep(FALSE, nrow(plot_vis))
+grandqc_artifact_candidate_fraction <- rep(0, nrow(plot_vis))
+if (!is.null(observations_csv)) {
+  observations <- read.csv(observations_csv, stringsAsFactors = FALSE, colClasses = c(label = "character"))
+  if (!("label" %in% names(observations)) || anyNA(observations$label) || anyDuplicated(observations$label)) {
+    stop("Observation CSV must contain unique nonmissing labels")
+  }
+  observations$label <- as.character(observations$label)
+  if (!setequal(observations$label, rownames(plot_vis))) {
+    stop("Observation CSV and KODAMA representation must contain exactly the same labels")
+  }
+  observations <- observations[match(rownames(plot_vis), observations$label), , drop = FALSE]
+  if ("grandqc_artifact_candidate" %in% names(observations)) {
+    raw_candidate <- tolower(trimws(as.character(observations$grandqc_artifact_candidate)))
+    if (any(!(raw_candidate %in% c("true", "false", "1", "0", "yes", "no")))) {
+      stop("grandqc_artifact_candidate must contain boolean values")
+    }
+    grandqc_artifact_candidate <- raw_candidate %in% c("true", "1", "yes")
+  }
+  if ("grandqc_artifact_candidate_fraction" %in% names(observations)) {
+    grandqc_artifact_candidate_fraction <- as.numeric(observations$grandqc_artifact_candidate_fraction)
+    if (any(!is.finite(grandqc_artifact_candidate_fraction)) || any(grandqc_artifact_candidate_fraction < 0 | grandqc_artifact_candidate_fraction > 1)) {
+      stop("grandqc_artifact_candidate_fraction must contain finite values in [0,1]")
+    }
+  }
+  rm(observations)
+}
+
 input_vis_dims <- ncol(plot_vis)
 plot_vis <- plot_vis[, seq_len(2L), drop = FALSE]
 representation_source <- picked$file
@@ -1605,6 +1726,20 @@ target_result <- if (native_graph_mode) collapse_kodama_graph_to_target(native_g
 )
 final_membership <- renumber_membership(target_result$membership)
 
+grandqc_outlier <- if (isTRUE(grandqc_kodama_outlier_enable)) {
+  detect_grandqc_kodama_outliers(
+    plot_vis, final_membership, grandqc_artifact_candidate,
+    grandqc_kodama_outlier_knn, grandqc_kodama_outlier_quantile,
+    grandqc_kodama_outlier_mad_multiplier, grandqc_kodama_outlier_min_reference
+  )
+} else {
+  list(
+    is_outlier = rep(FALSE, nrow(plot_vis)), mean_knn_distance = rep(NA_real_, nrow(plot_vis)),
+    cluster_threshold = rep(NA_real_, nrow(plot_vis)), score = rep(NA_real_, nrow(plot_vis)),
+    reference_count = rep(0L, nrow(plot_vis))
+  )
+}
+
 raw_cluster_count <- length(unique(raw_membership))
 final_cluster_count <- length(unique(final_membership))
 raw_cluster_sizes <- format_cluster_sizes(raw_membership)
@@ -1678,11 +1813,13 @@ uncertainty_reason <- ifelse(
   )
 )
 if (native_graph_mode) uncertainty_reason[native_graph_evidence$is_isolated] <- "isolated_native_graph_vertex"
+uncertainty_reason[grandqc_outlier$is_outlier] <- "grandqc_artifact_kodama_outlier"
 interpretable_cluster <- as.integer(final_membership)
 if (isTRUE(abstain_uncertain)) {
   interpretable_cluster[uncertainty_reason != "none"] <- NA_integer_
 }
 if (native_graph_mode) interpretable_cluster[native_graph_evidence$is_isolated] <- NA_integer_
+interpretable_cluster[grandqc_outlier$is_outlier] <- NA_integer_
 is_abstained <- is.na(interpretable_cluster)
 interpretation_status <- ifelse(
   uncertainty_reason == "none",
@@ -1707,6 +1844,14 @@ cluster_df <- data.frame(
   assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else "landmark_vote_or_exact_graph_assignment_not_probability",
   graph_degree = if (native_graph_mode) native_graph_evidence$degree else NA_integer_,
   graph_strength = if (native_graph_mode) native_graph_evidence$strength else NA_real_,
+  grandqc_artifact_candidate = grandqc_artifact_candidate,
+  grandqc_artifact_candidate_fraction = grandqc_artifact_candidate_fraction,
+  grandqc_kodama_outlier = grandqc_outlier$is_outlier,
+  grandqc_kodama_mean_knn_distance = grandqc_outlier$mean_knn_distance,
+  grandqc_kodama_cluster_threshold = grandqc_outlier$cluster_threshold,
+  grandqc_kodama_outlier_score = grandqc_outlier$score,
+  grandqc_kodama_reference_count = grandqc_outlier$reference_count,
+  exclude_from_downstream = grandqc_outlier$is_outlier,
   cluster = as.integer(final_membership),
   interpretable_cluster = interpretable_cluster,
   assignment_vote_fraction = assignment_vote_fraction,
@@ -1790,6 +1935,14 @@ summary_df <- data.frame(
   ambiguous_assignment_count = as.integer(sum(assignment_ambiguous)),
   unstable_observation_count = as.integer(sum(stability_status == "abstained_unstable_across_seeds")),
   abstained_observation_count = as.integer(sum(is.na(interpretable_cluster))),
+  grandqc_artifact_candidate_count = as.integer(sum(grandqc_artifact_candidate)),
+  grandqc_kodama_outlier_enabled = isTRUE(grandqc_kodama_outlier_enable),
+  grandqc_kodama_outlier_count = as.integer(sum(grandqc_outlier$is_outlier)),
+  grandqc_kodama_outlier_policy = "candidate_only_cluster_conditioned_knn_distance_in_kodama_plot_fail_open",
+  grandqc_kodama_outlier_knn = as.integer(grandqc_kodama_outlier_knn),
+  grandqc_kodama_outlier_quantile = as.numeric(grandqc_kodama_outlier_quantile),
+  grandqc_kodama_outlier_mad_multiplier = as.numeric(grandqc_kodama_outlier_mad_multiplier),
+  grandqc_kodama_outlier_min_reference = as.integer(grandqc_kodama_outlier_min_reference),
   accepted_observation_fraction = as.numeric(mean(!is.na(interpretable_cluster))),
   cluster_analysis_role = cluster_analysis_role,
   claim_status = if (forced_cluster_count_requested) "sensitivity_only" else "independent_interpretation_required",
@@ -1961,6 +2114,12 @@ cat(sprintf(
   summary_df$ambiguous_assignment_count,
   ifelse(abstain_uncertain, "enabled", "disabled"),
   summary_df$abstained_observation_count
+))
+cat(sprintf(
+  "[INFO] GrandQC candidates=%d KODAMA outliers=%d policy=%s\n",
+  summary_df$grandqc_artifact_candidate_count,
+  summary_df$grandqc_kodama_outlier_count,
+  summary_df$grandqc_kodama_outlier_policy
 ))
 if (target_clusters > 0L) {
   cat("[WARN] Forced cluster count requested: this output is a sensitivity analysis and must not be presented as the graph-derived primary partition.\n")

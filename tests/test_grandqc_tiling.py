@@ -68,6 +68,15 @@ class GrandQCTileSelectionTest(unittest.TestCase):
         expected = np.array([[255, 255, 0, 0], [0, 255, 0, 0]], dtype=np.uint8)
         np.testing.assert_array_equal(observed, expected)
 
+    def test_tissue_only_policy_keeps_artifact_candidates_for_kodama(self):
+        classes = np.array([[1, 2, 6], [7, 3, 1]], dtype=np.uint8)
+        tissue = np.array([[0, 0, 0], [1, 0, 1]], dtype=np.uint8)
+        observed = MODULE.build_clean_tissue_mask(classes, tissue, "tissue_only", np)
+        np.testing.assert_array_equal(
+            observed,
+            np.array([[255, 255, 255], [0, 255, 0]], dtype=np.uint8),
+        )
+
     def test_legacy_clean_tissue_policy_remains_available(self):
         classes = np.array([[1, 7], [2, 1]], dtype=np.uint8)
         tissue = np.zeros_like(classes)

@@ -42,6 +42,8 @@ def test_cluster_process_exposes_stability_and_abstention_contract():
     assert "claim_status = if (forced_cluster_count_requested) \"sensitivity_only\"" in script_text
     assert "estimated_abstained_count" in script_text
     assert "cluster_resolution_candidates.csv" in module_text
+    assert "--observations \"${objects_assigned_csv}\"" in module_text
+    assert "grandqc_artifact_kodama_outlier" in script_text
 
 
 def test_interpretable_cluster_abstentions_map_to_background(tmp_path):

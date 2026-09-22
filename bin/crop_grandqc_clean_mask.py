@@ -150,9 +150,11 @@ def rasterize_crop_roi_centres(roi: dict, shape: tuple[int, int], coordinate_siz
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mask", required=True)
+    parser.add_argument("--artifact-mask", required=True)
     parser.add_argument("--shift", required=True)
     parser.add_argument("--roi", required=True, help="Crop-coordinate ROI GeoJSON")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--artifact-output", required=True)
     parser.add_argument("--summary", required=True)
     args = parser.parse_args()
 
@@ -166,6 +168,16 @@ def main() -> None:
     if mask.ndim != 2:
         raise RuntimeError(f"GrandQC clean-tissue mask must be 2D, got {mask.shape}")
     cropped, geometry = crop_aligned_support(mask, shift)
+    try:
+        artifact_mask = np.asarray(tifffile.memmap(args.artifact_mask))
+    except ValueError:
+        artifact_mask = np.asarray(tifffile.imread(args.artifact_mask))
+    artifact_mask = np.squeeze(artifact_mask)
+    if artifact_mask.ndim != 2:
+        raise RuntimeError(f"GrandQC artifact mask must be 2D, got {artifact_mask.shape}")
+    artifact_cropped, artifact_geometry = crop_aligned_support(artifact_mask, shift)
+    if artifact_cropped.shape != cropped.shape:
+        raise RuntimeError("Cropped GrandQC tissue and artifact masks must be aligned")
     crop_size = shift["crop_size"]
     roi = json.loads(Path(args.roi).read_text())
     roi_mask = rasterize_crop_roi_centres(
@@ -174,9 +186,11 @@ def main() -> None:
         (int(crop_size["width"]), int(crop_size["height"])),
     )
     cropped = np.where(cropped & roi_mask, 255, 0).astype(np.uint8)
+    artifact_cropped = np.where(artifact_cropped & roi_mask, 255, 0).astype(np.uint8)
     if not np.any(cropped):
         raise RuntimeError("Cropped GrandQC clean tissue and ROI do not overlap")
     tifffile.imwrite(args.output, cropped, compression="zlib")
+    tifffile.imwrite(args.artifact_output, artifact_cropped, compression="zlib")
 
     summary = {
         "source_mask": str(Path(args.mask).resolve()),
@@ -186,7 +200,10 @@ def main() -> None:
         "scale_mask_per_crop_x": float(cropped.shape[1] / int(crop_size["width"])),
         "scale_mask_per_crop_y": float(cropped.shape[0] / int(crop_size["height"])),
         "clean_tissue_fraction": float(np.count_nonzero(cropped) / max(1, cropped.size)),
-        "mask_contract": "grandqc_clean_tissue_intersection_roi",
+        "artifact_candidate_fraction": float(np.count_nonzero(artifact_cropped) / max(1, artifact_cropped.size)),
+        "artifact_source_mask_shape_yx": artifact_geometry["source_mask_shape_yx"],
+        "artifact_output": str(Path(args.artifact_output).resolve()),
+        "mask_contract": "grandqc_tissue_support_plus_separate_artifact_candidate_annotation_intersection_roi",
         "roi_sampling": "crop_pixel_centres; polygon_union; exterior_boundary_included; hole_boundary_excluded",
     }
     Path(args.summary).write_text(json.dumps(summary, indent=2))

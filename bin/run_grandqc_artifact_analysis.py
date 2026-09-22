@@ -118,11 +118,12 @@ def parse_args() -> argparse.Namespace:
     )
     ap.add_argument(
         "--clean-tissue-policy",
-        choices=["tissue_minus_artifacts", "artifact_normal_only"],
-        default="tissue_minus_artifacts",
+        choices=["tissue_only", "tissue_minus_artifacts", "artifact_normal_only"],
+        default="tissue_only",
         help=(
-            "How the GrandQC clean-tissue output is constructed. tissue_minus_artifacts "
-            "uses the tissue detector and removes explicit artifact classes 2-6; "
+            "How the GrandQC analysis-support output is constructed. tissue_only "
+            "uses the tissue detector without removing artifact candidates; "
+            "tissue_minus_artifacts removes explicit artifact classes 2-6; "
             "artifact_normal_only preserves the legacy class-1-only behavior."
         ),
     )
@@ -768,7 +769,9 @@ def build_clean_tissue_mask(full_mask, tissue_detector_mask, policy: str, np_mod
     tissue = np_mod.asarray(tissue_detector_mask)
     if classes.shape != tissue.shape:
         raise ValueError("GrandQC artifact and tissue masks must have the same shape")
-    if policy == "tissue_minus_artifacts":
+    if policy == "tissue_only":
+        support = tissue == 0
+    elif policy == "tissue_minus_artifacts":
         support = (tissue == 0) & ~np_mod.isin(classes, [2, 3, 4, 5, 6])
     elif policy == "artifact_normal_only":
         support = classes == 1

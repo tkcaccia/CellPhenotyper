@@ -25,7 +25,7 @@ See `docs/ANALYSIS_ROUTE_GUIDE.md`, `docs/COMPATIBILITY_MATRIX.md` and `docs/HUM
 
 | Component | Configured identity or scope | Pipeline role | Principal limitation | Access/provenance status |
 |---|---|---|---|---|
-| GrandQC | Official tissue model plus 1.0/1.5/2.0-MPP artifact checkpoints | Defines normal-tissue support and artifact exclusions | CellPhenotyper has not completed a multi-cohort expert artifact benchmark; fallback behavior requires review | Checkpoint paths and selected MPP are recorded; upstream license is CC BY-NC-SA 4.0 and restricts commercial use |
+| GrandQC | Official tissue model plus 1.0/1.5/2.0-MPP artifact checkpoints | Defines tissue/background support and annotates artifact candidates; exclusion additionally requires a KODAMA-display outlier | CellPhenotyper has not completed a multi-cohort expert artifact benchmark; candidate and outlier behavior requires review | Checkpoint paths, selected MPP, candidate overlap and post-KODAMA decision are recorded; upstream license is CC BY-NC-SA 4.0 and restricts commercial use |
 | StarDist | `2D_versatile_he` | Broad-scope H&E nuclear candidate detection | Generic pretrained scope is not specimen-specific accuracy | Model name and cache are recorded; release inventory still needs immutable model-file hash coverage |
 | HoVer-Net | Official fast MoNuSAC checkpoint | Scoped typed-nucleus support | MoNuSAC positive classes are not an exhaustive nucleus ontology and must not define total cellularity | Checkpoint SHA-256 and upstream Git revision are recorded per run |
 | CellViT++ | `cellvit==1.0.9`, HIPT model, PanNuke taxonomy | Broad-scope typed nuclear candidate detection | PanNuke classes are not interchangeable with MoNuSAC and are not a reference standard | Runtime is pinned; selected checkpoint readability is checked; complete release license inventory remains required |
@@ -71,7 +71,7 @@ The authoritative description of wrapper modifications is `UPSTREAM_DIFFS.md`. M
 ## Known failure modes
 
 1. Incorrect or conflicting MPP changes physical context for every learned stage.
-2. GrandQC may exclude biologically relevant low-cellularity, necrotic, hemorrhagic, folded or unusual tissue.
+2. GrandQC may flag biologically relevant low-cellularity, necrotic, hemorrhagic, folded or unusual tissue; the default retains it unless it is also a conservative KODAMA-display outlier.
 3. Detector scope and taxonomy differences can create large count and label discrepancies.
 4. Dense overlap can duplicate morphology information and inflate the apparent sample size.
 5. GigaTIME can generate technically smooth but biologically inaccurate virtual-marker fields.

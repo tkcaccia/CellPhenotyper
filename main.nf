@@ -473,13 +473,18 @@ converted_resolution_report_ch = convert_input_ch.map { sample_id, image_file, i
 
 def grandqc_dir_ch = Channel.empty()
 def grandqc_clean_tissue_mask_ch = Channel.empty()
+def gqa_ch = Channel.empty()
 if (run_grandqc) {
 RUN_GRANDQC_ARTIFACT_ANALYSIS(ome_tif_ch, runtime_plan)
 grandqc_dir_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.grandqc_dir
 grandqc_clean_tissue_mask_ch = requireStageOutput('grandqc', RUN_GRANDQC_ARTIFACT_ANALYSIS.out.clean_tissue_mask)
+gqa_ch = RUN_GRANDQC_ARTIFACT_ANALYSIS.out.artifact_mask
 } else if (stage_index[end_point] > stage_index['grandqc']) {
 grandqc_clean_tissue_mask_ch = image_input_ch.map { sample_id, _image_input ->
   tuple(sample_id, file("${params.outdir_base}/02_grandqc/${sample_id}/grandqc_${sample_id}/${sample_id}_grandqc_clean_tissue_mask.tif", checkIfExists: true))
+}
+gqa_ch = image_input_ch.map { sample_id, _image_input ->
+  tuple(sample_id, file("${params.outdir_base}/02_grandqc/${sample_id}/grandqc_${sample_id}/${sample_id}_grandqc_artifact_mask.tif", checkIfExists: true))
 }
 }
 
@@ -511,6 +516,7 @@ def objects_csv_ch = Channel.empty()
 def roi_crop_geojson_ch = Channel.empty()
 def shift_json_ch = Channel.empty()
 def tissue_mask_ch = Channel.empty()
+def art_ch = Channel.empty()
 def pathsegmentor_bundle_ch = Channel.empty()
 
 if (need_stardist_outputs) {
@@ -551,15 +557,20 @@ if (run_stardist) {
 }
 
 if (run_stardist || run_tissue_mask) {
-  def crop_clean_mask_input_ch = grandqc_clean_tissue_mask_ch
+  def cm_ch = grandqc_clean_tissue_mask_ch
+    .join(gqa_ch)
     .join(shift_json_ch)
     .join(roi_crop_geojson_ch)
-    .map { sample_id, clean_tissue_mask, shift_json, roi_crop_geojson -> tuple(sample_id, clean_tissue_mask, shift_json, roi_crop_geojson) }
-  CROP_GRANDQC_CLEAN_MASK(crop_clean_mask_input_ch)
+    .map { sample_id, clean_tissue_mask, artifact_mask, shift_json, roi_crop_geojson -> tuple(sample_id, clean_tissue_mask, artifact_mask, shift_json, roi_crop_geojson) }
+  CROP_GRANDQC_CLEAN_MASK(cm_ch)
   tissue_mask_ch = requireStageOutput('tissue_mask', CROP_GRANDQC_CLEAN_MASK.out.tissue_mask)
+  art_ch = CROP_GRANDQC_CLEAN_MASK.out.artifact_candidates
 } else {
   tissue_mask_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/04_tissue_mask/${sample_id}/${sample_id}_tissue_mask.tif", checkIfExists: true))
+  }
+  art_ch = image_input_ch.map { sample_id, _image_input ->
+    tuple(sample_id, file("${params.outdir_base}/04_tissue_mask/${sample_id}/${sample_id}_grandqc_artifact_candidates.tif", checkIfExists: true))
   }
 }
 
@@ -804,7 +815,7 @@ if (run_marker_quantification && !run_gigatime) {
 def grid_objects_ch = Channel.empty()
 def grid_metadata_ch = Channel.empty()
 def grid_artifacts_needed = uni2_grid_mode && (run_grid_tiles || run_uni2 || run_kodama || run_clustering || run_cluster_mask || params.tissue_hierarchy_enable)
-PREPARE_UNI2_SPATIAL_GRID(image_input_ch, crop_roi_ch, tissue_mask_ch, converted_resolution_report_ch, run_grid_tiles, grid_artifacts_needed)
+PREPARE_UNI2_SPATIAL_GRID(image_input_ch, crop_roi_ch, tissue_mask_ch, art_ch, converted_resolution_report_ch, run_grid_tiles, grid_artifacts_needed)
 grid_objects_ch = PREPARE_UNI2_SPATIAL_GRID.out.grid_objects
 grid_metadata_ch = PREPARE_UNI2_SPATIAL_GRID.out.grid_metadata
 if (run_grid_tiles) {
@@ -864,7 +875,6 @@ if (run_uni2) {
   }
 }
 
-// Retain actual extraction outputs before KODAMA applies its own mode selection.
 def profile_primary_tile_ch = tile_embeddings_ch
 def profile_primary_local_ch = inner_square_embeddings_ch
 if (run_kodama) {

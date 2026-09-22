@@ -81,7 +81,7 @@ def test_all_primary_and_auxiliary_routes_carry_sample_keyed_verified_reports():
     main = (ROOT / "main.nf").read_text()
     profiles = (ROOT / "subworkflows/run_cell_profile_atlas.nf").read_text()
     grid = (ROOT / 'subworkflows/prepare_uni2_spatial_grid.nf').read_text()
-    assert 'PREPARE_UNI2_SPATIAL_GRID(image_input_ch, crop_roi_ch, tissue_mask_ch, converted_resolution_report_ch,' in main
+    assert 'PREPARE_UNI2_SPATIAL_GRID(image_input_ch, crop_roi_ch, tissue_mask_ch, art_ch, converted_resolution_report_ch,' in main
     assert 'resolution_report_ch' in grid and 'shift_json_ch' not in grid
     assert "empty_uni2_resolution" not in primary + auxiliary
     assert primary.count(".join(strictJoin, resolution_ch)") == 6

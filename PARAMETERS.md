@@ -258,7 +258,13 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `grandqc_artifact_mpp_model` | `auto` | Select the official 1.0, 1.5, or 2.0 MPP artifact checkpoint. Auto uses 1.0 below 0.12 um/px, 1.5 below 0.20 um/px, and the validated 2.0 checkpoint otherwise. |
 | `grandqc_tissue_mpp_model` | `10.0` | Physical scale requested by the tissue detector. |
 | `grandqc_tissue_probability_threshold` | `0.5` | Minimum GrandQC tissue probability. Lower values increase tissue sensitivity; validate against true slide background. |
-| `grandqc_clean_tissue_policy` | `tissue_minus_artifacts` | Uses tissue-detector support minus explicit artifact classes 2–6. `artifact_normal_only` restores the legacy strict class-1 mask. |
+| `grandqc_clean_tissue_policy` | `tissue_only` | Retains all GrandQC tissue for UNI-2/KODAMA and carries artifact calls separately. `tissue_minus_artifacts` and `artifact_normal_only` are explicit legacy opt-ins. |
+| `grandqc_artifact_candidate_min_fraction` | `0.5` | Minimum grid-core overlap for annotation as a candidate artifact; this does not remove the tile. |
+| `grandqc_kodama_outlier_enable` | `true` | Excludes only GrandQC candidates that are also cluster-conditioned KODAMA-display outliers. |
+| `grandqc_kodama_outlier_knn` | `15` | K used for within-cluster distance to non-candidate reference observations. |
+| `grandqc_kodama_outlier_quantile` | `0.995` | Conservative upper reference-distance quantile; a candidate must exceed this and the MAD limit. |
+| `grandqc_kodama_outlier_mad_multiplier` | `6.0` | Multiplier for the median-plus-MAD reference-distance limit. |
+| `grandqc_kodama_outlier_min_reference` | `50` | Minimum same-cluster non-candidate observations; smaller reference sets fail open. |
 | `grandqc_patch_size` | `512` | Official tissue-detector patch size. It does not control artifact context tiling. |
 | `grandqc_artifact_tile_size` | `0` | Artifact inference tile size. `0` uses the official 512 x 512 geometry on every device. Explicit experimental values must be at least 256 and divisible by 32. |
 | `grandqc_artifact_overlap_fraction` | `0.5` | Fractional artifact-tile overlap used for probability blending. |

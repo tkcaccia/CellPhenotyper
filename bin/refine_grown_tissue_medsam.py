@@ -41,6 +41,7 @@ from annealed_wand_boundary import annealed_wand_boundary_competition, fit_appea
 
 REFINEMENT_PROVENANCE = {0: "outside_tissue_support", 1: "original_label_unchanged", 2: "modified_original_label", 3: "inferred_from_originally_uncertain", 4: "unresolved_inside_tissue", 5: "inferred_new_label", 6: "removed_original_label", 7: "protected_original_core", 8: "pre_refinement_grown_assignment_unchanged"}
 REFINEMENT_UNCERTAINTY = {250: "label_modified_by_refinement", 251: "new_label_inferred_by_refinement", 252: "original_label_removed", 253: "unresolved_inside_tissue", 254: "pre_refinement_growth_inferred"}
+GRANDQC_KODAMA_OUTLIER_CODE = 5
 
 
 def validate_uncertainty(mask, shape):
@@ -54,7 +55,10 @@ def refinement_constraints(original, tissue, uncertainty, core_radius, boundary_
     """Protect confident interiors; permit uncertain pixels and boundary bands."""
     original = np.asarray(original)
     tissue = np.asarray(tissue, bool)
-    uncertain = validate_uncertainty(uncertainty, original.shape) > 0
+    uncertainty = validate_uncertainty(uncertainty, original.shape)
+    hard_excluded = uncertainty == GRANDQC_KODAMA_OUTLIER_CODE
+    tissue = tissue & ~hard_excluded
+    uncertain = (uncertainty > 0) & ~hard_excluded
     protected = np.zeros_like(original)
     empty = np.zeros(original.shape, bool)
     for label in np.unique(original):
@@ -1067,6 +1071,14 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             y1 = min(h, y0 + block_rows)
             block = ensure_2d(grown_reader.read(y0, y1, 0, w), "grown mask block").astype(label_dtype, copy=False)
             tissue_block = tissue_reader.read(y0, y1, 0, w)
+            if uncertainty_reader is not None:
+                uncertainty_block = validate_uncertainty(
+                    uncertainty_reader.read(y0, y1, 0, w), block.shape
+                )
+                tissue_block = tissue_block & (
+                    uncertainty_block != GRANDQC_KODAMA_OUTLIER_CODE
+                )
+                del uncertainty_block
             input_grown_pixels += int(np.count_nonzero(block))
             grandqc_support_pixels += int(np.count_nonzero(tissue_block))
             excluded_background_pixels += int(np.count_nonzero((block > 0) & ~tissue_block))
@@ -1200,6 +1212,8 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                 tile_editable = tile_protected = None
                 if uncertainty_reader is not None:
                     tile_uncertainty = validate_uncertainty(uncertainty_reader.read(y0, y1, x0, x1), tile_seed.shape)
+                    tile_tissue = tile_tissue & (tile_uncertainty != GRANDQC_KODAMA_OUTLIER_CODE)
+                    tile_seed = np.where(tile_tissue, tile_seed, 0).astype(label_dtype, copy=False)
                     tile_original = ensure_2d(grown_reader.read(y0, y1, x0, x1), "grown constraint tile").astype(label_dtype, copy=False)
                     tile_editable, tile_protected = refinement_constraints(tile_original, tile_tissue, tile_uncertainty, med_cfg.core_erosion_radius, args.internal_boundary_radius)
                     py0, py1, px0, px1 = cy0-y0, cy1-y0, cx0-x0, cx1-x0
@@ -1398,6 +1412,14 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                     continue
                 result_block = appearance_result[y_indices[:, None], x_indices[None, :]]
                 tissue_block = tissue_reader.read(y0, y1, 0, w)
+                if uncertainty_reader is not None:
+                    uncertainty_block = validate_uncertainty(
+                        uncertainty_reader.read(y0, y1, 0, w), tissue_block.shape
+                    )
+                    tissue_block = tissue_block & (
+                        uncertainty_block != GRANDQC_KODAMA_OUTLIER_CODE
+                    )
+                    del uncertainty_block
                 change_block &= tissue_block
                 if editable_out is not None:
                     change_block &= (editable_out[y0:y1] > 0) & (protected_out[y0:y1] == 0)
@@ -1414,7 +1436,17 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             for y0 in range(0, h, block_rows):
                 y1 = min(h, y0 + block_rows)
                 original = ensure_2d(grown_reader.read(y0, y1, 0, w), "constraint original")
-                refined_out[y0:y1] = enforce_refinement_constraints(refined_out[y0:y1], original, tissue_reader.read(y0, y1, 0, w), editable_out[y0:y1], protected_out[y0:y1])
+                tissue_block = tissue_reader.read(y0, y1, 0, w)
+                uncertainty_block = validate_uncertainty(
+                    uncertainty_reader.read(y0, y1, 0, w), tissue_block.shape
+                )
+                tissue_block = tissue_block & (
+                    uncertainty_block != GRANDQC_KODAMA_OUTLIER_CODE
+                )
+                refined_out[y0:y1] = enforce_refinement_constraints(
+                    refined_out[y0:y1], original, tissue_block,
+                    editable_out[y0:y1], protected_out[y0:y1]
+                )
             refined_out.flush()
         provenance_meta = write_refinement_provenance_outputs(args, refined_out, grown_reader, tissue_reader, uncertainty_reader, protected_out, seed_reader)
         print("[INFO] Streaming MedSAM loop complete; counting final refined pixels", flush=True)
@@ -1785,6 +1817,9 @@ def main() -> None:
     medsam_seed = seed_labels
     if args.clustering_uncertainty:
         input_uncertainty = validate_uncertainty(load_tiff_memmap(args.clustering_uncertainty, "clustering uncertainty"), grown_labels.shape)
+        tissue_support = tissue_support & (input_uncertainty != GRANDQC_KODAMA_OUTLIER_CODE)
+        seed_labels = np.where(tissue_support, seed_labels, 0).astype(label_dtype, copy=False)
+        grown_labels = np.where(tissue_support, grown_labels, 0).astype(label_dtype, copy=False)
         editable, protected_labels = refinement_constraints(grown_labels, tissue_support, input_uncertainty, med_cfg.core_erosion_radius, args.internal_boundary_radius)
         medsam_seed = seed_labels.copy()
         medsam_seed[(input_uncertainty > 0) | editable] = 0

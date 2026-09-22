@@ -26,11 +26,11 @@ CellPhenotyper contains several analyses, but they do not answer the same scient
 
 ## What the routes share
 
-All routes begin with immutable input identity, physical-resolution QC, GrandQC, and a shared analysis crop. Without an input GeoJSON, the crop contains GrandQC clean tissue. With an input GeoJSON, it contains the intersection of clean tissue and the validated ROI. The routes then diverge:
+All routes begin with immutable input identity, physical-resolution QC, GrandQC, and a shared analysis crop. Without an input GeoJSON, the crop contains GrandQC tissue support. With an input GeoJSON, it contains the intersection of tissue support and the validated ROI. Artifact candidates are annotations, not pre-UNI-2 exclusions. The routes then diverge:
 
 | Component | Scientific role |
 |---|---|
-| GrandQC | Defines usable image support. Artifact/background exclusion is a gate, not a biological label and not an accuracy estimate. |
+| GrandQC | Defines tissue/background support and artifact candidates. Background is excluded immediately; a candidate artifact is excluded only if also confirmed as a KODAMA-display outlier. Neither decision is a biological label or accuracy estimate. |
 | Multi-detector fusion | Builds canonical nuclear instances from broad-detector agreement while retaining MoNuSAC as scoped evidence. Detector taxonomies stay separate. |
 | Cell-centred UNI-2 | Characterizes detected cells in local morphological context. Whole-tile and central inner-square features come from one calibrated forward pass. |
 | Grid UNI-2 | Samples tissue independently of nucleus centres. Overlapping context tiles have adjacent 90-pixel inner cores. |

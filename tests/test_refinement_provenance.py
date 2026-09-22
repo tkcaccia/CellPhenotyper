@@ -112,6 +112,19 @@ def test_uncertainty_constraints_preserve_confident_cores_and_background():
     assert np.all(final[~tissue] == 0)
 
 
+def test_grandqc_kodama_outlier_code_is_hard_excluded_from_refinement():
+    original = np.ones((40, 40), np.uint16)
+    tissue = np.ones_like(original, bool)
+    uncertainty = np.zeros_like(original, np.uint8)
+    uncertainty[10:20, 10:20] = refine.GRANDQC_KODAMA_OUTLIER_CODE
+    editable, protected = refine.refinement_constraints(original, tissue, uncertainty, 3, 5)
+    assert not editable[15, 15]
+    assert protected[15, 15] == 0
+    effective_tissue = tissue & (uncertainty != refine.GRANDQC_KODAMA_OUTLIER_CODE)
+    final = refine.enforce_refinement_constraints(np.ones_like(original), original, effective_tissue, editable, protected)
+    assert np.all(final[10:20, 10:20] == 0)
+
+
 def test_multiclass_appearance_corrects_only_editable_supported_disagreements():
     image = np.zeros((120, 180, 3), np.uint8)
     colors = [(70, 30, 110), (220, 160, 180), (130, 90, 70)]
@@ -235,6 +248,7 @@ def test_full_and_stream_cli_preserve_unknown_after_refinement_and_fill(tmp_path
     seed[55:65, 15:25] = 0  # already inferred during tissue growth
     incoming = np.zeros(labels.shape, np.uint8)
     incoming[20:30, 15:25] = 3
+    incoming[10:15, 30:35] = refine.GRANDQC_KODAMA_OUTLIER_CODE
     paths = {}
     for name, values in [("image", np.full((80, 80, 3), 100, np.uint8)), ("seed", seed), ("grown", labels), ("tissue", support), ("uncertain", incoming)]:
         paths[name] = tmp_path / (name + ".tif")
@@ -285,11 +299,13 @@ def test_full_and_stream_cli_preserve_unknown_after_refinement_and_fill(tmp_path
     assert len(calls) == 1
     final = tifffile.imread(out)
     assert final[60, 20] == 1 and final[25, 20] == (1 if appearance else 2)
+    assert not final[10:15, 30:35].any()
     assert not final[support == 0].any()
     uncertainty = tifffile.imread(str(out) + ".uncertainty.tif")
     provenance = tifffile.imread(str(out) + ".provenance.tif")
     np.testing.assert_array_equal(uncertainty[incoming > 0], incoming[incoming > 0])
-    assert np.all(provenance[incoming > 0] == 3)
+    assert np.all(provenance[incoming == 3] == 3)
+    assert np.all(provenance[incoming == refine.GRANDQC_KODAMA_OUTLIER_CODE] == 4)
     assert uncertainty[60, 20] == 254 and provenance[60, 20] == 8
     assert uncertainty[60, 60] == 0 and provenance[60, 60] == 7
     metadata = json.loads(Path(str(out) + ".provenance.json").read_text())

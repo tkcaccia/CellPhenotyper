@@ -1,7 +1,7 @@
 process CROP_GRANDQC_CLEAN_MASK {
     cache 'deep'
     ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'crop_grandqc_clean_mask', params) },
-        source_fingerprint: { ProcessCode.directoryFingerprint([clean_tissue_mask, shift_json, roi_crop_geojson]) }
+        source_fingerprint: { ProcessCode.directoryFingerprint([clean_tissue_mask, artifact_mask, shift_json, roi_crop_geojson]) }
     tag "${sample_id}"
     label 'compute_medium'
 
@@ -11,10 +11,11 @@ process CROP_GRANDQC_CLEAN_MASK {
     time { params.grandqc_crop_mask_time as String }
 
     input:
-    tuple val(sample_id), path(clean_tissue_mask), path(shift_json), path(roi_crop_geojson)
+    tuple val(sample_id), path(clean_tissue_mask), path(artifact_mask), path(shift_json), path(roi_crop_geojson)
 
     output:
     tuple val(sample_id), path("${sample_id}_tissue_mask.tif"), emit: tissue_mask
+    tuple val(sample_id), path("${sample_id}_grandqc_artifact_candidates.tif"), emit: artifact_candidates
     tuple val(sample_id), path("${sample_id}_grandqc_crop_mask_summary.json"), emit: summary_json
 
     script:
@@ -27,8 +28,10 @@ process CROP_GRANDQC_CLEAN_MASK {
     echo "[INFO] GrandQC crop-mask code fingerprint: ${codeFingerprint}"
     python "${scriptPath}" \
       --mask "${clean_tissue_mask}" --shift "${shift_json}" \
+      --artifact-mask "${artifact_mask}" \
       --roi "${roi_crop_geojson}" \
       --output "${sample_id}_tissue_mask.tif" \
+      --artifact-output "${sample_id}_grandqc_artifact_candidates.tif" \
       --summary "${sample_id}_grandqc_crop_mask_summary.json"
     """
 
@@ -37,6 +40,7 @@ process CROP_GRANDQC_CLEAN_MASK {
     echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
     echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     touch "${sample_id}_tissue_mask.tif"
+    touch "${sample_id}_grandqc_artifact_candidates.tif"
     printf '{"clean_tissue_fraction":1.0}' > "${sample_id}_grandqc_crop_mask_summary.json"
     """
 }

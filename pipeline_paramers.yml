@@ -195,7 +195,13 @@ grandqc_default_source_mpp: 0.25
 grandqc_artifact_mpp_model: auto
 grandqc_tissue_mpp_model: 10.0
 grandqc_tissue_probability_threshold: 0.5
-grandqc_clean_tissue_policy: tissue_minus_artifacts
+grandqc_clean_tissue_policy: tissue_only
+grandqc_artifact_candidate_min_fraction: 0.5
+grandqc_kodama_outlier_enable: true
+grandqc_kodama_outlier_knn: 15
+grandqc_kodama_outlier_quantile: 0.995
+grandqc_kodama_outlier_mad_multiplier: 6.0
+grandqc_kodama_outlier_min_reference: 50
 grandqc_patch_size: 512
 grandqc_artifact_tile_size: 0
 grandqc_artifact_overlap_fraction: 0.5

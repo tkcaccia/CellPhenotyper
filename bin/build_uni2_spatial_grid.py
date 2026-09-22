@@ -34,6 +34,9 @@ GRID_FIELDS = [
     "tile_y1",
     "tissue_px",
     "tissue_fraction",
+    "grandqc_artifact_candidate_px",
+    "grandqc_artifact_candidate_fraction",
+    "grandqc_artifact_candidate",
     "area_px",
 ]
 
@@ -84,10 +87,12 @@ def read_image_shape(path: Path) -> tuple[int, int]:
 def build_records(
     mask: MaskReader,
     *,
+    artifact_mask: MaskReader | None = None,
     image_shape: tuple[int, int] | None = None,
     context_size: int,
     stride: int,
     min_tissue_fraction: float,
+    artifact_candidate_min_fraction: float = 0.5,
     record_callback=None,
     collect_records: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], np.ndarray, np.ndarray]:
@@ -97,6 +102,10 @@ def build_records(
         raise ValueError("Image dimensions must be positive")
     scale_y = mask_height / height
     scale_x = mask_width / width
+    if artifact_mask is not None and artifact_mask.shape != mask.shape:
+        raise RuntimeError(
+            f"Artifact candidate mask must align with tissue mask: {artifact_mask.shape} vs {mask.shape}"
+        )
     if abs(scale_x - scale_y) / max(scale_x, scale_y) > 0.02:
         raise RuntimeError(
             f"Tissue mask aspect ratio is not aligned with the image: image={(height, width)}, "
@@ -120,6 +129,11 @@ def build_records(
         strip = mask.read_rows(mask_y0, mask_y1) != 0
         column_counts = np.count_nonzero(strip, axis=0).astype(np.int64, copy=False)
         prefix = np.concatenate((np.zeros(1, dtype=np.int64), np.cumsum(column_counts)))
+        artifact_prefix = None
+        if artifact_mask is not None:
+            artifact_strip = artifact_mask.read_rows(mask_y0, mask_y1) != 0
+            artifact_counts = np.count_nonzero(artifact_strip, axis=0).astype(np.int64, copy=False)
+            artifact_prefix = np.concatenate((np.zeros(1, dtype=np.int64), np.cumsum(artifact_counts)))
 
         for col, (center_x, core_x0, core_x1) in enumerate(zip(x_centers, x_starts, x_ends)):
             source_x0 = max(0, int(core_x0))
@@ -132,6 +146,8 @@ def build_records(
             tissue_px = int(prefix[mask_x1] - prefix[mask_x0])
             mask_area = (mask_x1 - mask_x0) * (mask_y1 - mask_y0)
             tissue_fraction = tissue_px / mask_area
+            artifact_px = int(artifact_prefix[mask_x1] - artifact_prefix[mask_x0]) if artifact_prefix is not None else 0
+            artifact_fraction = artifact_px / mask_area
             occupancy[row, col] = tissue_fraction
             if tissue_fraction < min_tissue_fraction:
                 continue
@@ -156,6 +172,9 @@ def build_records(
                 "tile_y1": int(center_y) - half_context + context_size,
                 "tissue_px": tissue_px,
                 "tissue_fraction": tissue_fraction,
+                "grandqc_artifact_candidate_px": artifact_px,
+                "grandqc_artifact_candidate_fraction": artifact_fraction,
+                "grandqc_artifact_candidate": bool(artifact_fraction >= artifact_candidate_min_fraction),
                 "area_px": visible_area,
             }
             if record_callback is not None:
@@ -203,6 +222,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
     parser.add_argument("--tissue-mask", required=True)
+    parser.add_argument("--artifact-mask", required=True)
     parser.add_argument("--resolution-json", required=True)
     parser.add_argument("--objects-out", required=True)
     parser.add_argument("--metadata-out", required=True)
@@ -216,6 +236,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-mpp", type=float, default=0.25)
     parser.add_argument("--default-source-mpp", type=float, default=0.25)
     parser.add_argument("--min-tissue-fraction", type=float, default=0.05)
+    parser.add_argument("--artifact-candidate-min-fraction", type=float, default=0.5)
     parser.add_argument("--preview-max-side", type=int, default=2048)
     return parser.parse_args()
 
@@ -224,9 +245,12 @@ def main() -> None:
     args = parse_args()
     if not 0.0 <= args.min_tissue_fraction <= 1.0:
         raise ValueError("--min-tissue-fraction must be between 0 and 1")
+    if not 0.0 <= args.artifact_candidate_min_fraction <= 1.0:
+        raise ValueError("--artifact-candidate-min-fraction must be between 0 and 1")
 
     image_path = Path(args.image)
     mask_path = Path(args.tissue_mask)
+    artifact_mask_path = Path(args.artifact_mask)
     mpp_x, mpp_y = read_mpp_json(args.resolution_json, fallback=args.default_source_mpp)
     source_mpp = (mpp_x + mpp_y) / 2.0
     if abs(mpp_x - mpp_y) / source_mpp > 0.05:
@@ -241,21 +265,25 @@ def main() -> None:
 
     image_shape = read_image_shape(image_path)
     mask = MaskReader(mask_path)
+    artifact_mask = MaskReader(artifact_mask_path)
     with Path(args.objects_out).open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=GRID_FIELDS)
         writer.writeheader()
         try:
             _, geometry, occupancy, selected = build_records(
                 mask,
+                artifact_mask=artifact_mask,
                 image_shape=image_shape,
                 context_size=context_size,
                 stride=stride,
                 min_tissue_fraction=args.min_tissue_fraction,
+                artifact_candidate_min_fraction=args.artifact_candidate_min_fraction,
                 record_callback=writer.writerow,
                 collect_records=False,
             )
         finally:
             mask.close()
+            artifact_mask.close()
 
     if geometry["retained_units"] == 0:
         raise RuntimeError("No grid units passed the tissue-occupancy threshold")
@@ -271,6 +299,7 @@ def main() -> None:
         "coordinate_space": "crop_roi_level0_pixels",
         "image": str(image_path.resolve()),
         "tissue_mask": str(mask_path.resolve()),
+        "grandqc_artifact_candidate_mask": str(artifact_mask_path.resolve()),
         "image_height_px": image_shape[0],
         "image_width_px": image_shape[1],
         "source_mpp_x": mpp_x,
@@ -287,6 +316,7 @@ def main() -> None:
         "context_overlap_source_px": context_size - stride,
         "context_overlap_fraction": 1.0 - (stride / context_size),
         "min_tissue_fraction": args.min_tissue_fraction,
+        "grandqc_artifact_candidate_min_fraction": args.artifact_candidate_min_fraction,
         **geometry,
     }
     Path(args.metadata_out).write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")

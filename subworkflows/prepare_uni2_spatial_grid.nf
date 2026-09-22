@@ -5,6 +5,7 @@ workflow PREPARE_UNI2_SPATIAL_GRID {
     image_input_ch
     crop_roi_ch
     tissue_mask_ch
+    artifact_candidate_mask_ch
     resolution_report_ch
     run_grid_tiles
     grid_artifacts_needed
@@ -17,9 +18,10 @@ workflow PREPARE_UNI2_SPATIAL_GRID {
         if (run_grid_tiles as boolean) {
             def gridInputCh = crop_roi_ch
                 .join([failOnDuplicate: true, failOnMismatch: true], tissue_mask_ch)
+                .join([failOnDuplicate: true, failOnMismatch: true], artifact_candidate_mask_ch)
                 .join([failOnDuplicate: true, failOnMismatch: true], resolution_report_ch)
-                .map { sample_id, crop_tif, tissue_mask_tif, resolution_json ->
-                    tuple(sample_id, crop_tif, tissue_mask_tif, resolution_json)
+                .map { sample_id, crop_tif, tissue_mask_tif, artifact_mask_tif, resolution_json ->
+                    tuple(sample_id, crop_tif, tissue_mask_tif, artifact_mask_tif, resolution_json)
                 }
             BUILD_UNI2_SPATIAL_GRID(gridInputCh)
             gridObjectsCh = BUILD_UNI2_SPATIAL_GRID.out.grid_objects

@@ -67,6 +67,71 @@ def test_grid_builder_maps_full_resolution_cores_to_downsampled_tissue_mask(tmp_
     assert max(record["x"] for record in records) < 4
 
 
+def test_grid_builder_marks_artifact_candidates_without_filtering_them(tmp_path: Path) -> None:
+    tissue = np.ones((4, 4), dtype=np.uint8)
+    artifact = np.zeros((4, 4), dtype=np.uint8)
+    artifact[:2, :2] = 255
+    tissue_path = tmp_path / "tissue.tif"
+    artifact_path = tmp_path / "artifact.tif"
+    tifffile.imwrite(tissue_path, tissue)
+    tifffile.imwrite(artifact_path, artifact)
+    tissue_reader, artifact_reader = MaskReader(tissue_path), MaskReader(artifact_path)
+    try:
+        records, _, _, _ = build_records(
+            tissue_reader,
+            artifact_mask=artifact_reader,
+            context_size=2,
+            stride=2,
+            min_tissue_fraction=0.5,
+            artifact_candidate_min_fraction=0.5,
+        )
+    finally:
+        tissue_reader.close()
+        artifact_reader.close()
+    assert len(records) == 4
+    assert sum(bool(record["grandqc_artifact_candidate"]) for record in records) == 1
+    assert records[0]["grandqc_artifact_candidate_fraction"] == 1.0
+
+
+def test_grid_cluster_rasterizer_excludes_only_confirmed_grandqc_kodama_outlier(tmp_path: Path) -> None:
+    background = np.full((2, 4, 3), 180, dtype=np.uint8)
+    background_path = tmp_path / "background.tif"
+    tifffile.imwrite(background_path, background, photometric="rgb")
+    objects = pd.DataFrame([
+        {"label": 1, "grid_row": 0, "core_x0": 0, "core_y0": 0, "core_x1": 2, "core_y1": 2},
+        {"label": 2, "grid_row": 0, "core_x0": 2, "core_y0": 0, "core_x1": 4, "core_y1": 2},
+    ])
+    objects_path = tmp_path / "grid.csv"
+    objects.to_csv(objects_path, index=False)
+    metadata_path = tmp_path / "metadata.json"
+    metadata_path.write_text(json.dumps({"image_height_px": 2, "image_width_px": 4, "source_mpp_x": 0.25, "source_mpp_y": 0.25}))
+    clusters_path = tmp_path / "clusters.csv"
+    pd.DataFrame({
+        "label": [1, 2], "cluster": [3, 3], "interpretable_cluster": [3, None],
+        "grandqc_artifact_candidate": [True, True],
+        "grandqc_kodama_outlier": [False, True],
+        "exclude_from_downstream": [False, True],
+        "is_abstained": [False, True],
+        "uncertainty_reason": ["none", "grandqc_artifact_kodama_outlier"],
+        "interpretation_status": ["accepted", "abstained_grandqc_artifact_kodama_outlier"],
+    }).to_csv(clusters_path, index=False)
+    output_path, uncertainty_path = tmp_path / "mask.tif", tmp_path / "uncertainty.tif"
+    summary_path = tmp_path / "summary.json"
+    subprocess.run([
+        sys.executable, str(ROOT / "bin" / "grid_clusters_to_mask.py"),
+        "--grid-objects", str(objects_path), "--grid-metadata", str(metadata_path),
+        "--map", str(clusters_path), "--out", str(output_path),
+        "--uncertainty-out", str(uncertainty_path), "--summary", str(summary_path),
+        "--preview", str(tmp_path / "preview.png"),
+        "--uncertainty-preview", str(tmp_path / "uncertainty_preview.png"),
+        "--preview-background", str(background_path),
+    ], check=True)
+    np.testing.assert_array_equal(tifffile.imread(output_path), np.array([[3, 3, 0, 0], [3, 3, 0, 0]], dtype=np.uint16))
+    np.testing.assert_array_equal(tifffile.imread(uncertainty_path), np.array([[0, 0, 5, 5], [0, 0, 5, 5]], dtype=np.uint8))
+    summary = json.loads(summary_path.read_text())
+    assert summary["excluded_grandqc_candidate_kodama_outlier_observations"] == 1
+
+
 def test_grid_cluster_rasterizer_reconstructs_core_labels(tmp_path: Path) -> None:
     background = np.full((4, 4, 3), 180, dtype=np.uint8)
     background_path = tmp_path / "background.tif"

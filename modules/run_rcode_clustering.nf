@@ -92,6 +92,12 @@ process RUN_RCODE_CLUSTERING {
       --assignment-min-vote-margin ${params.cluster_assignment_min_vote_margin} \
       --stability-min-fraction ${params.cluster_stability_min_fraction} \
       --abstain-uncertain ${params.cluster_abstain_uncertain} \
+      --observations "${objects_assigned_csv}" \
+      --grandqc-kodama-outlier-enable ${params.grandqc_kodama_outlier_enable} \
+      --grandqc-kodama-outlier-knn ${params.grandqc_kodama_outlier_knn} \
+      --grandqc-kodama-outlier-quantile ${params.grandqc_kodama_outlier_quantile} \
+      --grandqc-kodama-outlier-mad-multiplier ${params.grandqc_kodama_outlier_mad_multiplier} \
+      --grandqc-kodama-outlier-min-reference ${params.grandqc_kodama_outlier_min_reference} \
       > "Rcode_Clustering_${sample_id}_${cluster_variant}.Rout" 2>&1
     """
 

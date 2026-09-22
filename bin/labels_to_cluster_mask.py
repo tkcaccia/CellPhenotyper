@@ -38,6 +38,8 @@ UNCERTAINTY_STATUS_CODES = {
     "abstained_ambiguous_assignment": 1,
     "abstained_seed_instability": 2,
     "abstained_ambiguous_assignment_and_seed_instability": 3,
+    "grandqc_artifact_kodama_outlier": 5,
+    "abstained_grandqc_artifact_kodama_outlier": 5,
 }
 UNCERTAINTY_STATUS_NAMES = {
     0: "accepted_or_background",
@@ -45,12 +47,14 @@ UNCERTAINTY_STATUS_NAMES = {
     2: "abstained_seed_instability",
     3: "abstained_ambiguous_assignment_and_seed_instability",
     4: "abstained_other",
+    5: "excluded_grandqc_candidate_kodama_outlier",
 }
 UNCERTAINTY_PALETTE = {
     1: np.array([230, 159, 0], dtype=np.uint8),
     2: np.array([86, 180, 233], dtype=np.uint8),
     3: np.array([204, 121, 167], dtype=np.uint8),
     4: np.array([51, 51, 51], dtype=np.uint8),
+    5: np.array([215, 48, 39], dtype=np.uint8),
 }
 
 

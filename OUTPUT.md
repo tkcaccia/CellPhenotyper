@@ -5,17 +5,17 @@ With `--outdir_base results_full`, CellPhenotyper writes the following stage dir
 - `00_execution/`: scientific analysis contract, validation-readiness/claim ceiling, stage-complete uncertainty register, learned-model inventory/release gate, Nextflow trace, timeline, DAG, report, runtime summaries, and the project output manifest with a stable `output_id` for every published file.
 - `01_input/`: normalized pyramidal OME-TIFF input plus source/converted image QC reports containing SHA-256, dimensions, axes, dtype, bit depth, channel/color interpretation, compression, tiling, pyramid levels and MPP-source consistency.
 - `02_grandqc/`: mandatory full-image GrandQC tissue/artifact masks, GeoJSON, summaries, and previews.
-- `03_stardist/`: the shared `GrandQC clean tissue intersection ROI` crop, StarDist labels, object table, crop GeoJSON, and coordinate shift.
+- `03_stardist/`: the shared `GrandQC tissue support intersection ROI` crop, StarDist labels, object table, crop GeoJSON, and coordinate shift. `prepared_crop/crop_roi.tif` is a validated tiled pyramidal RGB OME-TIFF.
 - `03b_hovernet_monusac/`: official HoVer-Net fast MoNuSAC inference normalized to the StarDist crop frame.
 - `03c_cellvitpp/`: official CellViT++ PanNuke inference normalized to the StarDist crop frame.
 - `03d_cell_consensus/`: role-aware multi-detector instance fusion. Canonical instances require broad-scope StarDist/CellViT++ agreement by default; HoVer-Net MoNuSAC remains scoped supporting evidence.
 - `04_TMA/`: TMA decision, core polygons, and cells assigned to cores when applicable.
-- `04_tissue_mask/`: crop-aligned GrandQC clean-tissue mask used for detector filtering, grid selection, and cluster growth.
+- `04_tissue_mask/`: crop-aligned GrandQC tissue-support mask plus a separate `*_grandqc_artifact_candidates.tif` annotation mask.
 - `05_gigatime/`: GigaTIME virtual-marker image plus nucleus/whole-cell/perinuclear-ring quantification, versioned marker schema and restart provenance.
 - `06_roi/`: immutable ROI GeoJSON, ROI SHA-256/geometry/image-association QC, crop-aligned labeled mask, class map, and preview.
 - `07_cell_assignments/`: cells assigned to ROI polygons.
 - `08_cytoplasm/`: physical tissue-constrained nucleus/ring/whole-cell approximation masks and per-cell compartment QC; `cyto` is a legacy whole-cell filename.
-- `09_grid_tiles/`: grid observation coordinates, calibrated tile geometry, GrandQC tissue occupancy, and a grid QC preview when `uni2_sampling_mode=grid` or `both`.
+- `09_grid_tiles/`: grid observation coordinates, calibrated tile geometry, GrandQC tissue occupancy, artifact-candidate fraction/flag, and a grid QC preview when `uni2_sampling_mode=grid` or `both`.
 - `09_embeddings/`: cell-centred or spatial-grid UNI2-h tile and inner-square embeddings; `both` writes the cell route under `<sample>__cells` and leaves the primary grid route unsuffixed.
 - `10_kodama/`: UNI-2 KODAMA coordinates, plots, and logs, plus optional GigaTIME-marker KODAMA output.
 - `11_clustering/`: assignments, plots, logs, per-observation vote/stability status, and per-seed adjusted Rand index tables for the standard and any configured secondary clustering variant. `cluster` preserves the raw algorithmic result; `interpretable_cluster` may abstain. The standard KODAMA membership figure renders abstentions in neutral gray, and `_cluster_kodama_uncertainty.{png,pdf}` separates ambiguous landmark assignment from seed instability. Each variant also has a `_cluster_interpretation/` directory containing descriptive spatial coherence, GigaTIME marker enrichment when available, `cluster_spatial_uncertainty.png`, observation-level `cluster_abstentions.geojson`, a blinded region-review form and GeoJSON, a separate answer key, and `cluster_interpretation_summary.json`. These outputs support review but do not assign biological identities automatically.
@@ -76,7 +76,7 @@ for validation, migration and interpretation limits.
 
 HoVer-Net MoNuSAC is deliberately reported as a non-exhaustive detector because the upstream training labels omit classes such as fibroblasts. Its raw count should not be interpreted as total cellularity or expected to match StarDist and CellViT++. `hovernet_metadata.json` records this scope, the exact checkpoint SHA-256, the upstream revision, and whether the shared GrandQC inference mask was used.
 
-GrandQC background and artifact pixels are hard negative support during MedSAM: seeds, baseline labels, dilation envelopes, editable bands, model candidates, hole filling, resumed checkpoints and final labels cannot cross into them. Stage 14 publishes `<sample>_<variant>_medsam_tissue_support.png` plus `<sample>_<variant>_medsam_grandqc_empty_exclusion.png`; the latter shows GrandQC empty areas in blue, removed input labels in red and any invalid final leakage in magenta. The summary records support, exclusion and zero-leakage metrics.
+GrandQC background is hard negative support during MedSAM. Artifact candidates remain included through UNI-2 and KODAMA; only candidates confirmed as cluster-conditioned KODAMA-display outliers are excluded, recorded in the clustering CSV, rasterized with uncertainty code 5, and kept outside the final refinement support. Stage 14 publishes the tissue-support and exclusion QC maps plus support, exclusion and zero-leakage metrics.
 
 `<sample>_<variant>_medsam_precompetition_labels.png` shows the label state supplied to MedSAM after bounded annealed competition. On streaming WSI runs this is explicitly a diagnostic-scale reconstruction; exact non-overlapping tile-commit change counts and the temperature/energy settings are recorded in `<sample>_<variant>_medsam_summary.json`.
 
