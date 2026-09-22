@@ -89,7 +89,7 @@ def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
     assert "cluster_landmark_assign_k: 50" in PARAMETERS
     assert "cluster_landmark_sample_strategy: knn_inverse_distance" in PARAMETERS
     assert "cluster_landmark_density_power: 2.0" in PARAMETERS
-    assert "cluster_resolution: 0.3" in PARAMETERS
+    assert "cluster_resolution: auto" in PARAMETERS
 
 
 def test_target_cluster_count_is_wired_to_clustering() -> None:

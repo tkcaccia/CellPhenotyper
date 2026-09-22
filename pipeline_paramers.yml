@@ -373,7 +373,9 @@ cluster_landmark_assign_k: 50
 cluster_landmark_sample_strategy: knn_inverse_distance
 cluster_landmark_density_knn_k: 50
 cluster_landmark_density_power: 2.0
-cluster_resolution: 0.3
+# Default: data-adaptive low-resolution Leiden selection. Set a positive
+# number only for an explicitly fixed-resolution sensitivity analysis.
+cluster_resolution: auto
 cluster_seed: 1
 # Total runs including the primary result. Repeated seeds quantify cluster stability.
 cluster_stability_runs: 3
