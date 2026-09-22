@@ -66,7 +66,17 @@ def main() -> None:
     if grid.empty or grid["label"].duplicated().any() or (grid["label"] <= 0).any():
         raise ValueError("Grid labels must be non-empty, unique positive integers")
 
-    mapping = load_map(args.map, default_value=args.default)
+    # Grid observations remain spatially valid even when the stability policy
+    # abstains from interpreting their cluster.  Keep KODAMA's raw assignment
+    # in the categorical baseline and carry abstention separately in the
+    # uncertainty raster.  Turning an abstention into label 0 leaves large
+    # seedless windows that a tiled refiner can only fill locally, producing
+    # processing-grid mosaics.
+    mapping = load_map(
+        args.map,
+        default_value=args.default,
+        prefer_interpretable=False,
+    )
     uncertainty_mapping = load_uncertainty_map(args.map)
     cluster_by_label = mapping.set_index("label")["cluster"]
     uncertainty_by_label = uncertainty_mapping.set_index("label")["uncertainty_code"]
@@ -179,6 +189,7 @@ def main() -> None:
         "uncertainty_mask_codes": {
             str(code): name for code, name in UNCERTAINTY_STATUS_NAMES.items()
         },
+        "abstained_assignment_policy": "retain_raw_kodama_cluster_with_uncertainty",
         "clusters": observed_clusters,
         "written_core_pixels": int(written_pixels),
         "abstained_core_pixels": int(abstained_pixels),

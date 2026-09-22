@@ -19,6 +19,20 @@ SPEC.loader.exec_module(refine)
 import medsam_border_refine as medsam_core
 
 
+def test_medsam_rgb_normalization_is_independent_of_window_maximum() -> None:
+    lower_range = np.full((1024, 1024, 3), 64, dtype=np.uint8)
+    lower_range[0, 0] = 128
+    full_range = lower_range.copy()
+    full_range[0, 0] = 255
+
+    normalized_lower = medsam_core._normalize_crop(lower_range)
+    normalized_full = medsam_core._normalize_crop(full_range)
+
+    expected = np.float32(64.0 / 255.0)
+    assert normalized_lower[512, 512, 0] == pytest.approx(expected)
+    assert normalized_full[512, 512, 0] == pytest.approx(expected)
+
+
 def test_internal_boundary_snaps_to_native_image_edge() -> None:
     image = np.zeros((80, 80, 3), dtype=np.uint8)
     image[:, 36:, :] = 255

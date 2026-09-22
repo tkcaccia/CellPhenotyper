@@ -411,6 +411,9 @@ medsam_cluster_tile_overlap: 512
 medsam_pre_boundary_competition: true
 medsam_pre_boundary_radius: 64
 medsam_pre_boundary_downsample: 4
+medsam_pre_boundary_calibration_downsample: 16
+medsam_pre_boundary_calibration_pixels: 250000
+medsam_pre_boundary_calibration_seed: 1729
 medsam_pre_boundary_iterations: 16
 medsam_pre_boundary_initial_temperature: 2.0
 medsam_pre_boundary_final_temperature: 0.05

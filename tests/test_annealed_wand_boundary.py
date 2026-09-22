@@ -102,3 +102,24 @@ def test_grandqc_support_normalizes_diagnostic_sampling_edge() -> None:
     assert not np.any(result[~tissue])
     np.testing.assert_array_equal(result[tissue] > 0, labels[tissue] > 0)
     assert metadata["accepted_nonincreasing_energy"] is True
+
+
+def test_slide_calibration_makes_tile_features_context_invariant() -> None:
+    slide = np.full((40, 80, 3), (170, 90, 120), dtype=np.uint8)
+    slide[:, 40:] = (225, 185, 195)
+    labels = np.ones((40, 80), dtype=np.uint16)
+    labels[:, 40:] = 2
+    tissue = np.ones(labels.shape, dtype=bool)
+    calibration = module.fit_appearance_calibration(
+        slide, labels, tissue, max_pixels=2_000, random_seed=7
+    )
+
+    first = np.full((24, 24, 3), (170, 90, 120), dtype=np.uint8)
+    second = first.copy()
+    second[0, 0] = 255
+    support = np.ones((24, 24), dtype=bool)
+    first_features = module._features(first, support, calibration)
+    second_features = module._features(second, support, calibration)
+
+    np.testing.assert_allclose(first_features[12, 12], second_features[12, 12])
+    assert calibration["metadata"]["scope"] == "single_slide_global_sample"

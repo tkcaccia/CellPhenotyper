@@ -141,7 +141,7 @@ def test_grid_cluster_rasterizer_reconstructs_core_labels(tmp_path: Path) -> Non
 
     observed = tifffile.imread(output_path)
     expected = np.array(
-        [[1, 1, 2, 2], [1, 1, 2, 2], [0, 0, 4, 4], [0, 0, 4, 4]], dtype=np.uint16
+        [[1, 1, 2, 2], [1, 1, 2, 2], [3, 3, 4, 4], [3, 3, 4, 4]], dtype=np.uint16
     )
     np.testing.assert_array_equal(observed, expected)
     np.testing.assert_array_equal(
@@ -154,6 +154,7 @@ def test_grid_cluster_rasterizer_reconstructs_core_labels(tmp_path: Path) -> Non
     assert summary["grid_observations"] == 4
     assert summary["abstained_observations"] == 1
     assert summary["uncertainty_status_counts"]["abstained_seed_instability"] == 1
+    assert summary["abstained_assignment_policy"] == "retain_raw_kodama_cluster_with_uncertainty"
 
 
 def test_pipeline_routes_grid_observations_through_uni2_and_kodama() -> None:

@@ -36,7 +36,7 @@ from grow_to_tissue_core import compute_boundary, to_float_rgb
 from medsam_border_refine import DEFAULT_MEDSAM_CHECKPOINT, MedSAMConfig, MedSAMUnavailableError, run_medsam_border_refine, _binary_dilate, _build_protected_core
 from model_provenance import checkpoint_record, git_revision, sha256_file
 from tissue_appearance_refine import refine_tissue_domains_by_appearance
-from annealed_wand_boundary import annealed_wand_boundary_competition
+from annealed_wand_boundary import annealed_wand_boundary_competition, fit_appearance_calibration
 
 
 REFINEMENT_PROVENANCE = {0: "outside_tissue_support", 1: "original_label_unchanged", 2: "modified_original_label", 3: "inferred_from_originally_uncertain", 4: "unresolved_inside_tissue", 5: "inferred_new_label", 6: "removed_original_label", 7: "protected_original_core", 8: "pre_refinement_grown_assignment_unchanged"}
@@ -378,6 +378,7 @@ def pre_medsam_boundary_competition(
     *,
     editable=None,
     protected_labels=None,
+    appearance_calibration=None,
 ) -> Tuple[np.ndarray, Dict[str, object]]:
     """Run bounded annealed label competition before MedSAM inference."""
     source = np.asarray(labels)
@@ -408,6 +409,7 @@ def pre_medsam_boundary_competition(
         smoothness_weight=float(args.pre_boundary_smoothness_weight),
         edge_beta=float(args.pre_boundary_edge_beta),
         connectivity=int(getattr(args, "pre_boundary_connectivity", 8)),
+        appearance_calibration=appearance_calibration,
     )
     y_index = np.minimum(np.arange(source.shape[0]) // step, work_result.shape[0] - 1)
     x_index = np.minimum(np.arange(source.shape[1]) // step, work_result.shape[1] - 1)
@@ -1081,6 +1083,57 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         ys = tile_starts(h, tile_size, overlap)
         xs = tile_starts(w, tile_size, overlap)
         total_tiles = len(ys) * len(xs)
+        precompetition_calibration = None
+        precompetition_calibration_meta: Dict[str, object] = {"enabled": False}
+        if args.pre_boundary_competition:
+            calibration_step = max(
+                int(args.pre_boundary_downsample),
+                int(args.pre_boundary_calibration_downsample),
+            )
+            print(
+                "[INFO] Fitting one slide-level Wald Lab/OD calibration "
+                f"at step={calibration_step}",
+                flush=True,
+            )
+            calibration_image = read_stride_tiled(
+                image_reader, calibration_step, tile_size=tile_size
+            )
+            calibration_labels = ensure_2d(
+                read_stride_tiled(grown_reader, calibration_step, tile_size=tile_size),
+                "Wald calibration labels",
+            )
+            calibration_tissue = tissue_reader.read_stride(calibration_step)
+            calibration_trusted = (calibration_labels > 0) & calibration_tissue
+            if uncertainty_reader is not None:
+                calibration_trusted &= ensure_2d(
+                    read_stride_tiled(
+                        uncertainty_reader, calibration_step, tile_size=tile_size
+                    ),
+                    "Wald calibration uncertainty",
+                ) == 0
+            precompetition_calibration = fit_appearance_calibration(
+                calibration_image,
+                calibration_labels,
+                calibration_tissue,
+                trusted_mask=calibration_trusted,
+                max_pixels=int(args.pre_boundary_calibration_pixels),
+                random_seed=int(args.pre_boundary_calibration_seed),
+            )
+            precompetition_calibration_meta = dict(
+                precompetition_calibration.get("metadata", {})
+            )
+            precompetition_calibration_meta.update(
+                enabled=True,
+                downsample=int(calibration_step),
+                working_shape_yx=list(map(int, calibration_labels.shape)),
+            )
+            del (
+                calibration_image,
+                calibration_labels,
+                calibration_tissue,
+                calibration_trusted,
+            )
+            gc.collect()
         processed_tiles = resume_tiles if resume_by_grid else 0
         resumed_tiles_skipped = resume_tiles if resume_by_grid else 0
         skipped_no_seed = 0
@@ -1201,6 +1254,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                     args,
                     editable=tile_editable,
                     protected_labels=tile_protected,
+                    appearance_calibration=precompetition_calibration,
                 )
                 precompetition_tiles += 1
                 precompetition_editable_pixels += int(tile_precompetition_meta.get("editable_pixels", 0))
@@ -1500,6 +1554,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                 "initial_energy_summed_over_tiles": float(precompetition_initial_energy),
                 "final_energy_summed_over_tiles": float(precompetition_final_energy),
                 "energy_scope": "sum_over_overlapping_processing_tiles_not_a_global_energy",
+                "appearance_calibration": precompetition_calibration_meta,
                 "boundary_radius_px": int(args.pre_boundary_radius),
                 "working_downsample": int(args.pre_boundary_downsample),
                 "iterations": int(args.pre_boundary_iterations),
@@ -1628,6 +1683,11 @@ def main() -> None:
     ap.add_argument("--pre-boundary-radius", type=int, default=64,
                     help="Maximum native-pixel boundary error band used by pre-MedSAM competition.")
     ap.add_argument("--pre-boundary-downsample", type=int, default=4)
+    ap.add_argument("--pre-boundary-calibration-downsample", type=int, default=16,
+                    help="Bounded slide-level sampling scale used once for Wald Lab/OD calibration.")
+    ap.add_argument("--pre-boundary-calibration-pixels", type=int, default=250000,
+                    help="Maximum trusted slide-level pixels used to fit Wald appearance calibration.")
+    ap.add_argument("--pre-boundary-calibration-seed", type=int, default=1729)
     ap.add_argument("--pre-boundary-iterations", type=int, default=16)
     ap.add_argument("--pre-boundary-initial-temperature", type=float, default=2.0)
     ap.add_argument("--pre-boundary-final-temperature", type=float, default=0.05)

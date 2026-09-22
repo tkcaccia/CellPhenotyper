@@ -461,6 +461,28 @@ tissue. A bounded local runtime/cache inspection found no usable UNI2/CellViT
 checkpoint, so no new learned-feature inference occurred. No remote transfer,
 deployment, old-result deletion or UI-panel opening occurred.
 
+### Slide-consistent streamed MedSAM correction
+
+Large-slide inspection identified processing-window-shaped tissue assignments in
+the post-KODAMA refinement output. The input H&E and the pre-MedSAM grid mask did
+not contain those rectangles. The cause was downstream: MedSAM normalized each
+4096-pixel window by its own intensity maximum, while the pre-MedSAM Wald
+competition fitted Lab/optical-density scaling and label prototypes separately
+inside every overlapping window. Both choices made an identical pixel depend on
+the surrounding processing window.
+
+Streamed refinement now uses the fixed RGB uint8/255 MedSAM input contract and
+fits one deterministic, bounded slide-level Lab/optical-density calibration and
+set of trusted-label prototypes, which are reused for every window. The default
+grid route still bypasses tissue growth. Grid observations that abstain under the
+stability policy retain their raw KODAMA class in the categorical baseline while
+their abstention remains explicit in the uncertainty raster. This prevents large
+seedless blocks without representing an uncertain assignment as confident.
+Model-free regression tests verify window-independent RGB and Wald features and
+the separate categorical/uncertainty contracts. These checks establish the
+engineering correction; biological boundary accuracy still requires held-out
+expert evaluation.
+
 ### CellViT source binding and full-module cache continuation
 
 Source-bound CellViT bundles now verify exact pixels/calibration, raw/retained

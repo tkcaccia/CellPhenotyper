@@ -213,6 +213,13 @@ def _iter_mask_tiles(mask: np.ndarray, tile_size: int, overlap: int) -> List[Tup
 def _normalize_crop(crop: np.ndarray) -> np.ndarray:
     # Resize before converting to float32. On WSI crops, converting the full
     # crop to float first can allocate multiple GB and stall before CUDA is used.
+    #
+    # Do not normalize by the maximum of each processing window.  Adjacent WSI
+    # windows can contain different amounts of white background or stain and a
+    # window-local maximum therefore changes the value of the same RGB sample.
+    # With hard central commits that becomes a visible 4096-pixel mosaic.  The
+    # canonical crop is already converted to RGB uint8, so the stable MedSAM
+    # input contract is the fixed uint8 range for every window.
     from PIL import Image
 
     rgb_u8 = _to_uint8_rgb_for_resize(crop)
@@ -220,10 +227,6 @@ def _normalize_crop(crop: np.ndarray) -> np.ndarray:
     if pil.size != (1024, 1024):
         pil = pil.resize((1024, 1024), Image.Resampling.BILINEAR)
     img_1024 = np.asarray(pil, dtype=np.float32) / 255.0
-    img_1024 -= float(img_1024.min(initial=0.0))
-    denom = float(img_1024.max(initial=0.0))
-    if denom > 0:
-        img_1024 /= denom
     return np.clip(img_1024, 0.0, 1.0)
 
 
@@ -872,6 +875,7 @@ def _run_medsam_border_refine(image, seed_labels, baseline_tissue_mask, config,
         "image_encoder_calls": encoder_cache.encoder_calls,
         "image_embedding_cache_hits": encoder_cache.hits,
         "image_embedding_cache": "per-image-call disk-backed exact embeddings on shared tile lattice",
+        "image_normalization": "fixed_rgb_uint8_divide_255_slide_consistent",
     }
     artifacts = {
         "protected_core": protected_core.astype(np.uint8),

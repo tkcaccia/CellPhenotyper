@@ -89,13 +89,22 @@ def smallest_mask_dtype(max_value: int) -> np.dtype:
     return np.dtype(np.uint64)
 
 
-def load_map(csv_path: str, default_value: int | None = None) -> pd.DataFrame:
+def load_map(
+    csv_path: str,
+    default_value: int | None = None,
+    *,
+    prefer_interpretable: bool = True,
+) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df.columns = [c.strip().strip('"').strip("'") for c in df.columns]
     if "label" not in df.columns or "cluster" not in df.columns:
         raise ValueError('CSV must contain columns: "label","cluster"')
 
-    cluster_column = "interpretable_cluster" if "interpretable_cluster" in df.columns else "cluster"
+    cluster_column = (
+        "interpretable_cluster"
+        if prefer_interpretable and "interpretable_cluster" in df.columns
+        else "cluster"
+    )
     df = df[["label", cluster_column]].copy().rename(columns={cluster_column: "cluster"})
     raw_label = df["label"].astype(str).str.strip().str.strip('"').str.strip("'")
     label_num = pd.to_numeric(raw_label, errors="coerce")

@@ -32,19 +32,98 @@ def _internal_boundary(labels: np.ndarray) -> np.ndarray:
     return boundary
 
 
-def _features(image: np.ndarray, support: np.ndarray) -> np.ndarray:
+def _raw_features(image: np.ndarray) -> np.ndarray:
     rgb = np.asarray(image, dtype=np.uint8)
     lab = rgb_to_lab(rgb)
     od = -np.log((rgb.astype(np.float32) + 1.0) / 256.0)
-    values = np.concatenate([lab, od], axis=-1).astype(np.float32)
+    return np.concatenate([lab, od], axis=-1).astype(np.float32)
+
+
+def _features(
+    image: np.ndarray,
+    support: np.ndarray,
+    calibration: dict[str, Any] | None = None,
+) -> np.ndarray:
+    values = _raw_features(image)
     selected = values[np.asarray(support, dtype=bool)]
     if selected.size == 0:
         raise ValueError("Annealed boundary competition requires foreground image pixels")
-    center = np.median(selected, axis=0)
-    q25, q75 = np.percentile(selected, [25, 75], axis=0)
-    scale = np.maximum(q75 - q25, 0.1 * np.std(selected, axis=0))
+    if calibration is None:
+        center = np.median(selected, axis=0)
+        q25, q75 = np.percentile(selected, [25, 75], axis=0)
+        scale = np.maximum(q75 - q25, 0.1 * np.std(selected, axis=0))
+    else:
+        center = np.asarray(calibration["feature_center"], dtype=np.float32)
+        scale = np.asarray(calibration["feature_scale"], dtype=np.float32)
+        if center.shape != (values.shape[-1],) or scale.shape != center.shape:
+            raise ValueError("Boundary calibration has incompatible feature dimensions")
     scale = np.where(scale > 1e-6, scale, 1.0)
     return np.clip((values - center) / scale, -10.0, 10.0).astype(np.float32)
+
+
+def fit_appearance_calibration(
+    image: np.ndarray,
+    labels: np.ndarray,
+    tissue: np.ndarray,
+    *,
+    trusted_mask: np.ndarray | None = None,
+    max_pixels: int = 250_000,
+    random_seed: int = 1729,
+) -> dict[str, Any]:
+    """Fit one deterministic Lab/OD calibration for all streamed WSI tiles."""
+    rgb = np.asarray(image, dtype=np.uint8)
+    source = np.asarray(labels)
+    support = np.asarray(tissue, dtype=bool) & (source > 0)
+    if rgb.shape[:2] != source.shape or support.shape != source.shape:
+        raise ValueError("Calibration image, labels and tissue must share one frame")
+    trusted = support if trusted_mask is None else support & np.asarray(trusted_mask, dtype=bool)
+    if not np.any(trusted):
+        trusted = support
+    if not np.any(trusted):
+        raise ValueError("Boundary calibration requires labelled tissue pixels")
+    max_pixels = max(1, int(max_pixels))
+    rng = np.random.default_rng(int(random_seed))
+
+    def sampled_indices(mask: np.ndarray, cap: int) -> np.ndarray:
+        indices = np.flatnonzero(mask)
+        if indices.size > cap:
+            indices = np.sort(rng.choice(indices, size=cap, replace=False))
+        return indices
+
+    flat_rgb = rgb[..., :3].reshape(-1, 3)
+    fit_indices = sampled_indices(trusted, max_pixels)
+    fit_values = _raw_features(flat_rgb[fit_indices].reshape(-1, 1, 3)).reshape(-1, 6)
+    center = np.median(fit_values, axis=0)
+    q25, q75 = np.percentile(fit_values, [25, 75], axis=0)
+    scale = np.maximum(q75 - q25, 0.1 * np.std(fit_values, axis=0))
+    scale = np.where(scale > 1e-6, scale, 1.0).astype(np.float32)
+
+    prototypes: dict[int, np.ndarray] = {}
+    prototype_counts: dict[int, int] = {}
+    labels_flat = source.reshape(-1)
+    per_label_cap = max(1_000, max_pixels // max(1, len(np.unique(labels_flat[trusted.reshape(-1)]))))
+    for label in (int(v) for v in np.unique(source[trusted]) if int(v) > 0):
+        ids = sampled_indices(trusted & (source == label), per_label_cap)
+        if not ids.size:
+            continue
+        raw = _raw_features(flat_rgb[ids].reshape(-1, 1, 3)).reshape(-1, 6)
+        standardized = np.clip((raw - center) / scale, -10.0, 10.0)
+        prototypes[label] = np.median(standardized, axis=0).astype(np.float32)
+        prototype_counts[label] = int(ids.size)
+
+    return {
+        "feature_center": center.astype(np.float32),
+        "feature_scale": scale,
+        "label_prototypes": prototypes,
+        "metadata": {
+            "scope": "single_slide_global_sample",
+            "sample_pixels": int(fit_indices.size),
+            "max_pixels": int(max_pixels),
+            "random_seed": int(random_seed),
+            "prototype_sample_pixels": prototype_counts,
+            "feature_space": "Lab_plus_optical_density",
+        },
+    }
 
 
 def _shift(array: np.ndarray, dy: int, dx: int) -> np.ndarray:
@@ -124,6 +203,7 @@ def annealed_wand_boundary_competition(
     smoothness_weight: float = 0.3,
     edge_beta: float = 0.7,
     connectivity: int = 8,
+    appearance_calibration: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Minimize an image/Potts energy inside a bounded internal boundary band.
 
@@ -189,7 +269,7 @@ def annealed_wand_boundary_competition(
         metadata.update(changed_pixels=0, reason="empty_editable_boundary_band")
         return source.copy(), metadata
 
-    feature_values = _features(image, foreground)
+    feature_values = _features(image, foreground, appearance_calibration)
     label_to_index = {int(label): index for index, label in enumerate(active_labels)}
     index_labels = np.zeros(source.shape, dtype=np.int16)
     for label, index in label_to_index.items():
@@ -197,12 +277,18 @@ def annealed_wand_boundary_competition(
 
     prototypes = []
     for label in active_labels:
-        candidate = (source == label) & foreground & ~editable
-        if protected_values is not None:
-            candidate |= protected_values == label
-        if not np.any(candidate):
-            candidate = (source == label) & foreground
-        prototypes.append(np.median(feature_values[candidate], axis=0))
+        fitted = None
+        if appearance_calibration is not None:
+            fitted = appearance_calibration.get("label_prototypes", {}).get(int(label))
+        if fitted is not None:
+            prototypes.append(np.asarray(fitted, dtype=np.float32))
+        else:
+            candidate = (source == label) & foreground & ~editable
+            if protected_values is not None:
+                candidate |= protected_values == label
+            if not np.any(candidate):
+                candidate = (source == label) & foreground
+            prototypes.append(np.median(feature_values[candidate], axis=0))
     prototypes = np.asarray(prototypes, dtype=np.float32)
     data_cost = np.mean((feature_values[None, ...] - prototypes[:, None, None, :]) ** 2, axis=-1).astype(np.float32)
     data_cost = np.minimum(data_cost, 100.0)
@@ -274,5 +360,9 @@ def annealed_wand_boundary_competition(
         data_weight=float(data_weight),
         smoothness_weight=float(smoothness_weight),
         edge_beta=float(edge_beta),
+        appearance_calibration_scope=(
+            appearance_calibration.get("metadata", {}).get("scope", "provided")
+            if appearance_calibration is not None else "tile_local_legacy"
+        ),
     )
     return result.astype(source.dtype, copy=False), metadata
