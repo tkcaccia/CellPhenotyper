@@ -264,6 +264,7 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "gigatime_seam_qc_mode",
         "uni2_sampling_mode",
         "cluster_stability_runs",
+        "cluster_auto_selection",
         "cluster_abstain_uncertain",
         "cluster_forced_count_sensitivity_acknowledged",
         "pathofmpred_cancer",

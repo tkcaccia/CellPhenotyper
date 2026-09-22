@@ -379,6 +379,9 @@ cluster_resolution: auto
 cluster_seed: 1
 # Total runs including the primary result. Repeated seeds quantify cluster stability.
 cluster_stability_runs: 3
+# Automatic Leiden resolution is selected among quality-eligible candidates by
+# the smallest predicted abstained population across repeated seeds.
+cluster_auto_selection: minimum_abstention  # minimum_abstention | quality_score
 cluster_assignment_min_vote_margin: 0.10
 cluster_stability_min_fraction: 0.67
 # Preserve the raw cluster but omit uncertain observations from interpretable masks.

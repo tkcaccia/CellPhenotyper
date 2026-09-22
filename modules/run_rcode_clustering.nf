@@ -23,6 +23,7 @@ process RUN_RCODE_CLUSTERING {
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_cluster_kodama_uncertainty.png"), emit: uncertainty_png
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_cluster_summary.csv"), emit: cluster_summary
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_cluster_stability.csv"), emit: cluster_stability
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_cluster_resolution_candidates.csv"), emit: resolution_candidates
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("Rcode_Clustering_${sample_id}_${cluster_variant}.Rout"), emit: clustering_log
 
     script:
@@ -87,6 +88,7 @@ process RUN_RCODE_CLUSTERING {
       --profile ${cluster_profile} \
       --seed ${params.cluster_seed} \
       --stability-runs ${params.cluster_stability_runs} \
+      --auto-selection ${params.cluster_auto_selection ?: 'minimum_abstention'} \
       --assignment-min-vote-margin ${params.cluster_assignment_min_vote_margin} \
       --stability-min-fraction ${params.cluster_stability_min_fraction} \
       --abstain-uncertain ${params.cluster_abstain_uncertain} \
@@ -104,6 +106,7 @@ process RUN_RCODE_CLUSTERING {
     touch "${sample_id}_${cluster_variant}_cluster_kodama_uncertainty.png"
     touch "${sample_id}_${cluster_variant}_cluster_summary.csv"
     touch "${sample_id}_${cluster_variant}_cluster_stability.csv"
+    touch "${sample_id}_${cluster_variant}_cluster_resolution_candidates.csv"
     touch "Rcode_Clustering_${sample_id}_${cluster_variant}.Rout"
     """
 }

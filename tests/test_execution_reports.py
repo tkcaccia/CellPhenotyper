@@ -96,6 +96,7 @@ def test_report_contract_lists_new_consensus_and_medsam_qc_outputs() -> None:
     assert "gigatime_marker_score_qc.json" in gigatime["expected"]
     assert "_uni2_route_comparison.csv" in kodama["expected"]
     assert "_cluster_stability.csv" in clustering["expected"]
+    assert "_cluster_resolution_candidates.csv" in clustering["expected"]
     assert "cluster_interpretation_summary.json" in clustering["expected"]
     assert "_medsam_tissue_support.png" in medsam["expected"]
     assert "_medsam_grandqc_empty_exclusion.png" in medsam["expected"]

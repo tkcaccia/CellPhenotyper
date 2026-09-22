@@ -240,12 +240,18 @@ When `uni2_sampling_mode=both`, cell-centred KODAMA coordinates are aggregated w
 After KODAMA, CellPhenotyper produces the `standard` clustering variant by default. Set `--cluster_secondary_variant fine` to add a second branch:
 
 - `standard`: adaptive low-resolution Leiden selection by default. The pipeline
-  evaluates a prespecified resolution grid and chooses the coarsest partition
-  within a small margin of the best silhouette/modularity/complexity score,
-  then measures that selected partition across independent seeds. This avoids
-  treating a fixed resolution as specimen-independent and reduces systematic
-  over-partitioning of lymphoid tissues. A numeric `cluster_resolution` remains
-  available for explicit fixed-resolution sensitivity analyses.
+  evaluates a prespecified resolution grid across repeated seeds, retains only
+  non-degenerate candidates with at least two clusters and within the adaptive
+  cluster-count cap, and
+  selects the candidate with the fewest observations that would abstain because
+  of weak landmark votes or seed instability. Mean/minimum ARI and predicted
+  abstention are tie-break evidence rather than biological labels. The selected
+  resolution is then held fixed while the broader stability pass resamples
+  landmarks. Every candidate and the selection decision are written to
+  `*_cluster_resolution_candidates.csv`. Set
+  `cluster_auto_selection: quality_score` to reproduce the legacy quality-score
+  selector. A numeric `cluster_resolution` remains available for explicit
+  fixed-resolution sensitivity analyses.
 - `fine`: a slightly higher-resolution clustering that prefers a few more clusters when the KODAMA clustering score stays close to the standard solution
 
 Every clustering variant is repeated across configured seeds. Weak KNN assignments or seed-unstable observations can be retained in the raw `cluster` column while omitted from `interpretable_cluster`. In the default grid route, rasterization keeps that raw KODAMA label as the categorical baseline and records the abstention independently in the uncertainty mask. This avoids converting valid grid observations into large unlabeled blocks; the retained label must still not be interpreted as a confident biological assignment. The pipeline also reports spatial coherence and optional GigaTIME marker enrichment and generates a randomized, blinded region-review packet. These are complementary evidence sources, not a rule for choosing the most visually appealing clustering or naming biological classes.

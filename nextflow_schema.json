@@ -410,6 +410,12 @@
           "default": 0.3
         },
         "cluster_stability_runs": {"type": "integer", "minimum": 2, "default": 3},
+        "cluster_auto_selection": {
+          "type": "string",
+          "enum": ["minimum_abstention", "quality_score"],
+          "default": "minimum_abstention",
+          "description": "For automatic Leiden resolution, choose the non-degenerate candidate with the fewest predicted abstentions across repeated seeds; quality_score restores the legacy selector."
+        },
         "cluster_assignment_min_vote_margin": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
         "cluster_stability_min_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.67},
         "cluster_abstain_uncertain": {"type": "boolean", "default": true},

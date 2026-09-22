@@ -90,6 +90,8 @@ def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
     assert "cluster_landmark_sample_strategy: knn_inverse_distance" in PARAMETERS
     assert "cluster_landmark_density_power: 2.0" in PARAMETERS
     assert "cluster_resolution: auto" in PARAMETERS
+    assert "cluster_auto_selection: minimum_abstention" in PARAMETERS
+    assert "cluster_auto_selection         = 'minimum_abstention'" in CONFIG
 
 
 def test_relative_gpu_lock_directory_is_shared_across_nextflow_sessions() -> None:

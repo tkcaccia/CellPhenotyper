@@ -26,8 +26,10 @@ def test_cluster_process_exposes_stability_and_abstention_contract():
 
     assert "cluster_stability.csv" in module_text
     assert "--stability-runs ${params.cluster_stability_runs}" in module_text
+    assert "--auto-selection ${params.cluster_auto_selection ?: 'minimum_abstention'}" in module_text
     assert "--abstain-uncertain ${params.cluster_abstain_uncertain}" in module_text
     assert "cluster_stability_runs         = 3" in config_text
+    assert "cluster_auto_selection         = 'minimum_abstention'" in config_text
     assert "cluster_abstain_uncertain      = true" in config_text
     assert "adjusted_rand_index" in script_text
     assert "assignment_vote_margin" in script_text
@@ -38,6 +40,8 @@ def test_cluster_process_exposes_stability_and_abstention_contract():
     assert "cluster_analysis_role = cluster_analysis_role" in script_text
     assert "forced_cluster_count_requested = forced_cluster_count_requested" in script_text
     assert "claim_status = if (forced_cluster_count_requested) \"sensitivity_only\"" in script_text
+    assert "estimated_abstained_count" in script_text
+    assert "cluster_resolution_candidates.csv" in module_text
 
 
 def test_interpretable_cluster_abstentions_map_to_background(tmp_path):

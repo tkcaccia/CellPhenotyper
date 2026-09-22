@@ -117,6 +117,42 @@ def test_pca_large_n_landmark_assignment_uses_highdimensional_space(data_directo
     assert len(observed) == 120
 
 
+def test_auto_resolution_selects_minimum_abstention_candidate(data_directory, tmp_path, rscript):
+    output = tmp_path / "auto_abstention" / "sample_cluster.csv"
+    output.parent.mkdir(parents=True)
+    command = [
+        rscript,
+        str(CLUSTER),
+        str(data_directory),
+        str(output),
+        "--dim", "6",
+        "--cluster-representation", "pca",
+        "--algorithm", "leiden",
+        "--resolution", "auto",
+        "--target-clusters", "0",
+        "--k", "5",
+        "--landmark-cells", "40",
+        "--landmark-assign-k", "5",
+        "--landmark-sample-strategy", "random",
+        "--stability-runs", "2",
+        "--auto-selection", "minimum_abstention",
+        "--abstain-uncertain", "true",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+
+    candidates = pd.read_csv(output.parent / "sample_cluster_resolution_candidates.csv")
+    eligible = candidates.loc[candidates.selection_eligible]
+    selected = candidates.loc[candidates.selected]
+    assert len(candidates) == 6
+    assert len(selected) == 1
+    assert selected.iloc[0].estimated_abstained_count == eligible.estimated_abstained_count.min()
+    summary = pd.read_csv(output.parent / "sample_cluster_summary.csv").iloc[0]
+    assert summary.auto_resolution_selection == "minimum_abstention"
+    assert summary.selected_resolution == selected.iloc[0].resolution
+    assert summary.selection_estimated_abstained_count == selected.iloc[0].estimated_abstained_count
+
+
 def test_pca_refuses_missing_scores_and_unverified_graph(data_directory, tmp_path, rscript):
     (data_directory / "pca_full_6.RData").unlink()
     output = tmp_path / "missing" / "sample_cluster.csv"

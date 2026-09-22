@@ -13,6 +13,7 @@ if (length(args) < 2L) {
     "[--landmark-density-knn-k N] [--landmark-density-power X]",
     "[--walktrap-clusters N] [--resolution auto|X]",
     "[--profile standard|fine] [--seed N] [--stability-runs N]",
+    "[--auto-selection minimum_abstention|quality_score]",
     "[--assignment-min-vote-margin X] [--stability-min-fraction X]",
     "[--abstain-uncertain true|false]"
   ))
@@ -46,6 +47,7 @@ score_margin <- 0.015
 cluster_profile <- "standard"
 clustering_seed <- 1L
 stability_runs <- 3L
+auto_selection <- "minimum_abstention"
 assignment_min_vote_margin <- 0.10
 stability_min_fraction <- 0.67
 abstain_uncertain <- FALSE
@@ -168,6 +170,11 @@ if (length(args) > 2L) {
     }
     if (flag == "--stability-runs" && i + 1L <= length(args)) {
       stability_runs <- as.integer(args[i + 1L])
+      i <- i + 2L
+      next
+    }
+    if (flag == "--auto-selection" && i + 1L <= length(args)) {
+      auto_selection <- tolower(args[i + 1L])
       i <- i + 2L
       next
     }
@@ -305,6 +312,9 @@ if (!is.finite(clustering_seed)) {
 }
 if (!is.finite(stability_runs) || stability_runs < 1L || stability_runs > 20L) {
   stop("--stability-runs must be between 1 and 20.")
+}
+if (!(auto_selection %in% c("minimum_abstention", "quality_score"))) {
+  stop("--auto-selection must be 'minimum_abstention' or 'quality_score'.")
 }
 if (!is.finite(assignment_min_vote_margin) || assignment_min_vote_margin < 0 || assignment_min_vote_margin > 1) {
   stop("--assignment-min-vote-margin must be between 0 and 1.")
@@ -1005,11 +1015,46 @@ preferred_cluster_cap <- function(n_cells) {
   max(4L, min(25L, as.integer(round(sqrt(max(1L, n_cells)) * 0.75))))
 }
 
-select_auto_best <- function(evals, cluster_cap, score_margin) {
+prefer_minimum_abstention <- function(evals) {
+  abstained <- vapply(evals, function(x) as.integer(x$estimated_abstained_count %||% .Machine$integer.max), integer(1))
+  evals <- evals[abstained == min(abstained)]
+
+  mean_ari <- vapply(evals, function(x) if (is.finite(x$candidate_mean_ari %||% NA_real_)) x$candidate_mean_ari else -1, numeric(1))
+  evals <- evals[mean_ari == max(mean_ari)]
+
+  min_ari <- vapply(evals, function(x) if (is.finite(x$candidate_min_ari %||% NA_real_)) x$candidate_min_ari else -1, numeric(1))
+  evals <- evals[min_ari == max(min_ari)]
+
+  tiny_fraction <- vapply(evals, function(x) x$tiny_fraction, numeric(1))
+  evals <- evals[tiny_fraction == min(tiny_fraction)]
+
+  tiny_count <- vapply(evals, function(x) x$tiny_count, integer(1))
+  evals <- evals[tiny_count == min(tiny_count)]
+
+  sil <- vapply(evals, function(x) if (is.finite(x$silhouette)) x$silhouette else -1, numeric(1))
+  evals <- evals[sil == max(sil)]
+
+  modularity <- vapply(evals, function(x) x$modularity, numeric(1))
+  evals <- evals[modularity == max(modularity)]
+
+  counts <- vapply(evals, function(x) x$final_cluster_count, integer(1))
+  evals[[which.min(counts)]]
+}
+
+select_auto_best <- function(evals, cluster_cap, score_margin, selection_mode) {
   scores <- vapply(evals, function(x) x$score, numeric(1))
   best_score <- max(scores)
+  if (identical(selection_mode, "minimum_abstention")) {
+    eligible <- evals[vapply(evals, function(x) x$final_cluster_count >= 2L && x$final_cluster_count <= cluster_cap, logical(1))]
+    if (length(eligible) == 0L) eligible <- evals
+    return(prefer_minimum_abstention(eligible))
+  }
+
   near_best_idx <- which(scores >= (best_score - score_margin))
   near_best <- evals[near_best_idx]
+
+  valid_count <- vapply(near_best, function(x) x$final_cluster_count >= 2L && x$final_cluster_count <= cluster_cap, logical(1))
+  if (any(valid_count)) near_best <- near_best[valid_count]
 
   near_counts <- vapply(near_best, function(x) x$final_cluster_count, integer(1))
   near_best <- near_best[near_counts == min(near_counts)]
@@ -1026,7 +1071,7 @@ select_auto_best <- function(evals, cluster_cap, score_margin) {
   near_best[[which.max(vapply(near_best, function(x) x$modularity, numeric(1)))]]
 }
 
-select_auto_fine <- function(evals, base_best, fine_score_margin, fine_min_cluster_increase) {
+select_auto_fine <- function(evals, base_best, fine_score_margin, fine_min_cluster_increase, selection_mode) {
   min_target <- base_best$final_cluster_count + fine_min_cluster_increase
   more <- evals[vapply(
     evals,
@@ -1045,6 +1090,10 @@ select_auto_fine <- function(evals, base_best, fine_score_margin, fine_min_clust
   }
   if (length(more) == 0L) {
     return(base_best)
+  }
+
+  if (identical(selection_mode, "minimum_abstention")) {
+    return(prefer_minimum_abstention(more))
   }
 
   counts <- vapply(more, function(x) x$final_cluster_count, integer(1))
@@ -1133,16 +1182,121 @@ run_louvain_landmark <- function(
       out$cluster_cap <- cluster_cap
       out
     })
-    base_best <- select_auto_best(evals, cluster_cap, score_margin)
+
+    # Estimate the exact downstream abstention rule for every resolution on a
+    # common landmark graph.  This keeps resolution comparisons paired: graph,
+    # landmarks and all-cell KNN neighbours are identical, while Leiden is
+    # repeated across the configured seeds.  The final selected resolution is
+    # subsequently re-evaluated by the broader stability pass, which also
+    # resamples landmarks.
+    selection_seed <- as.integer(active_seed)
+    candidate_nn <- NULL
+    candidate_assign_k <- 0L
+    if (assignment_mode != "exact") {
+      candidate_assign_k <- max(1L, min(as.integer(assign_k), nrow(landmark_vis)))
+      candidate_nn <- knn_query_indices(landmark_vis, vis, candidate_assign_k)
+      cat(sprintf(
+        "[INFO] Auto-resolution abstention study uses one paired %d-NN query (%s) for all candidates\n",
+        candidate_assign_k,
+        candidate_nn$backend
+      ))
+    }
+    materialize_candidate <- function(landmark_membership) {
+      landmark_membership <- renumber_membership(landmark_membership)
+      if (assignment_mode == "exact") {
+        membership <- landmark_membership
+        vote_margin <- rep(1, n_cells)
+      } else {
+        voted <- vote_membership(candidate_nn$index, landmark_membership)
+        membership <- voted$membership
+        vote_margin <- voted$vote_margin
+        membership[landmark_idx] <- landmark_membership
+        vote_margin[landmark_idx] <- 1
+      }
+      names(membership) <- rownames(vis)
+      list(membership = renumber_membership(membership), vote_margin = as.numeric(vote_margin))
+    }
+    for (candidate_index in seq_along(evals)) {
+      primary_candidate <- materialize_candidate(evals[[candidate_index]]$final_membership)
+      agreement_count <- rep(1L, n_cells)
+      candidate_ari <- numeric(0)
+      if (stability_runs > 1L) {
+        for (candidate_seed in selection_seed + seq.int(1L, stability_runs - 1L)) {
+          active_seed <<- as.integer(candidate_seed)
+          replicate_candidate <- run_louvain(
+            graph_obj,
+            landmark_vis,
+            evals[[candidate_index]]$resolution,
+            landmark_merge_min_size,
+            cluster_algorithm,
+            leiden_objective
+          )
+          replicate_full <- materialize_candidate(replicate_candidate$final_membership)
+          aligned <- align_membership_to_reference(primary_candidate$membership, replicate_full$membership)
+          agreement_count <- agreement_count + as.integer(aligned == primary_candidate$membership)
+          candidate_ari <- c(candidate_ari, adjusted_rand_index(primary_candidate$membership, replicate_full$membership))
+        }
+      }
+      candidate_stability <- agreement_count / stability_runs
+      candidate_ambiguous <- if (assignment_mode == "exact") {
+        rep(FALSE, n_cells)
+      } else {
+        !is.finite(primary_candidate$vote_margin) | primary_candidate$vote_margin < assignment_min_vote_margin
+      }
+      candidate_unstable <- !is.finite(candidate_stability) | candidate_stability < stability_min_fraction
+      candidate_abstained <- candidate_ambiguous | candidate_unstable
+      evals[[candidate_index]]$estimated_abstained_count <- as.integer(sum(candidate_abstained))
+      evals[[candidate_index]]$estimated_abstained_fraction <- as.numeric(mean(candidate_abstained))
+      evals[[candidate_index]]$estimated_ambiguous_count <- as.integer(sum(candidate_ambiguous))
+      evals[[candidate_index]]$estimated_unstable_count <- as.integer(sum(candidate_unstable))
+      evals[[candidate_index]]$candidate_mean_ari <- if (length(candidate_ari)) mean(candidate_ari, na.rm = TRUE) else 1
+      evals[[candidate_index]]$candidate_min_ari <- if (length(candidate_ari)) min(candidate_ari, na.rm = TRUE) else 1
+    }
+    active_seed <<- selection_seed
+    set.seed(selection_seed)
+    if (!is.null(candidate_nn)) rm(candidate_nn)
+    gc(FALSE)
+
+    base_best <- select_auto_best(evals, cluster_cap, score_margin, auto_selection)
     landmark_best <- if (cluster_profile == "fine") {
-      select_auto_fine(evals, base_best, fine_score_margin, fine_min_cluster_increase)
+      select_auto_fine(evals, base_best, fine_score_margin, fine_min_cluster_increase, auto_selection)
     } else {
       base_best
     }
+    best_score <- max(vapply(evals, function(x) x$score, numeric(1)))
+    candidate_table <- do.call(rbind, lapply(evals, function(item) data.frame(
+      resolution = as.numeric(item$resolution),
+      raw_cluster_count = as.integer(item$raw_cluster_count),
+      final_cluster_count = as.integer(item$final_cluster_count),
+      silhouette = as.numeric(item$silhouette),
+      modularity = as.numeric(item$modularity),
+      tiny_count = as.integer(item$tiny_count),
+      tiny_fraction = as.numeric(item$tiny_fraction),
+      quality_score = as.numeric(item$score),
+      selection_eligible = as.logical(if (auto_selection == "minimum_abstention") {
+        item$final_cluster_count >= 2L && item$final_cluster_count <= cluster_cap
+      } else {
+        item$score >= (best_score - score_margin) &&
+          item$final_cluster_count >= 2L && item$final_cluster_count <= cluster_cap
+      }),
+      estimated_ambiguous_count = as.integer(item$estimated_ambiguous_count),
+      estimated_unstable_count = as.integer(item$estimated_unstable_count),
+      estimated_abstained_count = as.integer(item$estimated_abstained_count),
+      estimated_abstained_fraction = as.numeric(item$estimated_abstained_fraction),
+      candidate_mean_adjusted_rand_index = as.numeric(item$candidate_mean_ari),
+      candidate_min_adjusted_rand_index = as.numeric(item$candidate_min_ari),
+      selected = isTRUE(all.equal(as.numeric(item$resolution), as.numeric(landmark_best$resolution))),
+      selection_mode = auto_selection,
+      stringsAsFactors = FALSE
+    )))
+    landmark_best$auto_resolution_candidates <- candidate_table
     cat(sprintf("[INFO] %s landmark auto-resolution grid: %s\n", tools::toTitleCase(cluster_algorithm), paste(sprintf("%.3f", resolution_grid_eval), collapse = ", ")))
     for (item in evals) {
       cat(sprintf(
-        "  - res=%.3f raw_clusters=%d final_clusters=%d silhouette=%s modularity=%.4f tiny=%d tiny_fraction=%.4f score=%.4f\n",
+        paste0(
+          "  - res=%.3f raw_clusters=%d final_clusters=%d silhouette=%s modularity=%.4f ",
+          "tiny=%d tiny_fraction=%.4f score=%.4f predicted_abstained=%d (%.4f) mean_ari=%.4f min_ari=%.4f\n"
+        ),
         item$resolution,
         item$raw_cluster_count,
         item$final_cluster_count,
@@ -1150,16 +1304,22 @@ run_louvain_landmark <- function(
         item$modularity,
         item$tiny_count,
         item$tiny_fraction,
-        item$score
+        item$score,
+        item$estimated_abstained_count,
+        item$estimated_abstained_fraction,
+        item$candidate_mean_ari,
+        item$candidate_min_ari
       ))
     }
     cat(sprintf(
-      "[INFO] Selected %s landmark resolution %.3f raw_clusters=%d final_clusters=%d score=%.4f\n",
+      "[INFO] Selected %s landmark resolution %.3f raw_clusters=%d final_clusters=%d score=%.4f predicted_abstained=%d by %s\n",
       tools::toTitleCase(cluster_algorithm),
       landmark_best$resolution,
       landmark_best$raw_cluster_count,
       landmark_best$final_cluster_count,
-      landmark_best$score
+      landmark_best$score,
+      landmark_best$estimated_abstained_count,
+      auto_selection
     ))
   } else {
     effective_resolution <- fixed_resolution
@@ -1167,6 +1327,14 @@ run_louvain_landmark <- function(
       effective_resolution <- fixed_resolution * fine_resolution_multiplier
     }
     landmark_best <- run_louvain(graph_obj, landmark_vis, effective_resolution, landmark_merge_min_size, cluster_algorithm, leiden_objective)
+    landmark_best$auto_resolution_candidates <- data.frame(
+      resolution = as.numeric(landmark_best$resolution),
+      raw_cluster_count = as.integer(landmark_best$raw_cluster_count),
+      final_cluster_count = as.integer(landmark_best$final_cluster_count),
+      selected = TRUE,
+      selection_mode = "fixed_resolution",
+      stringsAsFactors = FALSE
+    )
     cat(sprintf("[INFO] Selected %s landmark fixed resolution %.3f raw_clusters=%d final_clusters=%d\n",
       tools::toTitleCase(cluster_algorithm),
       landmark_best$resolution,
@@ -1220,9 +1388,14 @@ run_louvain_landmark <- function(
     landmark_density_median_all = as.numeric(sampling_density_median_all),
     landmark_density_median_selected = as.numeric(sampling_density_median_selected),
     assignment_vote_fraction = assignment_vote_fraction,
-    assignment_vote_margin = assignment_vote_margin
+    assignment_vote_margin = assignment_vote_margin,
+    auto_resolution_candidates = landmark_best$auto_resolution_candidates,
+    estimated_abstained_count = as.integer(landmark_best$estimated_abstained_count %||% NA_integer_),
+    estimated_abstained_fraction = as.numeric(landmark_best$estimated_abstained_fraction %||% NA_real_)
   )
 }
+
+selected_resolution_for_replicates <- NA_real_
 
 run_selected_clustering <- function(vis, seed_value) {
   active_seed <<- as.integer(seed_value)
@@ -1241,15 +1414,26 @@ run_selected_clustering <- function(vis, seed_value) {
       landmark_density_power
     ))
   }
+  replicate_resolution_mode <- resolution_mode
+  replicate_fixed_resolution <- fixed_resolution
+  replicate_profile <- cluster_profile
+  if (resolution_mode == "auto" && is.finite(selected_resolution_for_replicates)) {
+    # Resolution selection is performed once on paired candidates.  Stability
+    # replicates must hold that selected resolution fixed while resampling
+    # landmarks; otherwise they measure a changing model-selection decision.
+    replicate_resolution_mode <- "fixed"
+    replicate_fixed_resolution <- selected_resolution_for_replicates
+    replicate_profile <- "standard"
+  }
   run_louvain_landmark(
     vis,
     actual_k,
     cluster_algorithm,
     leiden_objective,
-    resolution_mode,
-    fixed_resolution,
+    replicate_resolution_mode,
+    replicate_fixed_resolution,
     resolution_grid_eval,
-    cluster_profile,
+    replicate_profile,
     fine_score_margin,
     fine_min_cluster_increase,
     landmark_cells,
@@ -1409,6 +1593,9 @@ if (native_graph_mode) {
     best$modularity
   ))
 }
+if (resolution_mode == "auto" && is.finite(best$resolution)) {
+  selected_resolution_for_replicates <- as.numeric(best$resolution)
+}
 
 raw_membership <- renumber_membership(best$membership)
 target_result <- if (native_graph_mode) collapse_kodama_graph_to_target(native_graph_info, best$final_membership, target_clusters) else collapse_clusters_to_target(
@@ -1540,6 +1727,23 @@ write.csv(cluster_df, out_csv, row.names = FALSE, quote = FALSE)
 
 stability_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_stability.csv"))
 write.csv(stability_df, stability_path, row.names = FALSE, quote = FALSE)
+resolution_candidates <- best$auto_resolution_candidates
+if (is.null(resolution_candidates)) {
+  resolution_candidates <- data.frame(
+    resolution = as.numeric(best$resolution),
+    raw_cluster_count = as.integer(raw_cluster_count),
+    final_cluster_count = as.integer(final_cluster_count),
+    selected = TRUE,
+    selection_mode = if (resolution_mode == "auto") auto_selection else "not_applicable",
+    stringsAsFactors = FALSE
+  )
+}
+resolution_candidates <- cbind(
+  data.frame(sample_id = sample_id, cluster_profile = cluster_profile, stringsAsFactors = FALSE),
+  resolution_candidates
+)
+resolution_candidates_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_resolution_candidates.csv"))
+write.csv(resolution_candidates, resolution_candidates_path, row.names = FALSE, quote = FALSE)
 summary_path <- file.path(dirname(out_csv), paste0(sample_id, "_cluster_summary.csv"))
 summary_df <- data.frame(
   sample_id = sample_id,
@@ -1623,6 +1827,15 @@ summary_df <- data.frame(
   walktrap_assignment_mode = as.character(best$walktrap_assignment_mode %||% NA_character_),
   walktrap_assign_k_used = as.integer(best$walktrap_assign_k_used %||% NA_integer_),
   resolution_mode = resolution_mode,
+  auto_resolution_selection = if (resolution_mode == "auto") auto_selection else "not_applicable",
+  auto_resolution_quality_guard = if (resolution_mode == "auto") {
+    if (auto_selection == "minimum_abstention") "at_least_two_clusters_and_within_cluster_cap" else "within_quality_score_margin_and_cluster_cap"
+  } else {
+    "not_applicable"
+  },
+  auto_resolution_candidate_count = as.integer(nrow(resolution_candidates)),
+  selection_estimated_abstained_count = as.integer(best$estimated_abstained_count %||% NA_integer_),
+  selection_estimated_abstained_fraction = as.numeric(best$estimated_abstained_fraction %||% NA_real_),
   selected_resolution = as.numeric(best$resolution),
   raw_cluster_count = as.integer(raw_cluster_count),
   final_cluster_count = as.integer(final_cluster_count),
