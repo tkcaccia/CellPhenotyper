@@ -210,7 +210,7 @@ prepare_crop_time: 6h
 # Pipeline-wide GPU admission. Every gpu_capable process reserves task and
 # memory-token locks on one device before CUDA_VISIBLE_DEVICES is assigned.
 gpu_scheduler_enable: true
-gpu_lock_dir: .gpu_locks
+gpu_lock_dir: .gpu_locks  # relative paths resolve against the shared pipeline checkout, not per-task work dirs
 gpu_memory_token_gb: 2.0
 gpu_memory_reserve_gb: 2.0
 gpu_default_task_memory_gb: 8.0

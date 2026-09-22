@@ -92,6 +92,12 @@ def test_params_file_keeps_the_selected_landmark_clustering_defaults() -> None:
     assert "cluster_resolution: auto" in PARAMETERS
 
 
+def test_relative_gpu_lock_directory_is_shared_across_nextflow_sessions() -> None:
+    config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
+    assert "new File(baseDir.toString(), configuredGpuLockDir).canonicalPath" in config
+    assert "cellphenotyper_acquire_gpu_slot '${quotedGpuLockDir}'" in config
+
+
 def test_target_cluster_count_is_wired_to_clustering() -> None:
     module = (ROOT / "modules" / "run_rcode_clustering.nf").read_text()
     script = (ROOT / "bin" / "Rcode_Clustering.R").read_text()
