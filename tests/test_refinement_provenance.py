@@ -17,6 +17,17 @@ import refine_grown_tissue_medsam as refine
 from tissue_appearance_refine import refine_tissue_domains_by_appearance
 
 
+def test_medsam_preview_palette_is_stable_by_cluster_id():
+    # Cluster 2 is deliberately absent: cluster 3 must remain green rather
+    # than shifting to the second palette colour in a cropped preview.
+    labels = np.array([[1, 3, 7]], dtype=np.uint16)
+    observed = refine.colorize_labels(labels)
+
+    np.testing.assert_array_equal(observed[0, 0], refine.DEFAULT_PALETTE[0])
+    np.testing.assert_array_equal(observed[0, 1], refine.DEFAULT_PALETTE[2])
+    np.testing.assert_array_equal(observed[0, 2], refine.DEFAULT_PALETTE[6])
+
+
 def test_encoder_embedding_is_reused_across_multiple_box_prompts(monkeypatch):
     encoded, decoded = [], []
     def encode(image, config):

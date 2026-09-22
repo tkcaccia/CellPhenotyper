@@ -226,8 +226,12 @@ def colorize_labels(labels: np.ndarray) -> np.ndarray:
     out = np.zeros(labels.shape + (3,), dtype=np.uint8)
     unique = np.unique(labels)
     unique = unique[unique > 0]
-    for idx, lid in enumerate(unique):
-        out[labels == lid] = DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
+    # Keep the tissue preview keyed to the numeric cluster ID, exactly as in
+    # the KODAMA membership plot.  Enumerating only the labels visible in a
+    # preview crop would shift colours whenever an earlier cluster was absent.
+    for lid in unique:
+        palette_index = (max(1, int(lid)) - 1) % len(DEFAULT_PALETTE)
+        out[labels == lid] = DEFAULT_PALETTE[palette_index]
     return out
 
 
