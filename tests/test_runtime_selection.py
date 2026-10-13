@@ -34,11 +34,14 @@ def test_published_cpu_runtimes_are_the_defaults() -> None:
     assert "2.6-arm64" not in PARAMETERS
 
 
-def test_gpu_release_refresh_uses_a_published_base_image() -> None:
+def test_gpu_release_builds_the_complete_runtime_and_records_source() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish-runtime-release.yml").read_text()
-    dockerfile = (ROOT / "docker" / "Dockerfile.runtime-update.gpu").read_text()
-    assert "BASE_IMAGE=${{ env.IMAGE_REPO }}:2.2-gpu-amd64" in workflow
-    assert "ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64" in dockerfile
+    dockerfile = (ROOT / "docker" / "Dockerfile.full.gpu").read_text()
+    assert "file: docker/Dockerfile.full.gpu" in workflow
+    assert "HOVERNET_MONUSAC_CHECKPOINT" in dockerfile
+    assert "CELLVIT_EXECUTABLE" in dockerfile
+    assert "MEDSAM_CHECKPOINT" in dockerfile
+    assert "BORA_REVISION" in dockerfile
     assert "SOURCE_COMMIT=${{ github.sha }}" in workflow
     assert "2.9-sif-gpu-amd64" in (ROOT / "RELEASE.md").read_text()
     assert "2.3-gpu-amd64" not in workflow

@@ -2,6 +2,8 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG SOURCE_COMMIT=unknown
+ARG RELEASE_VERSION=2.9
 ARG STARDIST_TF_WHEEL_URL=https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
 ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
@@ -10,6 +12,9 @@ ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 ARG CONCH_REVISION=141cc09c
 ARG BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
+LABEL org.opencontainers.image.source="https://github.com/tkcaccia/CellPhenotyper" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git build-essential pkg-config \
@@ -99,7 +104,8 @@ RUN set -euo pipefail && \
     mkdir -p /root/.R && \
     printf '%s\n' 'CXX11STD=-std=gnu++14' 'CXX14STD=-std=gnu++14' > /root/.R/Makevars && \
     micromamba run -n stardist python -c "import importlib; mods=['torch','timm','imagecodecs','tifffile','huggingface_hub','rasterio','pyvips','openslide','aicsimageio','aicspylibczi']; missing=[]; exec('for m in mods:\\n    try:\\n        importlib.import_module(m)\\n    except Exception as e:\\n        missing.append(f\\\"{m}: {e}\\\")'); print('Container runtime module check passed') if not missing else (_ for _ in ()).throw(SystemExit('Missing runtime modules:\\n' + '\\n'.join(missing)))" && \
-    micromamba run -n stardist pip install --no-cache-dir ftfy regex tokenizers && \
+    micromamba run -n stardist pip install --no-cache-dir ftfy regex tokenizers einops-exts \
+      pyarrow==23.0.1 jsonschema==4.21.1 && \
     micromamba run -n stardist pip install --no-cache-dir --no-deps \
       "git+https://github.com/Mahmoodlab/CONCH.git@${CONCH_REVISION}" && \
     micromamba run -n stardist python -c "import conch; from transformers import AutoModel; print('TITAN/CONCH runtime check passed')" && \
@@ -129,6 +135,8 @@ COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+COPY docs /opt/cellphenotyper/docs
+COPY tests /opt/cellphenotyper/tests
 RUN mkdir -p /opt/cellphenotyper/third_party && \
     git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM && \
     git clone --depth 1 https://github.com/vqdang/hover_net /opt/cellphenotyper/third_party/hover_net && \

@@ -231,14 +231,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile.runtime-update.gpu
+          file: docker/Dockerfile.full.gpu
           platforms: linux/amd64
           push: true
           provenance: false
           cache-from: type=gha,scope=gpu-amd64-update
           cache-to: type=gha,mode=max,scope=gpu-amd64-update
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE_REPO }}:2.2-gpu-amd64
             SOURCE_COMMIT=${{ github.sha }}
             RELEASE_VERSION=${{ needs.release_version.outputs.version }}
           tags: ${{ env.UPDATE_IMAGE_REPO }}:${{ needs.release_version.outputs.version }}-gpu-amd64
