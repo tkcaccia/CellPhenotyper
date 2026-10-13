@@ -60,7 +60,7 @@ def test_real_and_stub_scripts_literally_reference_both_cache_properties(module)
 
 
 def test_inventory_includes_all_current_processes():
-    assert len(MODULES) == 44
+    assert len(MODULES) == 45
     for module in MODULES:
         assert len(re.findall(r"^process\s+\w+\s*\{", module.read_text(), re.M)) == 1
 

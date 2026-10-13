@@ -10,15 +10,15 @@ The pipeline defaults point only to tags verified to exist:
 | --- | --- |
 | CPU amd64 | `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` |
 | CPU arm64 | `ghcr.io/tkcaccia/cellphenotyper:0.2.0` |
-| GPU amd64 | `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64` |
+| GPU amd64 | `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64` |
 | CPU SIF amd64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64` |
 | CPU SIF arm64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64` |
-| GPU SIF amd64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.1-sif-gpu-amd64` |
+| GPU SIF amd64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.2-sif-gpu-amd64` |
 | GPU SIF arm64 | `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64` |
 
 Do not document or configure a tag until its registry manifest has been checked. In particular, the former `2.3` and `2.6` examples were unpublished build targets, not pullable releases.
 
-The GPU amd64 release is built from the complete pinned runtime definition, published as `2.9.1-gpu-amd64`, converted to a native SIF, and checked for the exact source revision before the `2.9.1-sif-gpu-amd64` ORAS upload.
+The GPU amd64 release is built from the complete pinned runtime definition, published as `2.9.2-gpu-amd64`, converted to a native SIF, and checked for the exact source revision before the `2.9.2-sif-gpu-amd64` ORAS upload.
 
 ## Runtime requirements
 

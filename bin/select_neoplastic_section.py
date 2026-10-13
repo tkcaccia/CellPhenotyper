@@ -28,7 +28,11 @@ def polygon_components(geometry):
             yield from polygon_components(child)
 
 
-def load_sections(path: Path, cluster_variant: str, shift_path: Path) -> tuple[list[dict], str]:
+def load_sections(
+    path: Path,
+    cluster_variant: str,
+    shift_path: Path | None = None,
+) -> list[dict] | tuple[list[dict], str]:
     from shapely.geometry import shape
 
     payload = json.loads(path.read_text())
@@ -39,6 +43,10 @@ def load_sections(path: Path, cluster_variant: str, shift_path: Path) -> tuple[l
         else CROP_FRAME
     )
     if source_frame == ORIGINAL_FRAME:
+        if shift_path is None:
+            raise RuntimeError(
+                "Original-image cluster GeoJSON requires a crop shift JSON"
+            )
         payload = original_to_crop_feature_collection(payload, shift_path)
     elif source_frame != CROP_FRAME:
         raise RuntimeError(f"Unsupported cluster GeoJSON coordinate frame: {source_frame!r}")
@@ -67,7 +75,10 @@ def load_sections(path: Path, cluster_variant: str, shift_path: Path) -> tuple[l
             })
     if not sections:
         raise RuntimeError(f"No polygonal tissue sections found in {path}")
-    return sections, source_frame
+    # Preserve the original two-argument API for crop-frame GeoJSON callers.
+    # Pipeline callers provide shift_path and receive the source-frame audit
+    # value alongside the sections.
+    return sections if shift_path is None else (sections, source_frame)
 
 
 class SectionGrid:

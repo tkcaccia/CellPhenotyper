@@ -103,7 +103,7 @@ def _translate_position(position: Any, dx: float, dy: float) -> list:
 def _translate_coordinates(value: Any, depth: int, dx: float, dy: float) -> Any:
     if depth == 1:
         return _translate_position(value, dx, dy)
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         raise ValueError("Malformed nested GeoJSON coordinates")
     return [_translate_coordinates(item, depth - 1, dx, dy) for item in value]
 

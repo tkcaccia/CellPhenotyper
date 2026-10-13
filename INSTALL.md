@@ -173,7 +173,7 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. The current GPU amd64 runtime is available as native SIF `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.1-sif-gpu-amd64` and OCI fallback `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference.
+Use published runtime images. The current GPU amd64 runtime is available as native SIF `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.2-sif-gpu-amd64` and OCI fallback `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference.
 The amd64 GPU SIF is larger than the GitHub Release asset limit, so obtain it from the verified GHCR/ORAS reference rather than expecting a GitHub Release attachment.
 
 Container rule:
@@ -185,13 +185,13 @@ Container rule:
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64`
 
 Published GHCR/ORAS SIF references:
 
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
-- `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.1-sif-gpu-amd64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.2-sif-gpu-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
 
 The arm64 GPU SIF is a legacy artifact and must be validated against the target GPU compute capability; GB10-class (`sm_121`) systems require a compatible rebuilt image.
@@ -253,12 +253,12 @@ Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64
 ```
 
 Use:
 - `2.2-amd64` on Linux x86_64/amd64
-- `cellphenotyper-runtime:2.9.1-gpu-amd64` on Linux amd64 with NVIDIA
+- `cellphenotyper-runtime:2.9.2-gpu-amd64` on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -429,4 +429,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64` in `pipeline_paramers.yml`

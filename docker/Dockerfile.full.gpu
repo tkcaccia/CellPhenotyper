@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SOURCE_COMMIT=unknown
-ARG RELEASE_VERSION=2.9.1
+ARG RELEASE_VERSION=2.9.2
 ARG STARDIST_TF_WHEEL_URL=https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
 ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
@@ -137,6 +137,10 @@ COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
 COPY docs /opt/cellphenotyper/docs
 COPY tests /opt/cellphenotyper/tests
+COPY .github/workflows /opt/cellphenotyper/.github/workflows
+COPY audits/uni2_resolution_20260909/benchmark_k3_ground_truth.py /opt/cellphenotyper/audits/uni2_resolution_20260909/benchmark_k3_ground_truth.py
+COPY audits/uni2_resolution_20260909/explore_k3_boundary_smoothing.py /opt/cellphenotyper/audits/uni2_resolution_20260909/explore_k3_boundary_smoothing.py
+COPY audits/uni2_resolution_20260909/explore_k3_image_watershed.py /opt/cellphenotyper/audits/uni2_resolution_20260909/explore_k3_image_watershed.py
 RUN mkdir -p /opt/cellphenotyper/third_party && \
     git clone --depth 1 https://github.com/bowang-lab/MedSAM /opt/cellphenotyper/third_party/MedSAM && \
     git clone --depth 1 https://github.com/vqdang/hover_net /opt/cellphenotyper/third_party/hover_net && \

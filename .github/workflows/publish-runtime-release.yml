@@ -9,7 +9,7 @@ on:
       version:
         description: Release version/tag suffix (for example 2.7)
         required: true
-        default: "2.9.1"
+        default: "2.9.2"
       publish_target:
         description: Build the complete matrix or refresh only the amd64 GPU runtime
         required: true
