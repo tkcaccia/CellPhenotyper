@@ -2,6 +2,8 @@ ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64
 FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG SOURCE_COMMIT=unknown
+ARG RELEASE_VERSION=2.9
 ARG CONCH_REVISION=141cc09c
 ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
 ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
@@ -9,6 +11,9 @@ ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
 ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 ARG BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
+LABEL org.opencontainers.image.source="https://github.com/tkcaccia/CellPhenotyper" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}"
 
 RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
 
@@ -17,7 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
 
 RUN set -euo pipefail && \
     micromamba run -n stardist pip install --no-cache-dir \
-      "transformers>=4.51,<5" einops-exts ftfy regex tokenizers && \
+      "transformers>=4.51,<5" einops-exts ftfy regex tokenizers \
+      pyarrow==23.0.1 jsonschema==4.21.1 && \
     micromamba run -n stardist pip install --no-cache-dir --no-deps \
       "git+https://github.com/MahmoodLab/CONCH.git@${CONCH_REVISION}" && \
     micromamba run -n stardist python -c \
@@ -65,6 +71,17 @@ ENV R_ENVIRON_USER=/dev/null
 ENV R_PROFILE_USER=/dev/null
 
 WORKDIR /opt/cellphenotyper
+RUN rm -rf \
+      /opt/cellphenotyper/bin \
+      /opt/cellphenotyper/lib \
+      /opt/cellphenotyper/resources \
+      /opt/cellphenotyper/modules \
+      /opt/cellphenotyper/subworkflows \
+      /opt/cellphenotyper/docker \
+      /opt/cellphenotyper/examples \
+      /opt/cellphenotyper/singularity \
+      /opt/cellphenotyper/docs \
+      /opt/cellphenotyper/tests
 COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md UPSTREAM_DIFFS.md /opt/cellphenotyper/
 COPY bin /opt/cellphenotyper/bin
 COPY cell_profiles.nf nextflow_schema.json requirements-atlas.txt requirements-spatialdata.txt /opt/cellphenotyper/
@@ -75,6 +92,7 @@ COPY subworkflows /opt/cellphenotyper/subworkflows
 COPY docker /opt/cellphenotyper/docker
 COPY examples /opt/cellphenotyper/examples
 COPY singularity /opt/cellphenotyper/singularity
+COPY docs /opt/cellphenotyper/docs
 COPY tests /opt/cellphenotyper/tests
 
 CMD ["/bin/bash"]
