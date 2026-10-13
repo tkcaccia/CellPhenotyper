@@ -88,7 +88,7 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 
 - Docker profile uses GHCR images.
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
-- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: oras` by default, selecting the verified native `2.9-sif-gpu-amd64` SIF from GHCR.
+- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: oras` by default, selecting the verified native `2.9.1-sif-gpu-amd64` SIF from GHCR.
 - GPU-capable stages select their image and GPU access per task, honoring supported stage-specific device overrides. KODAMA's CUDA backend also uses this route; CPU KODAMA does not reserve a GPU.
 - On arm64, a requested GPU task requires a compatible GPU image; it fails rather than silently selecting a CPU or amd64 image. An explicitly selected CPU-compatible route such as `cell_detection_mode=stardist` remains available.
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
@@ -105,11 +105,11 @@ verification scope and remaining limitations.
 
 Currently verified and published:
 
-- Docker GPU amd64 (`v2.9`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64`
+- Docker GPU amd64 (`v2.9.1`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64`
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 - Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
-- Published GHCR/ORAS SIF artifacts include the source-revision-verified amd64 GPU image `2.9-sif-gpu-amd64`; the existing 2.2 CPU/arm64 assets remain available under `ghcr.io/tkcaccia/cellphenotyper`.
+- Published GHCR/ORAS SIF artifacts include the source-revision-verified amd64 GPU image `2.9.1-sif-gpu-amd64`; the existing 2.2 CPU/arm64 assets remain available under `ghcr.io/tkcaccia/cellphenotyper`.
 
 The legacy arm64 GPU artifact is published but is not suitable for every GPU generation. In particular, GB10-class (`sm_121`) systems require a rebuilt arm64 GPU SIF with a compatible CUDA/PyTorch stack.
 The amd64 GPU SIF exceeds the GitHub Release 2 GiB asset limit and is therefore distributed natively through GHCR/ORAS. Clusters may pull it once to shared storage and reuse the checksum-verified local file.
@@ -118,7 +118,7 @@ Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64
 ```
 
 ## Tool and model access
@@ -377,7 +377,7 @@ nextflow run main.nf \
   --outdir_base results_example_gpu \
   --compute_device gpu \
   --host_arch amd64 \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.1-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```
@@ -492,7 +492,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, amd64 GPU roles resolve `oras://ghcr.io/tkcaccia/cellphenotyper:2.9-sif-gpu-amd64` by default. A cluster may instead pre-pull `cellphenotyper-2.9-gpu-amd64.sif` to shared storage and pass its absolute path through `--gpu_container_image`.
+- In `-profile singularity`, amd64 GPU roles resolve `oras://ghcr.io/tkcaccia/cellphenotyper:2.9.1-sif-gpu-amd64` by default. A cluster may instead pre-pull `cellphenotyper-2.9.1-gpu-amd64.sif` to shared storage and pass its absolute path through `--gpu_container_image`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 

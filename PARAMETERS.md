@@ -143,19 +143,19 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag` | `2.2-amd64` | Legacy generic fallback. Architecture-specific CPU tags below remain authoritative. |
 | `container_cpu_tag_amd64` | `2.2-amd64` | Published CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | Published CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `2.9-gpu-amd64` | Source-revision-verified amd64 GPU OCI fallback used when `compute_device` resolves to GPU. |
+| `container_gpu_tag` | `2.9.1-gpu-amd64` | Source-revision-verified amd64 GPU OCI fallback used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` tries local `.sif`, then GHCR ORAS SIF tags, then legacy release assets, then `docker://` fallback. Valid values: `auto`, `oras`, `release`, `docker`. |
-| `singularity_gpu_image_source` | `oras` | GPU-specific Singularity/Apptainer source. The native `2.9-sif-gpu-amd64` artifact is pulled from GHCR by default. |
+| `singularity_gpu_image_source` | `oras` | GPU-specific Singularity/Apptainer source. The native `2.9.1-sif-gpu-amd64` artifact is pulled from GHCR by default. |
 | `singularity_oras_repo` | `ghcr.io/tkcaccia/cellphenotyper` | GHCR repository used to resolve ORAS-hosted `.sif` tags. |
 | `singularity_cpu_oras_tag_amd64` | `2.2-sif-amd64` | CPU ORAS tag for amd64 hosts. |
 | `singularity_cpu_oras_tag_arm64` | `2.2-sif-arm64` | CPU ORAS tag for arm64 hosts. |
-| `singularity_gpu_oras_tag_amd64` | `2.9-sif-gpu-amd64` | Source-revision-verified GPU ORAS tag for amd64 hosts. |
+| `singularity_gpu_oras_tag_amd64` | `2.9.1-sif-gpu-amd64` | Source-revision-verified GPU ORAS tag for amd64 hosts. |
 | `singularity_gpu_oras_tag_arm64` | `2.2-sif-gpu-arm64` | GPU ORAS tag for arm64 hosts. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v2.2` | Legacy GitHub release tag containing smaller `.sif` assets when available. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-2.2-amd64.sif` | Legacy CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-2.2-arm64.sif` | Legacy CPU Singularity asset name for arm64 hosts. |
-| `singularity_gpu_asset_amd64` | `cellphenotyper-2.9-gpu-amd64.sif` | Native GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_amd64` | `cellphenotyper-2.9.1-gpu-amd64.sif` | Native GPU Singularity asset name for amd64 hosts. |
 | `singularity_gpu_asset_arm64` | `cellphenotyper-2.2-gpu-arm64.sif` | Legacy GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before ORAS/release/docker fallback. |
 | `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |

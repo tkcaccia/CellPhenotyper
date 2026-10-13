@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SOURCE_COMMIT=unknown
-ARG RELEASE_VERSION=2.9
+ARG RELEASE_VERSION=2.9.1
 ARG STARDIST_TF_WHEEL_URL=https://github.com/tkcaccia/CellPhenotyper/releases/download/v2.2/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl
 ARG FASTEMBEDR_REVISION=a74ce04633efe324c8137498320816a55b9fff61
 ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
@@ -125,7 +125,7 @@ RUN set -euo pipefail && \
     micromamba clean -a -y
 
 WORKDIR /opt/cellphenotyper
-COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md /opt/cellphenotyper/
+COPY main.nf nextflow.config pipeline_paramers.yml README.md PARAMETERS.md OUTPUT.md INSTALL.md RELEASE.md TROUBLESHOOTING.md TUTORIAL.md LINUX_UPDATE.md UPSTREAM_DIFFS.md /opt/cellphenotyper/
 COPY bin /opt/cellphenotyper/bin
 COPY cell_profiles.nf nextflow_schema.json requirements-atlas.txt requirements-spatialdata.txt /opt/cellphenotyper/
 COPY lib /opt/cellphenotyper/lib

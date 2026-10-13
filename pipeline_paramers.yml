@@ -51,19 +51,19 @@ container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime
 container_cpu_tag: 2.2-amd64   # legacy generic fallback; use arch-specific tags below
 container_cpu_tag_amd64: 2.2-amd64
 container_cpu_tag_arm64: 0.2.0
-container_gpu_tag: 2.9-gpu-amd64
+container_gpu_tag: 2.9.1-gpu-amd64
 singularity_image_source: auto   # auto | oras | release | docker
 singularity_gpu_image_source: oras   # use the verified native GPU SIF from GHCR
 singularity_oras_repo: ghcr.io/tkcaccia/cellphenotyper
 singularity_cpu_oras_tag_amd64: 2.2-sif-amd64
 singularity_cpu_oras_tag_arm64: 2.2-sif-arm64
-singularity_gpu_oras_tag_amd64: 2.9-sif-gpu-amd64
+singularity_gpu_oras_tag_amd64: 2.9.1-sif-gpu-amd64
 singularity_gpu_oras_tag_arm64: 2.2-sif-gpu-arm64
 singularity_release_repo: tkcaccia/CellPhenotyper
 singularity_release_tag: v2.2
 singularity_cpu_asset_amd64: cellphenotyper-2.2-amd64.sif
 singularity_cpu_asset_arm64: cellphenotyper-2.2-arm64.sif
-singularity_gpu_asset_amd64: cellphenotyper-2.9-gpu-amd64.sif
+singularity_gpu_asset_amd64: cellphenotyper-2.9.1-gpu-amd64.sif
 singularity_gpu_asset_arm64: cellphenotyper-2.2-gpu-arm64.sif
 singularity_local_dir: ""   # optional local dir with prebuilt .sif (checked before docker fallback)
 singularity_cache_dir: ""   # optional apptainer cache dir (defaults to <repo>/.apptainer_cache)
