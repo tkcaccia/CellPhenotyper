@@ -18,7 +18,7 @@ The pipeline defaults point only to tags verified to exist:
 
 Do not document or configure a tag until its registry manifest has been checked. In particular, the former `2.3` and `2.6` examples were unpublished build targets, not pullable releases.
 
-The GPU amd64 release is built from the complete pinned runtime definition, published as `2.9.2-gpu-amd64`, converted to a native SIF, and checked for the exact source revision before the `2.9.2-sif-gpu-amd64` ORAS upload.
+The GPU amd64 release refreshes the repository-owned source tree on the complete pinned 2.9.1 GPU runtime at digest `sha256:78dd71081d7b777ed2deb3f6b22e7b740eedb95389fcb6cda38be057f9eb7c7e`, publishes the result as `2.9.2-gpu-amd64`, converts it to a native SIF, and checks the exact source revision before the `2.9.2-sif-gpu-amd64` ORAS upload.
 
 ## Runtime requirements
 

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper-runtime:2.9.2-gpu-amd64
+ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper-runtime@sha256:78dd71081d7b777ed2deb3f6b22e7b740eedb95389fcb6cda38be057f9eb7c7e
 FROM ${BASE_IMAGE}
 
 ARG SOURCE_COMMIT=unknown
