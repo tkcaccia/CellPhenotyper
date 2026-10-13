@@ -70,15 +70,19 @@ approval depends on the selected, audited adapter and is not assumed granted.
 
 ## Implemented encoder adapters
 
-`uni2_encoder` now accepts the fixed registry `uni2-h`, `virchow`, `virchow2`
+`foundation_encoder` accepts the fixed registry `uni2-h`, `virchow`, `virchow2`
 and `phikon-v2`. Every entry declares the repository, loader backend, pooling,
 224-pixel input, number of prefix/register tokens and whether token-subset
 inner features are legal. Unknown models, incompatible input sizes and
 non-square spatial-token grids fail closed. Virchow and Virchow2 use the
 published CLS-plus-mean-patch representation; Virchow2 removes four register
-tokens before the patch mean or central token subset. The existing calibrated
-90-pixel inner square remains configurable through `uni2_inner_square_fixed_px`
-and is derived in the same forward pass. Model-specific initial batch ceilings
+tokens before the patch mean or central token subset. `foundation_inner_strategy`
+provides one encoder-neutral API: `inner28_stride56` is the default, with
+`inner56_stride56`, `inner90_stride90`, and an explicit `custom` geometry as
+alternatives. `foundation_inner_extraction=token_subset` derives the local
+representation in the context forward pass; `masked_forward` is a separate
+two-pass sensitivity definition. Historical `uni2_*` arguments are retained
+only as compatibility aliases for archived parameter files. Model-specific initial batch ceilings
 (UNI2-h 256, Virchow 16, Virchow2 16, Phikon-v2 64) prevent the generic GPU
 auto-tuner from beginning at an implausibly large batch; OOM halving is retained.
 

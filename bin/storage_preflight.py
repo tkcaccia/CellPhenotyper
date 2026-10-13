@@ -811,7 +811,14 @@ def adjusted_stage_factors(
     if "cytoplasm" in factors:
         model = compartment_storage_model(3)
         factors["cytoplasm"] = (model["published_bytes"] / 9., model["work_bytes"] / 9.)
-    if cell_detection_mode != "consensus" and "cell_consensus" in factors:
+    if cell_detection_mode == "none":
+        # The historical stage slot still prepares the shared analysis crop,
+        # but it does not run a detector or retain instance-label rasters.
+        if "stardist" in factors:
+            factors["stardist"] = (0.45, 0.80)
+        for stage in ("cell_consensus", "tma", "cell_assignment", "cytoplasm"):
+            factors.pop(stage, None)
+    elif cell_detection_mode != "consensus" and "cell_consensus" in factors:
         factors["cell_consensus"] = (0.05, 0.10)
     if uni2_sampling_mode == "both":
         for stage in ("uni2", "kodama", "clustering", "cluster_mask", "medsam_refine", "cluster_geojson"):
@@ -1302,7 +1309,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--start-point", choices=STAGE_ORDER, required=True)
     ap.add_argument("--end-point", choices=STAGE_ORDER, required=True)
     ap.add_argument("--publish-dir-mode", choices=("copy", "rellink"), default="copy")
-    ap.add_argument("--cell-detection-mode", choices=("consensus", "stardist"), default="consensus")
+    ap.add_argument("--cell-detection-mode", choices=("none", "consensus", "stardist"), default="consensus")
     ap.add_argument("--hovernet-execution-mode", choices=("streaming_tiles", "wsi"), default="streaming_tiles")
     ap.add_argument("--hovernet-target-mpp", type=float, default=.25)
     ap.add_argument("--hovernet-stream-core-size", type=int, default=4096)

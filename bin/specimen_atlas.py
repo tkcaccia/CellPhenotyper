@@ -517,15 +517,16 @@ def collect_sample_metrics(records: list[dict]) -> dict:
                 }
             )
 
-    medsam = _first_record(records, "medsam_summary.json")
-    if medsam:
-        payload = _read_json(medsam["absolute_path"])
+    refinement = _first_record(records, "bora_summary.json") or _first_record(records, "medsam_summary.json")
+    if refinement:
+        payload = _read_json(refinement["absolute_path"])
+        is_bora = str(refinement.get("relative_path") or "").endswith("bora_summary.json")
+        support = payload.get("cellphenotyper_contract", {}).get("support_verification", {}) if is_bora else {}
         for item in (
-            _metric("Refinement mode", payload.get("mode"), "constrained edit, not first-pass segmentation"),
-            _metric("MedSAM device", payload.get("medsam_device")),
-            _metric("Runtime", f"{payload.get('medsam_runtime_sec')} s" if payload.get("medsam_runtime_sec") is not None else None),
-            _metric("Changed internal pixels", payload.get("image_guided_changed_pixels"), "requires boundary review"),
-            _metric("Excluded background leakage", payload.get("final_background_clamp_pixels"), "must remain zero"),
+            _metric("Refinement engine", "Bora" if is_bora else "MedSAM", "constrained edit, not first-pass segmentation"),
+            _metric("Refinement backend", payload.get("backend") if is_bora else payload.get("mode")),
+            _metric("Runtime", f"{payload.get('runtime_seconds')} s" if is_bora and payload.get("runtime_seconds") is not None else (f"{payload.get('medsam_runtime_sec')} s" if payload.get("medsam_runtime_sec") is not None else None)),
+            _metric("Excluded background leakage", support.get("outside_tissue_support_pixels") if is_bora else payload.get("final_background_clamp_pixels"), "must remain zero"),
         ):
             if item:
                 metrics["refinement"].append(item)

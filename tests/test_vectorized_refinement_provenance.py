@@ -44,6 +44,16 @@ def fixture(tmp_path, compressed=False):
         "pixel_counts": {module.REFINEMENT_CODES[int(code)]: int(count) for code, count in zip(*np.unique(provenance, return_counts=True))}}
     paths["metadata"] = tmp_path / "metadata.json"
     paths["metadata"].write_text(json.dumps(metadata))
+    paths["shift"] = tmp_path / "shift.json"
+    paths["shift"].write_text(json.dumps({
+        "offset_crop_to_original": {"dx": 100, "dy": 200},
+        "crop_size": {"width": labels.shape[1], "height": labels.shape[0]},
+        "full_size": {"width": 500, "height": 600},
+        "crop_bbox_xyxy": {
+            "x0": 100, "y0": 200,
+            "x1": 100 + labels.shape[1], "y1": 200 + labels.shape[0],
+        },
+    }))
     return paths, labels, uncertain, provenance
 
 
@@ -108,6 +118,29 @@ def test_smoothed_hole_filled_vectors_link_native_not_geometry_fractions(tmp_pat
         assert evidence["calibrated_confidence"] is None
     assert "NOT polygon-specific" in summary["vectorization"]["summary_scope"]
     assert summary["lineage"] == {"sample_key": "specimen::standard", "sample_id": "specimen", "cluster_variant": "standard"}
+
+
+def test_published_vectors_use_original_image_coordinates(tmp_path):
+    paths, _, _, _ = fixture(tmp_path)
+    result, out = run_cli(
+        tmp_path,
+        paths,
+        ["--dissolve-by-value", "--shift-json", str(paths["shift"])],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(out.read_text())
+    metadata = payload["cellphenotyper_coordinate_system"]
+    assert metadata["coordinate_space"] == "original_image_level0_pixel_edges"
+    assert metadata["transform"]["crop_to_original_offset_xy"] == [100, 200]
+    coordinates = payload["features"][0]["geometry"]["coordinates"]
+    points = np.asarray(
+        coordinates[0] if payload["features"][0]["geometry"]["type"] == "Polygon"
+        else coordinates[0][0]
+    )
+    assert points[:, 0].min() >= 100
+    assert points[:, 1].min() >= 200
+    summary = json.loads(Path(str(out) + ".provenance.json").read_text())
+    assert summary["vectorization"]["coordinate_system"] == metadata
 
 
 def test_multiclass_vectors_preserve_nested_class_holes_without_overlap(tmp_path):
@@ -478,7 +511,7 @@ def nextflow_fixture(tmp_path):
         "cluster_geojson_shared_boundary_minimum_adjacent_length": 16.0,
         "cluster_geojson_group_prefix": "domain_"}
     (tmp_path / "params.json").write_text(json.dumps(params))
-    entries = ", ".join(f"file('{paths[name]}')" for name in ("labels", "uncertainty", "provenance", "metadata"))
+    entries = ", ".join(f"file('{paths[name]}')" for name in ("labels", "uncertainty", "provenance", "metadata", "shift"))
     (tmp_path / "workflow.nf").write_text(f"""nextflow.enable.dsl=2
 include {{ MASK_TO_GEOJSON }} from './modules/mask_to_geojson'
 workflow {{
@@ -543,10 +576,12 @@ include {{ POST_GROW_SPATIAL_OUTPUTS }} from './subworkflows/post_grow_spatial_o
 workflow {{
   labels = file('{tmp_path}/labels.tif')
   uncertainty = file('{tmp_path}/uncertainty.tif')
+  shift = file('{tmp_path}/shift.json')
   masks = Channel.of(tuple('s1::tile','s1','tile',labels), tuple('s2::tile','s2','tile',labels))
   uncertain = Channel.of({uncertainty})
+  shifts = Channel.of(tuple('s1::tile',shift), tuple('s2::tile',shift))
   POST_GROW_SPATIAL_OUTPUTS(Channel.empty(), masks, Channel.empty(), Channel.empty(), uncertain,
-                           Channel.empty(), Channel.empty(), Channel.empty(), false, true,
+                           Channel.empty(), Channel.empty(), shifts, false, true,
                            [schema_version:1, compute_device:'cpu', profile:'conservative',
                             cpu_budget:1, memory_budget_gb:2, stages:[medsam_refine:[cpus:1,memory_gb:2]], settings:[:]])
   POST_GROW_SPATIAL_OUTPUTS.out.vector_provenance_summary.view {{ key,id,variant,summary -> "SUMMARY ${{key}}" }}

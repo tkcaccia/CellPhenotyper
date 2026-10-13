@@ -305,7 +305,19 @@ def _create_timm_model_from_repo_config(repo_id: str, timm_kwargs: Dict[str, Any
     if not architecture:
         raise RuntimeError(f"HF repo config for '{repo_id}' does not define an architecture")
 
-    model = timm.create_model(architecture, pretrained=False, **timm_kwargs)
+    # timm's online ``hf-hub:`` resolver applies ``model_args`` before it
+    # constructs the architecture.  The strict offline path must do the same:
+    # Virchow2, for example, declares four register tokens and a non-default
+    # MLP ratio here.  Ignoring these values creates a superficially compatible
+    # ViT-H whose positional embedding and every MLP block have the wrong
+    # shapes, so the checkpoint cannot be loaded (and must never be coerced).
+    repo_model_args = repo_cfg.get("model_args") or {}
+    if not isinstance(repo_model_args, dict):
+        raise RuntimeError(f"HF repo config for '{repo_id}' has invalid model_args")
+    resolved_timm_kwargs = dict(repo_model_args)
+    resolved_timm_kwargs.update(timm_kwargs)
+
+    model = timm.create_model(architecture, pretrained=False, **resolved_timm_kwargs)
     repo_pretrained_cfg = repo_cfg.get("pretrained_cfg") or {}
     if repo_pretrained_cfg:
         base_cfg = getattr(model, "pretrained_cfg", {}) or {}

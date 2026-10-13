@@ -177,7 +177,7 @@ workflow RUN_CELL_PROFILE_ATLAS {
                 def measured = measuredBySample[id] ?: [packages: [], shapes: []]
                 def packages = measured.packages ? measured.packages.collect { file(it, checkIfExists: true) } : [placeholder]
                 def shapes = measured.shapes ? measured.shapes.collect { file(it, checkIfExists: true) } : [placeholder]
-                tuple(id, profiles, image, labels, shift, resolution, polygon, domains, 'crop_pixels', true,
+                tuple(id, profiles, image, labels, shift, resolution, polygon, domains, 'original_pixels', true,
                     packages, shapes,
                     [packages: !!measured.packages, shapes: !!measured.shapes], hierarchy, haveHierarchy,
                     cellReference, regionReference, [cell: haveCellReference, region: haveRegionReference],

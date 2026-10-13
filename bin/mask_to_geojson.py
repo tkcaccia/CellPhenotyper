@@ -16,6 +16,12 @@ from shapely.geometry import mapping
 from shapely.ops import polygonize, unary_union
 
 from shared_boundary_smoothing import smooth_shared_boundary_coverage
+from geojson_coordinates import (
+    CROP_FRAME,
+    ORIGINAL_FRAME,
+    read_crop_transform,
+    rebase_feature_collection,
+)
 
 
 PROVENANCE_SCHEMA = "cellphenotyper.vectorized_refinement_provenance.v1"
@@ -234,6 +240,24 @@ def write_geojson_with_provenance(args, features, summary, resolved_page, scale_
                 "Vectorization created overlapping cluster geometries "
                 f"({pairs}); disable per-class hole filling/smoothing or use label-aware settings"
             )
+    coordinate_transform = None
+    if args.shift_json:
+        coordinate_transform = read_crop_transform(args.shift_json)
+        translated = rebase_feature_collection(
+            {"type": "FeatureCollection", "features": features},
+            coordinate_transform,
+            source_frame=CROP_FRAME,
+            target_frame=ORIGINAL_FRAME,
+        )
+        features = translated["features"]
+        summary["vectorization"]["coordinate_system"] = translated[
+            "cellphenotyper_coordinate_system"
+        ]
+    else:
+        summary["vectorization"]["coordinate_system"] = {
+            "coordinate_space": CROP_FRAME,
+            "warning": "No shift.json supplied; geometry remains in analysis-crop pixels.",
+        }
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
     reference = {"file": summary_path.name, "sha256": file_sha256(summary_path)}
@@ -257,6 +281,10 @@ def write_geojson_with_provenance(args, features, summary, resolved_page, scale_
               "producer_output_binding": summary["producer_output_binding"],
               "summary": reference, "lineage": summary["lineage"],
               "geometry_authority": summary["vectorization"]["geometry_authority"]}}
+    if coordinate_transform is not None:
+        gj["cellphenotyper_coordinate_system"] = summary["vectorization"][
+            "coordinate_system"
+        ]
     with open(args.out, "w", encoding="utf-8") as handle:
         json.dump(gj, handle, allow_nan=False, separators=(",", ":"))
 
@@ -716,6 +744,10 @@ def main():
     ap.add_argument("--sample-key")
     ap.add_argument("--sample-id")
     ap.add_argument("--cluster-variant")
+    ap.add_argument(
+        "--shift-json",
+        help="Translate crop-derived geometry into original-image level-zero pixels.",
+    )
 
     ap.add_argument("--binary", action="store_true", help="Treat mask as binary foreground (mask>0)")
     ap.add_argument("--dissolve", action="store_true",

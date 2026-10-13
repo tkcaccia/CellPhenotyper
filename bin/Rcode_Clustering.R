@@ -747,6 +747,34 @@ assign_from_landmarks <- function(vis, landmark_vis, landmark_membership, landma
   )
 }
 
+reassign_after_target_merge <- function(vis, clustering_result, collapsed_membership, label) {
+  assignment_mode <- as.character(clustering_result$landmark_assignment_mode %||% "")
+  landmark_idx <- as.integer(clustering_result$landmark_indices %||% integer(0))
+  if (!identical(assignment_mode, "landmark_knn") || !length(landmark_idx)) {
+    return(NULL)
+  }
+  if (any(!is.finite(landmark_idx)) || any(landmark_idx < 1L) || any(landmark_idx > nrow(vis))) {
+    stop("Post-target landmark indices are invalid")
+  }
+  landmark_idx <- sort(unique(landmark_idx))
+  landmark_membership <- as.integer(collapsed_membership[landmark_idx])
+  if (anyNA(landmark_membership) || length(unique(landmark_membership)) < 1L) {
+    stop("Post-target landmark membership is invalid")
+  }
+  cat(sprintf(
+    "[INFO] Recomputing landmark votes after forced merge in the final %d-cluster label space\n",
+    length(unique(as.integer(collapsed_membership)))
+  ))
+  assign_from_landmarks(
+    vis,
+    vis[landmark_idx, , drop = FALSE],
+    landmark_membership,
+    landmark_idx,
+    clustering_result$landmark_assign_k_used,
+    label
+  )
+}
+
 knn_inverse_distance_sample <- function(vis, max_total, density_k, density_power) {
   max_total <- min(as.integer(max_total), nrow(vis))
   if (max_total <= 0L || nrow(vis) <= max_total) {
@@ -913,6 +941,7 @@ run_walktrap_fixed <- function(vis, actual_k, n_clusters, max_cells, assign_k, s
     landmark_assignment_mode = assignment_mode,
     landmark_assign_k_used = as.integer(used_assign_k),
     landmark_assignment_knn_backend = as.character(assignment_knn_backend),
+    landmark_indices = as.integer(if (exists("landmark_idx", inherits = FALSE)) landmark_idx else seq_len(n_cells)),
     assignment_vote_fraction = assignment_vote_fraction,
     assignment_vote_margin = assignment_vote_margin
   )
@@ -966,7 +995,7 @@ draw_membership_plot <- function(vis, membership, cluster_colors, algorithm, is_
   )
   for (cluster_id in names(cluster_colors)) {
     idx <- plot_idx[
-      membership[plot_idx] == as.integer(cluster_id) & accepted[plot_idx]
+      membership[plot_idx] == as.integer(cluster_id)
     ]
     if (!length(idx)) next
     color <- cluster_colors[cluster_id]
@@ -976,24 +1005,33 @@ draw_membership_plot <- function(vis, membership, cluster_colors, algorithm, is_
   if (length(abstained_idx)) {
     points(
       vis[abstained_idx, 1], vis[abstained_idx, 2],
-      pch = 16, cex = 0.20, col = grDevices::adjustcolor("#6F6F6F", alpha.f = 0.85)
+      pch = 4, cex = 0.20, lwd = 0.35,
+      col = grDevices::adjustcolor("#4D4D4D", alpha.f = 0.70)
     )
   }
+  total_counts <- vapply(
+    as.integer(names(cluster_colors)),
+    function(cluster_id) sum(membership == cluster_id),
+    integer(1)
+  )
   accepted_counts <- vapply(
     as.integer(names(cluster_colors)),
     function(cluster_id) sum(membership == cluster_id & accepted),
     integer(1)
   )
-  legend_labels <- sprintf("cluster %s accepted n=%d", names(cluster_colors), accepted_counts)
+  legend_labels <- sprintf(
+    "cluster %s total n=%d; accepted n=%d",
+    names(cluster_colors), total_counts, accepted_counts
+  )
   legend_colors <- unname(cluster_colors)
   if (any(!accepted)) {
-    legend_labels <- c(legend_labels, sprintf("abstained n=%d", sum(!accepted)))
+    legend_labels <- c(legend_labels, sprintf("abstained overlay n=%d", sum(!accepted)))
     legend_colors <- c(legend_colors, "#6F6F6F")
   }
   legend("topright",
     legend = legend_labels,
     col = legend_colors,
-    pch = 16,
+    pch = c(rep(16, length(cluster_colors)), if (any(!accepted)) 4 else integer(0)),
     bty = "n",
     cex = 0.72
   )
@@ -1478,6 +1516,7 @@ run_louvain_landmark <- function(
     landmark_density_power = as.numeric(sampling_density_power),
     landmark_density_knn_backend = as.character(sampling_density_knn_backend),
     landmark_assignment_knn_backend = as.character(assignment_knn_backend),
+    landmark_indices = as.integer(landmark_idx),
     landmark_density_median_all = as.numeric(sampling_density_median_all),
     landmark_density_median_selected = as.numeric(sampling_density_median_selected),
     assignment_vote_fraction = assignment_vote_fraction,
@@ -1725,6 +1764,18 @@ target_result <- if (native_graph_mode) collapse_kodama_graph_to_target(native_g
   target_clusters
 )
 final_membership <- renumber_membership(target_result$membership)
+post_target_assignment <- NULL
+if (!native_graph_mode && isTRUE(target_result$applied)) {
+  post_target_assignment <- reassign_after_target_merge(
+    vis,
+    best,
+    final_membership,
+    paste0(cluster_algorithm, " post-target")
+  )
+  if (!is.null(post_target_assignment)) {
+    final_membership <- renumber_membership(post_target_assignment$membership)
+  }
+}
 
 grandqc_outlier <- if (isTRUE(grandqc_kodama_outlier_enable)) {
   detect_grandqc_kodama_outliers(
@@ -1747,8 +1798,20 @@ final_cluster_sizes <- format_cluster_sizes(final_membership)
 sample_id <- sub("_cluster$", "", tools::file_path_sans_ext(basename(out_csv)))
 
 native_graph_evidence <- if (native_graph_mode) kodama_graph_assignment_evidence(native_graph_info, final_membership) else NULL
-assignment_vote_fraction <- if (native_graph_mode) native_graph_evidence$own_community_affinity_fraction else as.numeric(best$assignment_vote_fraction %||% rep(1, nrow(vis)))
-assignment_vote_margin <- if (native_graph_mode) native_graph_evidence$affinity_margin else as.numeric(best$assignment_vote_margin %||% rep(1, nrow(vis)))
+assignment_vote_fraction <- if (native_graph_mode) {
+  native_graph_evidence$own_community_affinity_fraction
+} else if (!is.null(post_target_assignment)) {
+  as.numeric(post_target_assignment$vote_fraction)
+} else {
+  as.numeric(best$assignment_vote_fraction %||% rep(1, nrow(vis)))
+}
+assignment_vote_margin <- if (native_graph_mode) {
+  native_graph_evidence$affinity_margin
+} else if (!is.null(post_target_assignment)) {
+  as.numeric(post_target_assignment$vote_margin)
+} else {
+  as.numeric(best$assignment_vote_margin %||% rep(1, nrow(vis)))
+}
 assignment_is_exact <- identical(as.character(best$landmark_assignment_mode %||% ""), "exact")
 assignment_ambiguous <- if (native_graph_mode) !is.finite(assignment_vote_margin) | assignment_vote_margin < assignment_min_vote_margin else !assignment_is_exact & assignment_vote_margin < assignment_min_vote_margin
 assignment_status <- if (native_graph_mode) {
@@ -1783,6 +1846,18 @@ if (stability_runs > 1L) {
       target_clusters
     )
     replicate_membership <- renumber_membership(replicate_target$membership)
+    if (!native_graph_mode && isTRUE(replicate_target$applied)) {
+      replicate_post_target <- reassign_after_target_merge(
+        vis,
+        replicate_best,
+        replicate_membership,
+        paste0(cluster_algorithm, " stability post-target")
+      )
+      if (!is.null(replicate_post_target)) {
+        replicate_membership <- renumber_membership(replicate_post_target$membership)
+      }
+      rm(replicate_post_target)
+    }
     aligned_membership <- align_membership_to_reference(final_membership, replicate_membership)
     stability_agreement_count <- stability_agreement_count + as.integer(aligned_membership == final_membership)
     stability_records[[length(stability_records) + 1L]] <- data.frame(
@@ -1841,7 +1916,7 @@ cluster_df <- data.frame(
   graph_affinity_rule = if (native_graph_mode) native_graph_info$affinity_transform else NA_character_,
   graph_source_sha256 = if (native_graph_mode) native_graph_payload$manifest$file_sha256 else NA_character_,
   graph_observation_scope = if (native_graph_mode) "feature_dissimilarity_not_physical_neighbourhood" else NA_character_,
-  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else "landmark_vote_or_exact_graph_assignment_not_probability",
+  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else if (!is.null(post_target_assignment)) "post_target_merged_landmark_vote_not_probability" else "landmark_vote_or_exact_graph_assignment_not_probability",
   graph_degree = if (native_graph_mode) native_graph_evidence$degree else NA_integer_,
   graph_strength = if (native_graph_mode) native_graph_evidence$strength else NA_real_,
   grandqc_artifact_candidate = grandqc_artifact_candidate,
@@ -1909,7 +1984,7 @@ summary_df <- data.frame(
   graph_native_neighbors = if (native_graph_mode) native_graph_payload$metadata$native_neighbors else NA_integer_,
   graph_stored_directed_edges = if (native_graph_mode) native_graph_payload$metadata$stored_edges else NA_integer_,
   graph_source_pca_sha256 = if (native_graph_mode) native_graph_payload$metadata$pca_file_sha256 else NA_character_,
-  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else "landmark_vote_or_exact_graph_assignment_not_probability",
+  assignment_score_semantics = if (native_graph_mode) native_graph_evidence$semantics else if (!is.null(post_target_assignment)) "post_target_merged_landmark_vote_not_probability" else "landmark_vote_or_exact_graph_assignment_not_probability",
   visualization_projected = if (is.null(input_bundle$representation_metadata$visualization_projected)) NA else isTRUE(input_bundle$representation_metadata$visualization_projected),
   requested_dim = as.integer(selected_file_dim),
   loaded_dim = as.integer(picked$dim),

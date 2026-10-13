@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -192,3 +193,66 @@ def validate_ome_tiff(
             "physical_size_x_um": float(observed_mpp[0]),
             "physical_size_y_um": float(observed_mpp[1]),
         }
+
+
+def restore_ome_physical_size(
+    path: str | Path,
+    *,
+    mpp_x: float,
+    mpp_y: float,
+) -> dict[str, Any]:
+    """Restore missing OME physical sizes without rewriting pyramid pixels.
+
+    Some external pyramid writers preserve OME dimensions and SubIFDs but omit
+    ``PhysicalSizeX/Y``. ``tifffile.tiffcomment`` updates only the first-page
+    ImageDescription and keeps every pixel tile and pyramid level byte-identical.
+    """
+
+    import tifffile
+
+    output = Path(path)
+    if _positive(mpp_x) is None or _positive(mpp_y) is None:
+        raise ValueError(f"MPP must be positive, got x={mpp_x}, y={mpp_y}")
+    with tifffile.TiffFile(output) as tif:
+        if not tif.is_ome or not tif.ome_metadata:
+            raise RuntimeError(f"Cannot restore MPP on a non-OME TIFF: {output}")
+        series = tif.series[0]
+        expected_shape = _spatial_shape(tuple(series.shape), series.axes)
+        level_count_before = len(series.levels)
+        xml = tif.ome_metadata
+
+    # Remove stale values, then insert one canonical ASCII-safe attribute set.
+    for name in (
+        "PhysicalSizeX",
+        "PhysicalSizeXUnit",
+        "PhysicalSizeY",
+        "PhysicalSizeYUnit",
+    ):
+        xml = re.sub(rf'\s+{name}="[^"]*"', "", xml, count=1)
+    physical = (
+        f' PhysicalSizeX="{float(mpp_x):.12g}" PhysicalSizeXUnit="&#181;m"'
+        f' PhysicalSizeY="{float(mpp_y):.12g}" PhysicalSizeYUnit="&#181;m"'
+    )
+    xml, replacements = re.subn(
+        r'(<Pixels\b[^>]*?)(\s+SizeX=")',
+        rf'\1{physical}\2',
+        xml,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError(f"OME Pixels element has no SizeX attribute: {output}")
+    xml = xml.replace("µ", "&#181;")
+    tifffile.tiffcomment(output, xml)
+    validation = validate_ome_tiff(
+        output,
+        expected_shape=expected_shape,
+        expected_mpp=(float(mpp_x), float(mpp_y)),
+        require_pyramid=level_count_before > 1,
+    )
+    if len(validation["pyramid_levels"]) != level_count_before:
+        raise RuntimeError(
+            f"OME metadata repair changed pyramid level count for {output}: "
+            f"{level_count_before} -> {len(validation['pyramid_levels'])}"
+        )
+    validation["repair"] = "ImageDescription-only; pixel tiles unchanged"
+    return validation

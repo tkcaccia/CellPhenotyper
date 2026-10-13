@@ -98,8 +98,9 @@ def test_report_contract_lists_new_consensus_and_medsam_qc_outputs() -> None:
     assert "_cluster_stability.csv" in clustering["expected"]
     assert "_cluster_resolution_candidates.csv" in clustering["expected"]
     assert "cluster_interpretation_summary.json" in clustering["expected"]
-    assert "_medsam_tissue_support.png" in medsam["expected"]
-    assert "_medsam_grandqc_empty_exclusion.png" in medsam["expected"]
+    assert "_bora_refined_qc_preview.png" in medsam["expected"]
+    assert "_bora_kodama_membership.png" in medsam["expected"]
+    assert "_bora_summary.json" in medsam["expected"]
     assert ".roi_qc.json" in roi["expected"]
     assert "index.html" in execution["expected"]
 

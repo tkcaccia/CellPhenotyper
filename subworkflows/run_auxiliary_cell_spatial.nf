@@ -154,7 +154,7 @@ workflow RUN_AUXILIARY_CELL_SPATIAL {
     def imageVariantCh = Channel.empty()
     def tissueVariantCh = Channel.empty()
     def resolutionVariantCh = Channel.empty()
-    if (runGrowTissue || runMedsamRefine) {
+    if (runGrowTissue || runMedsamRefine || runClusterGeoJSON) {
         imageVariantCh = auxiliaryImagesCh.flatMap { sample_id, image_tif ->
             clusterVariants.collect { spec -> tuple("${sample_id}::${spec.variant}", image_tif) }
         }
@@ -250,15 +250,17 @@ workflow RUN_AUXILIARY_CELL_SPATIAL {
                 .join(finalUncertaintyCh, by: [0, 1, 2], failOnMismatch: true, failOnDuplicate: true)
                 .join(finalProvenanceCh, by: [0, 1, 2], failOnMismatch: true, failOnDuplicate: true)
                 .join(provenanceMetadataCh, by: [0, 1, 2], failOnMismatch: true, failOnDuplicate: true)
-                .map { key, id, variant, mask, uncertainty, provenance, metadata ->
-                    tuple(key, id, variant, mask, uncertainty, provenance, metadata, [uncertainty: true, refinement: true])
+                .join(resolutionVariantCh, by: 0, failOnMismatch: true, failOnDuplicate: true)
+                .map { key, id, variant, mask, uncertainty, provenance, metadata, shift_json ->
+                    tuple(key, id, variant, mask, uncertainty, provenance, metadata, shift_json, [uncertainty: true, refinement: true])
                 }
         } else {
             vectorInputCh = finalMaskCh
                 .join(finalUncertaintyCh, by: [0, 1, 2], remainder: true, failOnDuplicate: true)
-                .map { key, id, variant, mask, uncertainty ->
+                .join(resolutionVariantCh, by: 0, failOnMismatch: true, failOnDuplicate: true)
+                .map { key, id, variant, mask, uncertainty, shift_json ->
                     if (mask == null) error "Unmatched auxiliary uncertainty sidecar for vectorization: ${key}"
-                    tuple(key, id, variant, mask, uncertainty ?: mask, mask, mask, [uncertainty: uncertainty != null, refinement: false])
+                    tuple(key, id, variant, mask, uncertainty ?: mask, mask, mask, shift_json, [uncertainty: uncertainty != null, refinement: false])
                 }
         }
         CELL_AUXILIARY_MASK_TO_GEOJSON(vectorInputCh)

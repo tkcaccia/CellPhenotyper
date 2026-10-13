@@ -115,6 +115,22 @@ def test_route_factors_remove_obsolete_growth_and_scale_both_routes() -> None:
     assert factors["cluster_geojson"][1] == storage.STAGE_FACTORS["cluster_geojson"][1] * 2
 
 
+def test_cell_free_route_budgets_shared_crop_but_removes_cell_stages() -> None:
+    factors = storage.adjusted_stage_factors(
+        storage.active_stages("stardist", "cluster_geojson"),
+        cell_detection_mode="none",
+        uni2_sampling_mode="grid",
+        gigatime_enabled=False,
+        marker_quantification_enabled=False,
+        gigatime_channel_count=3,
+        uni2_save_tiles=False,
+    )
+    assert factors["stardist"] == (0.45, 0.80)
+    for stage in ("cell_consensus", "tma", "cell_assignment", "cytoplasm", "gigatime", "marker_quantification", "grow_tissue"):
+        assert stage not in factors
+    assert {"tissue_mask", "grid_tiles", "uni2", "kodama", "clustering", "cluster_mask", "medsam_refine", "cluster_geojson"} <= set(factors)
+
+
 def test_stardist_storage_accounts_for_pyramidal_crop_overviews(tmp_path, monkeypatch) -> None:
     image = tmp_path / "sample.tif"
     image.write_bytes(b"dimension fixture")

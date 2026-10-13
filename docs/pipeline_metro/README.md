@@ -14,15 +14,15 @@ The map reads from left to right:
 
 1. One H&E input is converted with physical-resolution metadata and passed through GrandQC.
 2. Whole-tissue and optional ROI-restricted tissue crops are alternative routes that reconverge as one analysis-ready crop.
-3. Pathway A creates an overlapping spatial grid whose inner cores are adjacent, extracts fused UNI-2 tile and inner-centre features, and runs its own PCA, KODAMA, and Leiden analysis.
+3. Pathway A creates an overlapping spatial grid, extracts fused whole-context and inner-region features with the selected foundation encoder, and runs its own PCA, KODAMA, and Leiden analysis. The default shared strategy is a 28-pixel inner region on a 56-pixel stride.
 4. Pathway B runs StarDist, HoVer-Net MoNuSAC, and CellViT++ in parallel. Role-aware instance fusion requires spatial agreement between broad-scope StarDist and CellViT++, while MoNuSAC contributes scoped corroboration and detector-specific phenotype evidence.
-5. Pathway B1 extracts fused UNI-2 whole-tile and 90-pixel inner-square features from cell-centred tiles and runs an independent PCA, KODAMA, and Leiden analysis.
+5. Pathway B1 applies the same encoder-neutral inner strategy to cell-centred tiles and runs an independent PCA, KODAMA, and Leiden analysis.
 6. Pathway B2 generates the GigaTIME virtual mIHC image, quantifies markers in nuclear and cell regions, and runs a marker-specific PCA and KODAMA analysis.
-7. The cell-centred route grows sparse cell-supported labels through tissue before GPU MedSAM refinement. The grid route already has adjacent dense inner-core labels, so it bypasses tissue growth and sends the grid cluster mask directly to MedSAM. Both routes then export phenotype GeoJSON. Optional section-level TITAN and PathoFMPred analysis follows the reconstructed tissue phenotypes.
+7. The cell-centred route grows sparse cell-supported labels through tissue before Bora refinement. The grid route already has adjacent dense inner-core labels, so it bypasses tissue growth and sends the grid cluster mask directly to Bora. Bora writes the refined categorical OME-TIFF and phenotype GeoJSON in one operation. Optional section-level TITAN and PathoFMPred analysis follows the reconstructed tissue phenotypes.
 
 ## Implementation status
 
-The metro map now matches the executable `--uni2_sampling_mode both` topology. The unsuffixed grid route and `<sample>__cells` route run independent UNI-2, KODAMA, Leiden, mask, MedSAM and GeoJSON stages. The cell route alone includes tissue growth. A clustering-to-GeoJSON Nextflow stub run verifies both branches and their restart inputs; biological route selection still requires the independent paired validation described in `docs/UNI2_ROUTE_VALIDATION_PROTOCOL.md`.
+The metro map now matches the executable `--uni2_sampling_mode both` topology. The unsuffixed grid route and `<sample>__cells` route run independent foundation-encoder, KODAMA, Leiden and mask stages before the shared Bora refinement/vectorization contract. The cell route alone includes tissue growth. A clustering-to-GeoJSON Nextflow stub run verifies both branches and their restart inputs; biological route selection still requires the independent paired validation described in `docs/UNI2_ROUTE_VALIDATION_PROTOCOL.md`.
 
 ## Regenerate the technical DAG
 

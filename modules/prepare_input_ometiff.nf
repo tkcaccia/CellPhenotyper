@@ -35,6 +35,8 @@ process PREPARE_INPUT_OMETIFF {
     def resolution_hash_flag = params.input_hash_enable ? '' : '--skip-file-hash'
     def converted_rgb_requirement = params.input_require_rgb ? '--require-rgb' : ''
     def converted_pyramid_requirement = params.input_require_pyramid ? '--require-pyramid' : ''
+    def converted_decode_requirement = params.input_require_rgb ? '--require-decodable' : ''
+    def converted_pixel_comparison = is_btf ? '--compare-reference-pixels' : ''
     def reference_report_flag = is_vsi ? '' : "--reference-report ${sample_id}.source_resolution.json"
     def codeFingerprint = PipelineHelpers.codeFingerprint([
       resolution_validator_script,
@@ -101,15 +103,14 @@ PY
       [[ -s "${staged_image_name}" ]] || { echo "Input OME-TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
       cp -f "${staged_image_name}" "${sample_id}.ome.tif"
     elif [[ "${is_btf}" == "true" ]]; then
-      bash "${btf_converter_script}" \
-        --in "${staged_image_name}" \
-        --out "${sample_id}.ome.tif" \
+      python "${generic_converter_script}" \
+        --input "${staged_image_name}" \
+        --output "${sample_id}.ome.tif" \
         --compression "${params.convert_compression}" \
-        --downsample "${params.convert_downsample}" \
-        --max-workers ${task.cpus} \
-        ${rgb_flag} \
-        ${overwrite_flag}
-      rm -rf "${sample_id}.ome.tif.rawdir"
+        --quality ${params.convert_jpeg_quality} \
+        --channel-order ${params.convert_channel_order} \
+        ${params.convert_pyramid ? '--pyramid' : ''} \
+        --tile 512
     elif [[ "${is_tiff_like}" == "true" ]]; then
       [[ -s "${staged_image_name}" ]] || { echo "Input TIFF missing or empty: ${staged_image_name}" >&2; exit 1; }
       cp -f "${staged_image_name}" "${sample_id}.ome.tif"
@@ -153,6 +154,8 @@ PY
         ${resolution_hash_flag} \
         ${converted_rgb_requirement} \
         ${converted_pyramid_requirement} \
+        ${converted_decode_requirement} \
+        ${converted_pixel_comparison} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \

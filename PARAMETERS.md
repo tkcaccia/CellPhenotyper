@@ -133,7 +133,7 @@ nextflow run main.nf -profile singularity \
 | `start_point` | `convert` | Stage where execution starts. |
 | `end_point` | `auto` | Stage where execution stops (`auto` = `cluster_geojson` if full pipeline, else `tissue_mask`). |
 | `compute_device` | `auto` | `auto` selects GPU consistently for all GPU-capable stages when NVIDIA visibility is detected, otherwise CPU; `gpu` and `cpu` force an explicit policy. |
-| `cell_detection_mode` | `stardist` | Scientific cell-identification contract. The default runs StarDist only. `consensus` explicitly adds HoVer-Net MoNuSAC and CellViT++ and requires GPU execution. Hardware never changes this mode automatically. |
+| `cell_detection_mode` | `stardist` | Scientific cell-identification contract. `none` runs a cell-free grid/KODAMA tissue route while retaining shared crop preparation; the default runs StarDist only; `consensus` adds HoVer-Net MoNuSAC and CellViT++ and requires GPU execution. Hardware never changes this mode automatically. |
 | `host_arch` | `auto` | `auto`, `amd64`, or `arm64` host architecture selector/override. |
 | `enable_gpu_on_arm64` | `false` | Allow GPU selection on arm64 hosts when a compatible GPU container exists. |
 | `enable_stardist_gpu_on_arm64` | `false` | On arm64, keep StarDist on CPU container by default; set `true` to force StarDist into GPU container. |
@@ -143,19 +143,19 @@ nextflow run main.nf -profile singularity \
 | `container_cpu_tag` | `2.2-amd64` | Legacy generic fallback. Architecture-specific CPU tags below remain authoritative. |
 | `container_cpu_tag_amd64` | `2.2-amd64` | Published CPU tag for amd64 hosts. |
 | `container_cpu_tag_arm64` | `0.2.0` | Published CPU tag for arm64 hosts. |
-| `container_gpu_tag` | `2.8-gpu-amd64` | Validated amd64 GPU OCI fallback used when `compute_device` resolves to GPU. |
+| `container_gpu_tag` | `2.9-gpu-amd64` | Source-revision-verified amd64 GPU OCI fallback used when `compute_device` resolves to GPU. |
 | `singularity_image_source` | `auto` | `auto` tries local `.sif`, then GHCR ORAS SIF tags, then legacy release assets, then `docker://` fallback. Valid values: `auto`, `oras`, `release`, `docker`. |
-| `singularity_gpu_image_source` | `oras` | GPU-specific Singularity/Apptainer source. The verified native `2.8-sif-gpu-amd64` artifact is pulled from GHCR by default. |
+| `singularity_gpu_image_source` | `oras` | GPU-specific Singularity/Apptainer source. The native `2.9-sif-gpu-amd64` artifact is pulled from GHCR by default. |
 | `singularity_oras_repo` | `ghcr.io/tkcaccia/cellphenotyper` | GHCR repository used to resolve ORAS-hosted `.sif` tags. |
 | `singularity_cpu_oras_tag_amd64` | `2.2-sif-amd64` | CPU ORAS tag for amd64 hosts. |
 | `singularity_cpu_oras_tag_arm64` | `2.2-sif-arm64` | CPU ORAS tag for arm64 hosts. |
-| `singularity_gpu_oras_tag_amd64` | `2.8-sif-gpu-amd64` | HPC-validated GPU ORAS tag for amd64 hosts. |
+| `singularity_gpu_oras_tag_amd64` | `2.9-sif-gpu-amd64` | Source-revision-verified GPU ORAS tag for amd64 hosts. |
 | `singularity_gpu_oras_tag_arm64` | `2.2-sif-gpu-arm64` | GPU ORAS tag for arm64 hosts. |
 | `singularity_release_repo` | `tkcaccia/CellPhenotyper` | GitHub repo used to resolve release-hosted `.sif` assets. |
 | `singularity_release_tag` | `v2.2` | Legacy GitHub release tag containing smaller `.sif` assets when available. |
 | `singularity_cpu_asset_amd64` | `cellphenotyper-2.2-amd64.sif` | Legacy CPU Singularity asset name for amd64 hosts. |
 | `singularity_cpu_asset_arm64` | `cellphenotyper-2.2-arm64.sif` | Legacy CPU Singularity asset name for arm64 hosts. |
-| `singularity_gpu_asset_amd64` | `cellphenotyper-2.8-gpu-amd64.sif` | Native GPU Singularity asset name for amd64 hosts. |
+| `singularity_gpu_asset_amd64` | `cellphenotyper-2.9-gpu-amd64.sif` | Native GPU Singularity asset name for amd64 hosts. |
 | `singularity_gpu_asset_arm64` | `cellphenotyper-2.2-gpu-arm64.sif` | Legacy GPU Singularity asset name for arm64 hosts. |
 | `singularity_local_dir` | `''` | Optional local directory with prebuilt `.sif`; checked before ORAS/release/docker fallback. |
 | `singularity_cache_dir` | `''` | Optional Apptainer/Singularity cache path; default is `<repo>/.apptainer_cache`. |
@@ -216,7 +216,7 @@ GPU run notes:
 - On GB10 (`sm_121`), use an arm64 GPU SIF built with nightly `cu130` PyTorch (the `v2.2` arm64 GPU asset may fail with `no kernel image is available`).
 
 `start_point` / `end_point` allowed values:
-`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `grid_tiles`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `medsam_refine`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`. `grow_tissue` applies to cell-centred masks: it runs for `cells` and for the `<sample>__cells` branch of `both`, while the dense grid branch bypasses it.
+`convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `grid_tiles`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `medsam_refine`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`. `grow_tissue` applies to cell-centred masks: it runs for `cells` and for the `<sample>__cells` branch of `both`, while the dense grid branch bypasses it. The public `medsam_refine` and `cluster_geojson` boundaries are retained for restart compatibility, but their default implementation is one pinned Bora refinement/vectorization operation.
 
 ## Input Resolution
 
@@ -241,7 +241,7 @@ The `convert` stage validates physical pixel size before doing expensive convers
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `convert_compression` | `JPEG` | Shared converted-image and analysis-crop codec: `JPEG`, `LZW`, `DEFLATE`, `NONE`, or `UNCOMPRESSED`. JPEG-in-TIFF stores canonical colour as `YCbCr` and readers decode it to RGB; `LZW` and `DEFLATE` are lossless. |
+| `convert_compression` | `LZW` | Shared converted-image and analysis-crop codec: `JPEG`, `LZW`, `DEFLATE`, `NONE`, or `UNCOMPRESSED`. LZW is the lossless default; JPEG is an explicit lossy option. |
 | `convert_jpeg_quality` | `75` | JPEG quality from 1 to 100. It applies to the converted OME-TIFF and `crop_roi.tif` when `convert_compression=JPEG`; lossless codecs ignore it. |
 | `convert_downsample` | `GAUSSIAN` | Pyramid downsample algorithm. |
 | `convert_rgb` | `true` | Convert to RGB. |
@@ -269,7 +269,7 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `grandqc_artifact_tile_size` | `0` | Artifact inference tile size. `0` uses the official 512 x 512 geometry on every device. Explicit experimental values must be at least 256 and divisible by 32. |
 | `grandqc_artifact_overlap_fraction` | `0.5` | Fractional artifact-tile overlap used for probability blending. |
 | `prepare_crop_memory_gb` | `12` | RAM allocation for the streaming analysis crop created around GrandQC clean tissue intersected with the optional ROI. |
-| `convert_compression` / `convert_jpeg_quality` | `JPEG` / `75` | Shared codec and JPEG quality for both the normalized input OME-TIFF and the pyramidal RGB OME-TIFF analysis crop. |
+| `convert_compression` / `convert_jpeg_quality` | `LZW` / `75` | Shared codec for both the normalized input OME-TIFF and the pyramidal RGB OME-TIFF analysis crop; JPEG quality applies only when JPEG is explicitly selected. |
 | `grandqc_preview_max_side` | `4096` | Maximum long side of GrandQC preview assets. |
 | `grandqc_crop_mask_memory_gb` | `4` | RAM allocation for cropping the low-resolution full-slide clean-tissue mask into the analysis frame. |
 
@@ -358,7 +358,35 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `marker_quantification_memory_gb` | `24` | RAM allocation. |
 | `marker_quantification_time` | `12h` | Time allocation. |
 
-## Final cluster GeoJSON
+## Bora refinement and GeoJSON export
+
+The public `medsam_refine` and `cluster_geojson` restart names remain stable, but their default implementation is a single pinned Bora operation.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `grown_tissue_refine_method` | `bora` | Production refinement/vectorization engine. Use `medsam_border_refine` only for an explicit legacy sensitivity analysis. |
+| `bora_revision` | `00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e` | Immutable Bora source revision required by the process and runtime image. |
+| `bora_backend` | `watershed` | Bora refinement backend; the production profile combines annealed-wand competition with native watershed. |
+| `bora_device` | `auto` | Resolve CPU/CUDA from the pipeline runtime plan, or request `cpu`/`cuda` explicitly. |
+| `bora_core_erosion` | `16` | Protected label-core erosion in pixels. Protected cores cannot be relabelled. |
+| `bora_outer_dilation` | `0` | Permitted foreground expansion. Zero preserves the upstream GrandQC/KODAMA support footprint. |
+| `bora_smooth_radius` | `0` | Post-refinement morphological closing radius. Zero avoids unsupported foreground changes. |
+| `bora_stream_mode` | `auto` | Select block-streaming automatically, or force `always`/`never`. |
+| `bora_block_size` | `1024` | Streaming block height in pixels. |
+| `bora_pyramid_compression` | `LZW` | Lossless compression for the required pyramidal categorical OME-TIFF. |
+| `bora_annealed_wand` | `true` | Enable annealed competition among adjacent labels before watershed. |
+| `bora_wand_boundary_radius` | `64` | Maximum internal boundary-edit band in pixels. |
+| `bora_wand_downsample` | `4` | Downsampling used by the annealed optimizer. |
+| `bora_wand_iterations` | `16` | Annealing iterations from temperature 2.0 to 0.05. |
+| `bora_wand_connectivity` | `8` | Four- or eight-neighbour competition connectivity. |
+| `bora_watershed_resolution` | `native` | Run marker-controlled watershed at native resolution; `accelerated` is a sensitivity option. |
+| `bora_geojson_backend` | `multicpu` | Bora vectorization backend. |
+| `bora_geojson_profile` | `accurate` | Bora simplification/fidelity profile. |
+| `bora_geojson_workers` | `4` | Parallel workers for GeoJSON generation. |
+
+## Final cluster GeoJSON (legacy exporter and shared naming)
+
+Final cluster GeoJSON files use `original_image_level0_pixel_edges` coordinates regardless of whether Bora or the legacy exporter generated the geometry. The working categorical raster remains aligned to `crop_roi.tif`; after vectorization, CellPhenotyper applies the exact `offset_crop_to_original` translation from `prepared_crop/shift.json`. The exported FeatureCollection records unit scale, integer XY offset, crop size, original-image size and the SHA-256 of `shift.json`. Geometry outside the declared crop or an inconsistent crop transform is a hard failure. This coordinate conversion is mandatory pipeline behavior and has no user-tunable parameter.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -420,17 +448,20 @@ Grid sampling controls:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `uni2_sampling_mode` | `grid` | `grid` is the default regular spatial route and does not run cell-centred UNI-2. `cells` explicitly uses nucleus-centred observations; `both` keeps grid primary and adds a complete namespaced cell-centred route for comparison. |
+| `foundation_encoder` | `uni2-h` | Shared encoder selector: `uni2-h`, `virchow`, `virchow2`, or `phikon-v2`. The downstream KODAMA contract is unchanged. |
+| `foundation_inner_strategy` | `inner28_stride56` | Shared local/context geometry for every registered encoder. Alternatives are `inner56_stride56`, `inner90_stride90`, and `custom`. |
+| `foundation_inner_extraction` | `token_subset` | `token_subset` pools central spatial tokens from the context forward pass; `masked_forward` performs a second masked-image forward pass. |
+| `foundation_inner_square_px`, `foundation_grid_stride_px` | `28`, `56` | Model-pixel geometry used only with `foundation_inner_strategy=custom`. A custom stride of `0` follows the custom inner width. |
 | `uni2_grid_min_tissue_fraction` | `0.05` | Minimum tissue fraction in the visible inner-square core required to retain a grid observation. |
-| `uni2_grid_stride_px` | `0` | Grid-centre stride in UNI2 model-input pixels. `0` uses `uni2_inner_square_fixed_px`; a positive value separates sampling density from local pooling width. |
 | `uni2_grid_preview_max_side` | `2048` | Maximum grid QC preview dimension. |
 | `uni2_grid_cpus`, `uni2_grid_memory_gb`, `uni2_grid_time` | `4`, `8`, `2h` | Resource request for tissue occupancy and grid-table construction. |
 
 UNI-2 behavior:
 
 - `uni2_sampling_mode=cells` preserves the original nucleus-centred pipeline. `uni2_sampling_mode=grid` creates regular GrandQC-filtered observations in `09_grid_tiles`, then uses those same observation IDs and coordinates for UNI-2, KODAMA, clustering, and cluster-mask generation. `uni2_sampling_mode=both` additionally writes a complete cell-centred route under `<sample>__cells`, from embeddings through GeoJSON. Cell UNI-2 waits for primary grid UNI-2 to finish to avoid loading two UNI-2 models on one GPU; subsequent route tasks follow the shared scheduler policy.
-- In grid mode, the level-0 source stride is `round(effective_grid_stride_px * extraction_tile_size / uni2_tile_size)`, where `effective_grid_stride_px` is `uni2_grid_stride_px` when positive and otherwise `uni2_inner_square_fixed_px`. This separates observation spacing from the local token-pooling square while preserving the historical coupled default. Logical grid cores remain adjacent; the larger UNI2 context crops overlap by `extraction_tile_size - stride`.
+- In grid mode, the level-0 source stride is `round(foundation_grid_stride_px * extraction_tile_size / uni2_tile_size)`. The named presets apply the same inner width, stride, physical calibration and extraction definition to UNI2-h and Virchow2. Historical `uni2_*` geometry arguments remain aliases for exact archived-run reproduction.
 - `uni2_grid_min_tissue_fraction=0.05` excludes grid cores with less than 5% tissue. Grid mode is intentionally restricted to fused `tile,inner_square` UNI2-h embeddings; cell-defined `nuclei` and `cyto` families are rejected rather than mixed with grid observations.
-- `uni2_fuse_tile_inner_square=true` is the optimized default: one Python/model session loads UNI2-h once and performs one forward pass for each 224 x 224 tile. The `tile` vector uses the CLS token. The `inner_square` vector averages patch tokens whose centers fall inside the fixed central 90 x 90-pixel square; it does not use the cytoplasm mask and does not trigger a second image forward pass. Set this to `false` only for comparison with the slower legacy masked-image forward definition.
+- `uni2_fuse_tile_inner_square=true` is the optimized default: one Python/model session loads the selected encoder once and performs one forward pass for each 224 x 224 context tile. The `tile` vector follows the registered encoder pooling contract. The `inner_square` vector pools spatial patch tokens whose centres fall inside the strategy's central square and excludes model-specific register tokens. Set `foundation_inner_extraction=masked_forward` only for the declared slower two-pass sensitivity definition.
 - `uni2_target_mpp=0.25` makes the source crop physically calibrated before the 224 x 224 UNI2 input transform. If a StarDist crop lost OME pixel-size metadata, UNI2 recovers the MPP from the crop `shift.json` and the original input image when possible; otherwise it uses `uni2_default_source_mpp`.
 - For a source image at `0.08706 µm/px`, the default 224-pixel UNI2 input is extracted from a 643-pixel source crop, giving an effective resolution of about `0.25 µm/px`.
 - `uni2_save_tiles=false` is the production default. KODAMA reads embedding shards, not per-cell PNG crops, so saving tiles is mainly for debugging/QC and can dominate disk I/O on large runs.
@@ -440,7 +471,14 @@ UNI-2 behavior:
 - `kodama_landmarks=10000` is the default for both UNI-2 and GigaTIME-marker KODAMA runs. PCA computes `kodama_dims_to_run` components (50 by default), and the raw feature matrix is deleted immediately after PCA to release RAM. `kodama_ncomp=50` independently sets the `ncomp` argument passed to `KODAMA.matrix`, bounded by the input PCA dimension count. Its meaning depends on the actual classifier: native raw-data kNN does not fit a 50-component PLS model. The classifier and ncomp applicability are recorded explicitly; no implicit classifier change is made.
 - With `uni2_sampling_mode=both`, `COMPARE_UNI2_ROUTES` aggregates cell-centred KODAMA coordinates inside retained grid cores before comparison. Independently fitted axes are Procrustes-aligned; predefined endpoints include coverage, pairwise-distance correlation, 15-neighbor overlap, spatial coherence, and cross-validated prediction of GigaTIME marker proxies when available. The report does not choose a winning route automatically.
 
-MedSAM behavior:
+Bora production behavior:
+
+- Bora receives the dense grid cluster mask directly; the grid route does not run tissue growth. The cell-centred route first grows sparse labels through the admissible tissue support.
+- GrandQC artifact candidates remain in UNI-2, KODAMA and Bora support. Only candidates independently confirmed as KODAMA outliers (uncertainty code 5) are hard-negative pixels. The adapter fails closed on any final label outside tissue support or on a confirmed outlier.
+- Annealed-wand competition is restricted to a 64-pixel internal boundary band, preserves protected label cores and is followed by native marker-controlled watershed. The production profile sets outer dilation and closing to zero.
+- Bora writes the pyramidal LZW categorical OME-TIFF and class-aware GeoJSON in one process. CellPhenotyper adds uncertainty/provenance rasters, a bound provenance receipt, the exact Bora revision and the KODAMA/tissue preview without changing Bora labels.
+
+Legacy MedSAM sensitivity behavior (`grown_tissue_refine_method=medsam_border_refine`):
 
 - MedSAM refinement runs per cluster label. For large WSI crops, each cluster border is split into overlapping tiles controlled by `medsam_cluster_tile_size` and `medsam_cluster_tile_overlap`, so a tile may legitimately contain only one cluster.
 - The crop-aligned GrandQC clean-tissue/ROI mask is a hard negative constraint inside MedSAM. GrandQC-empty and artifact pixels are excluded from seeds, baseline labels, dilation envelopes, prompts, editable bands, hole filling and final labels. Stage 14 fails if its final zero-leakage assertion is violated.
@@ -480,7 +518,7 @@ Additional automatic outputs:
 - `14_medsam_refine_tissue/<sample>/` contains the variant-specific KODAMA membership PNG copied next to each MedSAM-refined mask as `<sample>_<variant>_medsam_kodama_membership.png`.
 # Multi-Model Cell Identification
 
-`cell_detection_mode=stardist` is the shipped single-detector default. `cell_detection_mode=consensus` explicitly enables GPU-only multi-detector instance fusion. The deprecated `cell_consensus_enable` parameter is read only as a compatibility fallback when `cell_detection_mode` is absent, and its fallback default is also disabled. A consensus request on CPU fails rather than silently changing the analyzed cell population. StarDist, HoVer-Net MoNuSAC, and CellViT++ have no inter-detector channel dependency and can run in parallel from the same shared crop and GrandQC mask; fusion waits for all three. `cell_consensus_fusion_acceptance_policy=broad_pair` requires the broad-scope StarDist and CellViT++ pair for a canonical instance; HoVer-Net remains scoped support. `any_two` reproduces the legacy policy and must be treated as a sensitivity analysis. `cell_consensus_min_support` remains an additional minimum-source gate (default `2`). `cell_consensus_match_radius_um` is the direct broad-pair maximum centroid distance in physical units (default `4.0` microns); it is converted to pixels from `shift.json`. `cell_consensus_geometry_priority` deterministically selects the preferred available contour for each accepted component. `cell_consensus_min_agreement_score` can add a stricter broad-detector geometric gate. Instance geometry, broad support, scoped support and detector-specific phenotype evidence are reported separately: the pipeline does not vote incompatible detector taxonomies into a synthetic cell type. `cell_consensus_count_ratio_warning` defaults to `2.0` and reports count imbalance separately for all detectors and for the broad-scope StarDist/CellViT++ pair. Because detector contours can overlap completely, the raster writer reserves one unique centroid-near seed pixel per canonical cell and verifies that every ID in `objects.csv` is present in `labels.tif` before publishing the stage. Pairwise match fractions, centroid distances, polygon IoU and Hausdorff distances are detector-agreement benchmarks, not reference-standard accuracy or calibrated confidence estimates.
+`cell_detection_mode=none` is the cell-free tissue-domain route and requires `uni2_sampling_mode=grid`; it skips every cell detector and cell-derived stage. `cell_detection_mode=stardist` is the shipped single-detector default. `cell_detection_mode=consensus` explicitly enables GPU-only multi-detector instance fusion. The deprecated `cell_consensus_enable` parameter is read only as a compatibility fallback when `cell_detection_mode` is absent, and its fallback default is also disabled. A consensus request on CPU fails rather than silently changing the analyzed cell population. StarDist, HoVer-Net MoNuSAC, and CellViT++ have no inter-detector channel dependency and can run in parallel from the same shared crop and GrandQC mask; fusion waits for all three. `cell_consensus_fusion_acceptance_policy=broad_pair` requires the broad-scope StarDist and CellViT++ pair for a canonical instance; HoVer-Net remains scoped support. `any_two` reproduces the legacy policy and must be treated as a sensitivity analysis. `cell_consensus_min_support` remains an additional minimum-source gate (default `2`). `cell_consensus_match_radius_um` is the direct broad-pair maximum centroid distance in physical units (default `4.0` microns); it is converted to pixels from `shift.json`. `cell_consensus_geometry_priority` deterministically selects the preferred available contour for each accepted component. `cell_consensus_min_agreement_score` can add a stricter broad-detector geometric gate. Instance geometry, broad support, scoped support and detector-specific phenotype evidence are reported separately: the pipeline does not vote incompatible detector taxonomies into a synthetic cell type. `cell_consensus_count_ratio_warning` defaults to `2.0` and reports count imbalance separately for all detectors and for the broad-scope StarDist/CellViT++ pair. Because detector contours can overlap completely, the raster writer reserves one unique centroid-near seed pixel per canonical cell and verifies that every ID in `objects.csv` is present in `labels.tif` before publishing the stage. Pairwise match fractions, centroid distances, polygon IoU and Hausdorff distances are detector-agreement benchmarks, not reference-standard accuracy or calibrated confidence estimates.
 
 HoVer-Net uses `hovernet_target_mpp=0.25`, the official `fast` MoNuSAC checkpoint, and the resource parameters prefixed by `hovernet_`. The bounded-disk default is `hovernet_execution_mode=streaming_tiles`: 4,096-pixel ownership cores receive a 256-pixel context halo, only GrandQC-supported cores run, and no slide-wide prediction or instance map is allocated. `hovernet_stream_batch_tiles=64` bounds simultaneously materialized JPEG inputs. Half-open core ownership retains each centroid once. The output is gzip-compressed JSON; contours are omitted by default because HoVer-Net supplies scoped phenotype support while CellViT++ supplies canonical geometry under `broad_pair`. Set `hovernet_export_contours=true` for an explicit geometry sensitivity analysis. `hovernet_execution_mode=wsi` retains the official slide-wide implementation and its expert recovery cache. `hovernet_postproc_workers=0` selects a memory-aware worker count (one worker per 6 GB of allocated memory); an explicit value is still capped by that safety limit. The MoNuSAC positive classes do not cover all nuclei, so its count is not expected to match StarDist or CellViT++. CellViT++ uses `cellvit_model` (`HIPT` by default), `cellvit_taxonomy`, mixed precision via `cellvit_amp`, and resource parameters prefixed by `cellvit_`. `cellvit_ray_workers` defaults to `1` because CellViT++ 1.0.9 fails with its upstream zero-worker default; `cellvit_ray_worker_cpus=0` divides the allocated task CPUs automatically. The HIPT weights and classifiers are baked once into `cellvit_cache_dir` inside the versioned GPU image, avoiding duplicate downloads across tasks and runs.
 

@@ -87,8 +87,8 @@ graph LR
     subgraph pathway_a [2A · Pathway A — tissue-domain morphology]
         %%metro direction: LR
         %%metro grid: pathway_a | 1,0,1,2
-        grid_tiling([Overlapping grid; adjacent inner cores])
-        grid_uni2([UNI-2: tile + inner-centre features])
+        grid_tiling([Overlapping grid; shared inner strategy])
+        grid_uni2([Foundation: context + inner features])
         grid_kodama([Grid PCA + KODAMA])
         grid_leiden([Grid Leiden phenotypes])
 
@@ -124,7 +124,7 @@ graph LR
         %%metro grid: pathway_b_cell_features | 2,1,1,1
         %%metro entry: left | cell_morphology
         cell_tiling([Cell-centred tiles])
-        cell_uni2([UNI-2: tile + 90 px inner-square])
+        cell_uni2([Foundation: context + inner features])
         cell_kodama([Cell PCA + KODAMA])
         cell_leiden([Cell Leiden phenotypes])
 
@@ -140,8 +140,8 @@ graph LR
         cell_cluster_mask([Rasterize cell phenotypes])
         grid_cluster_mask([Rasterize grid phenotypes])
         grow_to_tissue([Grow sparse cell labels through tissue])
-        medsam([GPU MedSAM boundary refinement])
-        cluster_geojson([Tissue phenotype GeoJSON])
+        medsam([Bora boundary refinement])
+        cluster_geojson([Bora tissue phenotype GeoJSON])
 
         morphology_labels -->|cell_morphology| cell_cluster_mask
         morphology_labels -->|tissue_grid| grid_cluster_mask

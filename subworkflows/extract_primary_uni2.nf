@@ -35,7 +35,7 @@ workflow EXTRACT_PRIMARY_UNI2 {
     : (use_roi_crop_for_uni2 ? labels_tif_ch : labels_full_ch)
   def uni2_cyto_mask_source_ch = use_roi_crop_for_uni2 ? cyto_mask_ch : cyto_mask_full_ch
   def pairedFoundationEncoders = ['uni2-h', 'virchow', 'virchow2', 'phikon-v2'] as Set
-  def selectedFoundationEncoder = params.uni2_encoder?.toString()?.toLowerCase()
+  def selectedFoundationEncoder = PipelineHelpers.resolveFoundationRepresentation(params).foundation_encoder
   def canFuseTileInnerSquare = fuse_tile_inner_square_uni2 &&
     include_uni2_inner_square &&
     pairedFoundationEncoders.contains(selectedFoundationEncoder)

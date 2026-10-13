@@ -24,7 +24,7 @@ process GRID_CLUSTERS_TO_MASK {
     script:
     def scriptPath = "${projectDir}/${params.uni2_grid_cluster_mask_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [scriptPath, "${projectDir}/bin/labels_to_cluster_mask.py", "${projectDir}/bin/tiff_preview.py", "${projectDir}/bin/ome_tiff_metadata.py"].each {
+    [scriptPath, "${projectDir}/bin/labels_to_cluster_mask.py", "${projectDir}/bin/tiff_preview.py", "${projectDir}/bin/ome_tiff_metadata.py", "${projectDir}/bin/grow_to_tissue.py"].each {
       codeDigest.update(new File(it).bytes)
     }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
@@ -47,7 +47,11 @@ process GRID_CLUSTERS_TO_MASK {
       --preview-factor ${params.cluster_mask_preview_factor} \
       --preview-threshold-mb ${params.cluster_mask_preview_threshold_mb} \
       --preview-alpha ${params.cluster_mask_preview_alpha} \
-      --preview-background "${preview_image_tif}"
+      --preview-background "${preview_image_tif}" \
+      ${params.cluster_mask_pyramid ? '--pyramid' : ''} \
+      --pyramid-compression "${params.cluster_mask_pyramid_compression}" \
+      --pyramid-workers ${params.cluster_mask_pyramid_workers} \
+      --pyramid-downsample "${params.cluster_mask_pyramid_downsample}"
     """
 
     stub:

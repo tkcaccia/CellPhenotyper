@@ -21,7 +21,7 @@ No current CellPhenotyper route has completed a multi-site external biological v
 | Primary use | Research-only exploratory segmentation, phenotype representation, tissue-domain discovery, virtual staining, or outcome research | One primary `analysis_intent` must be selected. These are separate claims and observation units. |
 | Clinical use | Unsupported | Outputs are not diagnoses, treatment recommendations, calibrated assays, or validated clinical probabilities. |
 | Other stains | Unsupported by the scientific contract | IHC, special stains, fluorescence and multiplex images may be useful as external references but are not valid H&E pipeline inputs without a separate validation. |
-| Image channels | Three-channel RGB-compatible color | JPEG-in-TIFF YCbCr storage is accepted because standard WSI readers decode it to RGB. Grayscale, multispectral and arbitrary multichannel analysis inputs are not supported by the strict default. |
+| Image channels | Three-channel RGB-compatible color | LZW is the lossless default. JPEG-in-TIFF YCbCr is accepted only when the converted level-zero pixels pass libvips decoding and sampled source-fidelity QC. Grayscale, multispectral and arbitrary multichannel analysis inputs are not supported by the strict default. |
 | Image dimensionality | One two-dimensional brightfield scene per resolved sample | Z-stacks, time series, focal stacks, volumetric images and serial-section registration are not validated routes. |
 | Human oversight | Required for biological interpretation | GrandQC exclusions, detector disagreements, virtual markers, clusters, MedSAM edits and outcome scores require review appropriate to the intended claim. |
 
@@ -48,7 +48,7 @@ No organ type currently carries a CellPhenotyper accuracy claim. The cached Visi
 | MPP anisotropy | Maximum 5% relative X/Y difference | Larger differences fail rather than silently assuming square pixels. |
 | Metadata-source agreement | Maximum 2% conflict among OME, TIFF-tag and OpenSlide/pyvips sources | Conflicting sources fail unless an independently verified explicit override is recorded. |
 | Conversion drift | Maximum 2% between source and converted effective MPP | Larger drift fails. |
-| Cell detectors, GigaTIME and UNI-2 | Resampled to 0.25 µm/px where configured | Upsampling standardizes tensor geometry but cannot recover missing spatial detail. |
+| Cell detectors, GigaTIME and foundation encoders | Resampled to 0.25 µm/px where configured | Upsampling standardizes tensor geometry but cannot recover missing spatial detail. |
 | TITAN | 0.5 µm/px with 512-pixel patches | Applies only to the explicitly selected tissue section. |
 | GrandQC artifact checkpoint | Auto-selects 1.0, 1.5 or 2.0-MPP model by source MPP | Checkpoint selection is recorded, but accuracy across the accepted MPP interval still requires stratified validation. |
 
@@ -94,8 +94,8 @@ Magnification labels such as 20x or 40x are not accepted as a substitute for phy
 | HoVer-Net MoNuSAC | Scoped support with original cell-type evidence retained separately | Not an exhaustive cellularity estimate and not a phenotype consensus |
 | TMA detection | Heuristic decision, spot GeoJSON and cell assignment implemented | Candidate core map requiring review; no automated TMA accuracy claim |
 | GigaTIME | Five-channel GPU output continuity demonstrated on one WSI; seam gate implemented | Uncalibrated virtual-marker scores; no measured-abundance or marker-accuracy claim |
-| Cell-centred UNI-2 | Calibrated whole-context and central 90-pixel token-subset features | Contextual morphological representation; clusters are not established cell types |
-| Grid UNI-2 | Adjacent inner cores with overlapping context; route comparison implemented | Exploratory tissue domains; no preferred-route claim |
+| Cell-centred foundation encoder | Calibrated whole-context and central inner-region features; 28-pixel token subset by default | Contextual morphological representation; clusters are not established cell types |
+| Grid foundation encoder | Shared 28-pixel inner region on a 56-pixel stride inside overlapping contexts by default; route comparison implemented | Exploratory tissue domains; no preferred-route claim |
 | KODAMA and Leiden | Repeated seeds, assignment margins, stability, spatial metrics and abstention implemented | Exploratory partitions requiring independent biological interpretation |
 | Cell-mask growth | Restricted to sparse cell-centred masks | Deterministic support propagation, not learned ground truth |
 | MedSAM and boundary refinement | GrandQC-constrained edits and native-resolution QC implemented | Candidate refined boundaries; no expert-level accuracy claim |

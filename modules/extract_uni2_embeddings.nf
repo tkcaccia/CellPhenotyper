@@ -26,6 +26,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     tuple val(sample_id), val(embedding_mode), path("embeddings_${sample_id}_${embedding_mode}"), emit: embeddings_dir
 
     script:
+    def foundation = PipelineHelpers.resolveFoundationRepresentation(params)
     def zero_outside_flag = zero_outside_mask ? "--zero-outside-mask --outside-fill ${outside_fill}" : ''
     def force_full_flag = params.uni2_force_full_image ? '--force-full-image' : ''
     def save_tiles_flag = params.uni2_save_tiles ? '--save-tiles' : ''
@@ -34,7 +35,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def inner_square_factor_flag = "--inner-square-factor ${params.uni2_inner_square_factor}"
     def inner_square_min_flag = "--inner-square-min-px ${params.uni2_inner_square_min_px}"
     def inner_square_max_flag = "--inner-square-max-px ${params.uni2_inner_square_max_px}"
-    def inner_square_fixed_flag = "--inner-square-fixed-px ${params.uni2_inner_square_fixed_px}"
+    def inner_square_fixed_flag = "--inner-square-fixed-px ${foundation.uni2_inner_square_fixed_px}"
     def tiles_root_path = "embeddings_${sample_id}_${embedding_mode}/${params.uni2_tiles_root}"
     def resolvedComputeDevice = TaskRuntime.device(runtime_plan)
     def resolvedHardwareProfile = TaskRuntime.profile(runtime_plan)
@@ -42,7 +43,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, runtime_plan.memory_budget_gb as int)
     def requested_batch = Math.max(1, params.uni2_batch as int)
     def encoder_batch_cap = ['uni2-h': 256, 'virchow': 16, 'virchow2': 16, 'phikon-v2': 64]
-      .getOrDefault(params.uni2_encoder.toString().toLowerCase(), 1) as int
+      .getOrDefault(foundation.uni2_encoder.toString().toLowerCase(), 1) as int
     def initial_batch = Math.min(requested_batch, encoder_batch_cap)
     if (device_value == 'cpu') {
       if (task_mem_gb <= 4) initial_batch = Math.min(initial_batch, 2)
@@ -180,7 +181,7 @@ PY
       if [[ "\$AUTO_BATCH" -gt "\$MODEL_BATCH_CAP" ]]; then AUTO_BATCH="\$MODEL_BATCH_CAP"; fi
       ATTEMPT_BATCH="\$AUTO_BATCH"
     fi
-    echo "[INFO] Foundation encoder runtime tune: encoder=${params.uni2_encoder}, mem_gb=${task_mem_gb}, gpu_free_mib=\${GPU_FREE_MIB:-0}, gpu_usable_mib=\${GPU_USABLE_MIB:-0}, requested_batch=${requested_batch}, model_batch_cap=\$MODEL_BATCH_CAP, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
+    echo "[INFO] Foundation encoder runtime tune: encoder=${foundation.uni2_encoder}, inner_strategy=${foundation.foundation_inner_strategy_resolved}, mem_gb=${task_mem_gb}, gpu_free_mib=\${GPU_FREE_MIB:-0}, gpu_usable_mib=\${GPU_USABLE_MIB:-0}, requested_batch=${requested_batch}, model_batch_cap=\$MODEL_BATCH_CAP, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
       mkdir -p "\$OUTDIR"
@@ -208,7 +209,7 @@ PY
         ${inner_square_min_flag} \\
         ${inner_square_max_flag} \\
         ${inner_square_fixed_flag} \\
-        --encoder "${params.uni2_encoder}" \\
+        --encoder "${foundation.uni2_encoder}" \\
         --backend "${params.uni2_backend}" \\
         --pooling "${params.uni2_pooling}" \\
         --img-size ${params.uni2_img_size} \\
@@ -219,9 +220,10 @@ PY
         --embedding-storage "${embeddingStorage}" \\
         --embedding-mode "${embedding_mode}" \\
         --mask-block ${params.uni2_mask_block} \\
-        2> >(tee "\$ATTEMPT_ERR" >&2)
+        2>"\$ATTEMPT_ERR"
       RC=\$?
       set -e
+      cat "\$ATTEMPT_ERR" >&2 || true
 
       if [[ "\$RC" -eq 0 ]]; then
         echo "[INFO] UNI2 succeeded with batch=\$ATTEMPT_BATCH"
@@ -256,11 +258,12 @@ PY
     """
 
     stub:
+    def foundation = PipelineHelpers.resolveFoundationRepresentation(params)
     """
     echo "[INFO] Process code cache fingerprint: ${task.ext.code_fingerprint}"
     echo "[INFO] Process directory cache fingerprint: ${task.ext.source_fingerprint}"
     mkdir -p "embeddings_${sample_id}_${embedding_mode}"
     touch "embeddings_${sample_id}_${embedding_mode}/embeddings_000000.csv"
-    printf '{"model_provenance":{"used_model":false}}\n' > "embeddings_${sample_id}_${embedding_mode}/.${params.uni2_encoder}_embedding_complete.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "embeddings_${sample_id}_${embedding_mode}/.${foundation.uni2_encoder}_embedding_complete.json"
     """
 }

@@ -1,6 +1,6 @@
 process MASK_TO_GEOJSON {
     ext code_fingerprint: { ProcessCode.fingerprint(projectDir, 'mask_to_geojson', params) },
-        source_fingerprint: { ProcessCode.directoryFingerprint([mask_tif, uncertainty_tif, provenance_tif, provenance_json]) }
+        source_fingerprint: { ProcessCode.directoryFingerprint([mask_tif, uncertainty_tif, provenance_tif, provenance_json, shift_json]) }
     tag "${sample_id}:${cluster_variant}"
     label 'compute_medium'
     cache 'deep'
@@ -12,7 +12,7 @@ process MASK_TO_GEOJSON {
     time { params.cluster_geojson_time as String }
 
     input:
-    tuple val(sample_key), val(sample_id), val(cluster_variant), path(mask_tif, stageAs: 'source_labels/*'), path(uncertainty_tif, stageAs: 'source_uncertainty/*'), path(provenance_tif, stageAs: 'source_provenance/*'), path(provenance_json, stageAs: 'source_metadata/*'), val(provenance_flags)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(mask_tif, stageAs: 'source_labels/*'), path(uncertainty_tif, stageAs: 'source_uncertainty/*'), path(provenance_tif, stageAs: 'source_provenance/*'), path(provenance_json, stageAs: 'source_metadata/*'), path(shift_json, stageAs: 'source_coordinates/shift.json'), val(provenance_flags)
 
     output:
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask_smooth_class.geojson"), emit: cluster_geojson
@@ -42,6 +42,7 @@ process MASK_TO_GEOJSON {
     python "${geojson_script}" \
       --mask "${mask_tif}" \
       --sample-key "${sample_key}" --sample-id "${sample_id}" --cluster-variant "${cluster_variant}" \
+      --shift-json "${shift_json}" \
       ${uncertaintyFlag} ${provenanceFlag} \
       --page ${params.cluster_geojson_page} \
       --max-page-side ${params.cluster_geojson_max_page_side} \

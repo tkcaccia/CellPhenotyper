@@ -11,7 +11,7 @@ This page is step-based so you can choose where to start and where to stop.
 | Java + Nextflow already installed | `Step 3` | `Step 8-S` or `Step 8-D` |
 | Runtime already installed and working | `Step 5` | `Step 8-S` or `Step 8-D` |
 | Repo already cloned and runtime configured | `Step 7` | `Step 8-S` or `Step 8-D` |
-| Only need UNI-2 token refresh | `Step 7` | `Step 7` |
+| Only need model approval/token refresh | `Step 7` | `Step 7` |
 
 ## Step 0: Choose your shell environment
 
@@ -173,7 +173,7 @@ cd CellPhenotyper
 
 ## Step 6: Configure runtime image source
 
-Use published runtime images. The current validated GPU amd64 runtime is available as native SIF `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64` and OCI fallback `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference.
+Use published runtime images. The current GPU amd64 runtime is available as native SIF `oras://ghcr.io/tkcaccia/cellphenotyper:2.9-sif-gpu-amd64` and OCI fallback `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64`; `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64` remains the published CPU amd64 reference.
 The amd64 GPU SIF is larger than the GitHub Release asset limit, so obtain it from the verified GHCR/ORAS reference rather than expecting a GitHub Release attachment.
 
 Container rule:
@@ -185,13 +185,13 @@ Container rule:
 Reference OCI tags:
 
 - CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
-- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`
+- GPU amd64: `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64`
 
 Published GHCR/ORAS SIF references:
 
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-arm64`
-- `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64`
+- `oras://ghcr.io/tkcaccia/cellphenotyper:2.9-sif-gpu-amd64`
 - `oras://ghcr.io/tkcaccia/cellphenotyper:2.2-sif-gpu-arm64`
 
 The arm64 GPU SIF is a legacy artifact and must be validated against the target GPU compute capability; GB10-class (`sm_121`) systems require a compatible rebuilt image.
@@ -253,12 +253,12 @@ Pull images with Docker:
 
 ```bash
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64
+docker pull ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64
 ```
 
 Use:
 - `2.2-amd64` on Linux x86_64/amd64
-- `cellphenotyper-runtime:2.8-gpu-amd64` on Linux amd64 with NVIDIA
+- `cellphenotyper-runtime:2.9-gpu-amd64` on Linux amd64 with NVIDIA
 
 ## Step 6-M (Maintainer image publish to GHCR)
 
@@ -286,27 +286,53 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker push "${IMAGE}"
 ```
 
-## Step 7: Configure UNI-2 token (required for full UNI-2 run)
+## Step 7: Configure model access
 
-Why: UNI-2 model access is authenticated through Hugging Face.
+Why: the published container supplies the normal runtime, but gated and private
+models cannot legally or technically be granted by CellPhenotyper.
 
-1. Sign in at [Hugging Face](https://huggingface.co)
-2. Request access to [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h)
-3. Create a read token: [https://huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-4. Save token in `tokens.env` (recommended, file is git-ignored):
+Request access only for the routes you intend to enable:
+
+| Route | Access page or required local asset |
+|---|---|
+| UNI2-h | [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h) |
+| Virchow | [paige-ai/Virchow](https://huggingface.co/paige-ai/Virchow) |
+| Virchow2 | [paige-ai/Virchow2](https://huggingface.co/paige-ai/Virchow2) |
+| Phikon-v2 | Public [owkin/phikon-v2](https://huggingface.co/owkin/phikon-v2), subject to its non-commercial license |
+| GigaTIME | [prov-gigatime/GigaTIME](https://huggingface.co/prov-gigatime/GigaTIME) |
+| TITAN/CONCH | [MahmoodLab/TITAN](https://huggingface.co/MahmoodLab/TITAN) |
+| PathSegmentor | Pinned source checkout, config and checkpoint supplied through `pathsegmentor_repo`, `pathsegmentor_config` and `pathsegmentor_checkpoint` |
+| PathoFMPred | Private installed R package/model archive supplied by its provider |
+
+Gated approvals are per repository. Sign in with the required institutional
+primary email, accept each model's terms, wait for access to be granted, and
+then create a read token at [Hugging Face tokens](https://huggingface.co/settings/tokens).
+Save token references in `tokens.env` (git-ignored):
 
 ```bash
-printf 'HF_UNI2="%s"\n' "<your_hf_read_token>" > tokens.env
+umask 077
+printf 'HF_UNI2=%s\nHF_GIGATIME=%s\nHF_TOKEN=%s\n' \
+  '<read-token>' '<read-token>' '<read-token>' > tokens.env
+chmod 600 tokens.env
 ```
 
-By default the pipeline reads token file/variable from:
+By default foundation encoders read:
 
 - `hf_token_env_file: tokens.env`
 - `hf_token_env_var_name: HF_UNI2`
 
+GigaTIME reads `HF_GIGATIME` and TITAN reads `HF_TOKEN`. The same read token may
+be used in all variables only when that account has separately been approved for
+every selected gated repository.
+
 Important for Docker profile:
 - Keep `tokens.env` in the repository root or another path inside the bind-mounted project directory.
-- If the token file is outside the mounted project path, tasks may fail with `401 Unauthorized` for UNI-2.
+- If the token file is outside the mounted project path, tasks may fail with `401 Unauthorized`.
+
+Do not commit tokens, gated weights or private model archives. For the complete
+access matrix, public/bundled checkpoint routes, container registry login,
+offline cache staging and error diagnostics, read
+[Tool and model access](docs/TOOL_AND_MODEL_ACCESS.md).
 
 ## Step 8-S: Run complete pipeline with Singularity (end step)
 
@@ -403,4 +429,4 @@ For GPU run, set:
 
 - `compute_device: gpu` in `pipeline_paramers.yml`
 - `runtime_image_mode: manual` in `pipeline_paramers.yml`
-- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64` in `pipeline_paramers.yml`
+- `gpu_container_image: ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64` in `pipeline_paramers.yml`

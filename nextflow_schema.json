@@ -151,8 +151,8 @@
         "convert_compression": {
           "type": "string",
           "enum": ["JPEG", "LZW", "DEFLATE", "NONE", "UNCOMPRESSED"],
-          "default": "JPEG",
-          "description": "TIFF storage codec shared by the converted OME-TIFF and crop_roi.tif. JPEG is lossy; LZW and DEFLATE are lossless."
+          "default": "LZW",
+          "description": "TIFF storage codec shared by the converted OME-TIFF and crop_roi.tif. LZW is the lossless default; JPEG is an explicit lossy option."
         },
         "convert_jpeg_quality": {
           "type": "integer",
@@ -281,9 +281,9 @@
         },
         "grandqc_clean_tissue_policy": {
           "type": "string",
-          "enum": ["tissue_minus_artifacts", "artifact_normal_only"],
-          "default": "tissue_minus_artifacts",
-          "description": "Build clean support from tissue detection minus explicit artifacts, or use legacy artifact class 1 only."
+          "enum": ["tissue_only", "tissue_minus_artifacts", "artifact_normal_only"],
+          "default": "tissue_only",
+          "description": "Retain all GrandQC tissue while carrying artifact candidates separately, or opt into a legacy artifact-subtraction policy."
         }
       }
     },
@@ -293,9 +293,9 @@
       "properties": {
         "cell_detection_mode": {
           "type": "string",
-          "enum": ["consensus", "stardist"],
+          "enum": ["none", "consensus", "stardist"],
           "default": "stardist",
-          "description": "Scientific detector-population choice. StarDist is the default; consensus is an explicit GPU-only opt-in. Hardware must not change the selected mode."
+          "description": "Scientific detector-population choice. none is the cell-free tissue-grid route; StarDist is the default; consensus is an explicit GPU-only opt-in. Hardware must not change the selected mode."
         },
         "cell_consensus_fusion_acceptance_policy": {
           "type": "string",
@@ -364,16 +364,21 @@
           "default": "grid",
           "description": "grid is the default tissue-domain route; cells explicitly enables nucleus-centred sampling, and both adds an auxiliary cell-centred comparison."
         },
-        "uni2_encoder": {"type": "string", "enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"], "default": "uni2-h", "description": "Patch foundation encoder supplied to the unchanged KODAMA workflow. UNI2-h remains the default; alternatives are experimental until ground-truth validation."},
+        "foundation_encoder": {"type": "string", "enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"], "default": "uni2-h", "description": "Encoder-neutral patch foundation model supplied to the unchanged KODAMA workflow. The same inner-region strategy is used for UNI2-h and Virchow2."},
+        "foundation_inner_strategy": {"type": "string", "enum": ["inner28_stride56", "inner56_stride56", "inner90_stride90", "custom"], "default": "inner28_stride56", "description": "Shared local/context geometry for every registered foundation encoder. Presets name the model-pixel inner-square width and grid stride."},
+        "foundation_inner_extraction": {"type": "string", "enum": ["token_subset", "masked_forward"], "default": "token_subset", "description": "Shared method for deriving the inner representation. token_subset pools central spatial tokens from the context forward pass; masked_forward performs a second masked-image pass."},
+        "foundation_inner_square_px": {"type": "integer", "minimum": 1, "default": 28, "description": "Custom model-space inner-square width; used only when foundation_inner_strategy=custom."},
+        "foundation_grid_stride_px": {"type": "integer", "minimum": 0, "default": 56, "description": "Custom model-space grid stride; used only when foundation_inner_strategy=custom. Zero follows the inner-square width."},
+        "uni2_encoder": {"type": "string", "enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"], "description": "Deprecated compatibility alias for foundation_encoder."},
         "uni2_embedding_storage": {"type": "string", "enum": ["csv", "binary"], "default": "csv", "description": "Numerical embedding shard storage. Binary retains exact model float32 values with explicit row metadata and checksums; no change to observation or feature definitions."},
         "uni2_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
         "uni2_tile_size": {"type": "integer", "minimum": 32, "default": 224},
-        "uni2_inner_square_fixed_px": {"type": "integer", "minimum": 1, "default": 90},
-        "uni2_grid_stride_px": {"type": "integer", "minimum": 0, "default": 0, "description": "Grid-centre stride in model-input pixels. Zero uses uni2_inner_square_fixed_px for compatibility."},
+        "uni2_inner_square_fixed_px": {"type": "integer", "minimum": 1, "description": "Deprecated compatibility alias. When supplied, it overrides the selected foundation inner strategy."},
+        "uni2_grid_stride_px": {"type": "integer", "minimum": 0, "description": "Deprecated compatibility alias. Zero follows uni2_inner_square_fixed_px."},
         "uni2_include_inner_square": {"type": "boolean", "default": true},
         "uni2_fuse_tile_inner_square": {"type": "boolean", "default": true},
         "uni2_use_roi_crop": {"type": "boolean", "default": true},
-        "uni2_paired_inner_square_mode": {"type": "string", "enum": ["token_subset", "masked_forward"], "default": "token_subset"},
+        "uni2_paired_inner_square_mode": {"type": "string", "enum": ["token_subset", "masked_forward"], "description": "Deprecated compatibility alias for foundation_inner_extraction."},
         "uni2_mask_context_mode": {"type": "string", "enum": ["none", "label", "inner_square", "label_and_inner_square"], "default": "label"},
         "kodama_embedding_mode": {"type": "string", "minLength": 1, "default": "tile,inner_square"},
         "kodama_dims_to_run": {"type": "integer", "minimum": 2, "default": 50},
@@ -422,6 +427,42 @@
         "cluster_primary_variant": {"type": "string", "const": "standard", "default": "standard"},
         "cluster_secondary_variant": {"type": "string", "enum": ["none", "fine"], "default": "none"},
         "cluster_secondary_profile": {"type": "string", "const": "fine", "default": "fine"},
+        "grown_tissue_refine_method": {"type": "string", "enum": ["bora", "medsam_border_refine", "none"], "default": "bora", "description": "Bora replaces the historical stage-18 MedSAM refinement and stage-19 vectorization; the legacy route remains an explicit sensitivity option."},
+        "bora_repository": {"type": "string", "const": "https://github.com/tkcaccia/Bora", "default": "https://github.com/tkcaccia/Bora"},
+        "bora_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$", "default": "00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e"},
+        "bora_source_dir": {"type": "string", "default": ""},
+        "bora_backend": {"type": "string", "enum": ["watershed", "medsam", "pathsegmentor", "pathsegmentator"], "default": "watershed"},
+        "bora_device": {"type": "string", "pattern": "^(?:auto|cpu|cuda(?::[0-9]+)?)$", "default": "auto"},
+        "bora_core_erosion": {"type": "integer", "minimum": 0, "default": 16},
+        "bora_outer_dilation": {"type": "integer", "minimum": 0, "default": 0},
+        "bora_tile_size": {"type": "integer", "minimum": 256, "default": 2048},
+        "bora_tile_overlap": {"type": "integer", "minimum": 0, "default": 256},
+        "bora_min_area": {"type": "integer", "minimum": 0, "default": 32},
+        "bora_smooth_radius": {"type": "integer", "minimum": 0, "default": 0},
+        "bora_stream_mode": {"type": "string", "enum": ["auto", "always", "never"], "default": "auto"},
+        "bora_block_size": {"type": "integer", "minimum": 256, "default": 1024},
+        "bora_pyramid": {"type": "boolean", "const": true, "default": true},
+        "bora_pyramid_compression": {"type": "string", "enum": ["LZW", "UNCOMPRESSED"], "default": "LZW"},
+        "bora_pyramid_workers": {"type": "integer", "minimum": 1, "default": 8},
+        "bora_annealed_wand": {"type": "boolean", "default": true},
+        "bora_wand_boundary_radius": {"type": "integer", "minimum": 0, "default": 64},
+        "bora_wand_downsample": {"type": "integer", "minimum": 1, "default": 4},
+        "bora_wand_iterations": {"type": "integer", "minimum": 1, "default": 16},
+        "bora_wand_initial_temperature": {"type": "number", "exclusiveMinimum": 0, "default": 2.0},
+        "bora_wand_final_temperature": {"type": "number", "exclusiveMinimum": 0, "default": 0.05},
+        "bora_wand_data_weight": {"type": "number", "exclusiveMinimum": 0, "default": 1.0},
+        "bora_wand_smoothness_weight": {"type": "number", "exclusiveMinimum": 0, "default": 0.3},
+        "bora_wand_edge_beta": {"type": "number", "exclusiveMinimum": 0, "default": 0.7},
+        "bora_wand_connectivity": {"type": "integer", "enum": [4, 8], "default": 8},
+        "bora_watershed_resolution": {"type": "string", "enum": ["native", "accelerated"], "default": "native"},
+        "bora_watershed_max_side": {"type": "integer", "minimum": 1, "default": 256},
+        "bora_geojson_backend": {"type": "string", "enum": ["multicpu", "cuda", "cellphenotyper"], "default": "multicpu"},
+        "bora_geojson_profile": {"type": "string", "enum": ["accurate", "balanced", "fast", "custom"], "default": "accurate"},
+        "bora_geojson_workers": {"type": "integer", "minimum": 1, "default": 4},
+        "bora_geojson_max_page_side": {"type": "integer", "minimum": 256, "default": 2048},
+        "bora_geojson_cuda_device": {"type": "integer", "minimum": 0, "default": 0},
+        "bora_geojson_cuda_fallback": {"type": "boolean", "default": true},
+        "bora_contract_block_rows": {"type": "integer", "minimum": 1, "default": 512},
         "cluster_geojson_shared_boundary_simplify": {"type": "boolean", "default": true},
         "cluster_geojson_shared_boundary_smooth": {"type": "boolean", "default": true, "description": "Selectively smooth only long, sharp internal class-boundary vertices after topology-preserving coverage simplification; never reads an expert annotation."},
         "cluster_geojson_shared_boundary_smoothing_coefficient": {"type": "number", "minimum": 0, "exclusiveMaximum": 1, "default": 0.05},
@@ -539,15 +580,35 @@
       "then": {"properties": {"compute_device": {"enum": ["auto", "gpu"]}}, "required": ["compute_device"]}
     },
     {
+      "if": {"properties": {"cell_detection_mode": {"const": "none"}}, "required": ["cell_detection_mode"]},
+      "then": {
+        "properties": {
+          "uni2_sampling_mode": {"const": "grid"},
+          "gigatime_enable": {"const": false},
+          "marker_quantification_enable": {"const": false},
+          "cell_profiles_enable": {"const": false},
+          "titan_enable": {"const": false},
+          "pathofmpred_enable": {"const": false},
+          "analysis_intent": {"enum": ["exploratory", "tissue_domain_discovery"]}
+        },
+        "required": ["uni2_sampling_mode"]
+      }
+    },
+    {
       "if": {"properties": {"uni2_sampling_mode": {"enum": ["grid", "both"]}}, "required": ["uni2_sampling_mode"]},
       "then": {
         "properties": {
+          "foundation_encoder": {"enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"]},
           "uni2_encoder": {"enum": ["uni2-h", "virchow", "virchow2", "phikon-v2"]},
           "uni2_include_inner_square": {"const": true},
           "uni2_fuse_tile_inner_square": {"const": true},
           "uni2_use_roi_crop": {"const": true}
         },
-        "required": ["uni2_encoder", "uni2_include_inner_square", "uni2_fuse_tile_inner_square", "uni2_use_roi_crop"]
+        "required": ["uni2_include_inner_square", "uni2_fuse_tile_inner_square", "uni2_use_roi_crop"],
+        "anyOf": [
+          {"required": ["foundation_encoder"]},
+          {"required": ["uni2_encoder"]}
+        ]
       }
     },
     {

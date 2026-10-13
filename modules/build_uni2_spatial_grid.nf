@@ -20,6 +20,7 @@ process BUILD_UNI2_SPATIAL_GRID {
     tuple val(sample_id), path("${sample_id}_uni2_grid_preview.png"), emit: grid_preview
 
     script:
+    def foundation = PipelineHelpers.resolveFoundationRepresentation(params)
     def scriptPath = "${projectDir}/${params.uni2_grid_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
     [scriptPath, "${projectDir}/bin/uni2_grid.py", "${projectDir}/bin/ome_tiff_metadata.py"].each {
@@ -42,8 +43,8 @@ process BUILD_UNI2_SPATIAL_GRID {
       --metadata-out "${sample_id}_uni2_grid_metadata.json" \
       --preview-out "${sample_id}_uni2_grid_preview.png" \
       --model-tile-size ${params.uni2_tile_size} \
-      --inner-square-size ${params.uni2_inner_square_fixed_px} \
-      --grid-stride-size ${params.uni2_grid_stride_px} \
+      --inner-square-size ${foundation.uni2_inner_square_fixed_px} \
+      --grid-stride-size ${foundation.uni2_grid_stride_px} \
       --target-mpp ${params.uni2_target_mpp} \
       --default-source-mpp ${params.uni2_default_source_mpp} \
       --min-tissue-fraction ${params.uni2_grid_min_tissue_fraction} \

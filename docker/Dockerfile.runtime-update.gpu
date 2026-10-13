@@ -8,6 +8,7 @@ ARG KODAMA_REVISION=8be4735436116a5a4b0fabb9df2d64de16e3d80e
 ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
 ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
+ARG BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
 
 RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
 
@@ -21,6 +22,15 @@ RUN set -euo pipefail && \
       "git+https://github.com/MahmoodLab/CONCH.git@${CONCH_REVISION}" && \
     micromamba run -n stardist python -c \
       "import conch, einops_exts, torch, transformers; assert transformers.__version__.split('.')[0] == '4'; assert torch.cuda.is_available() or torch.backends.cuda.is_built(); print('TITAN runtime dependencies passed')"
+
+RUN set -euo pipefail && \
+    git clone https://github.com/tkcaccia/Bora /opt/cellphenotyper/third_party/Bora && \
+    git -C /opt/cellphenotyper/third_party/Bora checkout "${BORA_REVISION}" && \
+    test "$(git -C /opt/cellphenotyper/third_party/Bora rev-parse HEAD)" = "${BORA_REVISION}" && \
+    micromamba run -n stardist pip install --no-cache-dir --no-deps /opt/cellphenotyper/third_party/Bora
+
+ENV BORA_HOME=/opt/cellphenotyper/third_party/Bora
+ENV BORA_REVISION=${BORA_REVISION}
 
 RUN set -euo pipefail && \
     if [ -d /opt/micromamba/envs/kodama-r ]; then \

@@ -624,6 +624,18 @@ def pyramidize_with_raw2ometiff(in_tif: str,
     require_tool("bioformats2raw")
     require_tool("raw2ometiff")
 
+    # Both Bio-Formats tools may change their effective working directory while
+    # resolving the intermediate Zarr store.  Absolute paths keep the hand-off
+    # stable when callers use outputs in the current directory (the normal
+    # Nextflow task layout).
+    in_tif = os.path.abspath(in_tif)
+    out_ome_tif = os.path.abspath(out_ome_tif)
+    # bioformats2raw calls nearest-neighbour label downsampling "SIMPLE".
+    # Accept the conventional spelling at the Python boundary, but always pass
+    # the tool's supported enum value.
+    if str(downsample).upper() == "NEAREST":
+        downsample = "SIMPLE"
+
     if os.path.exists(out_ome_tif):
         if overwrite:
             os.remove(out_ome_tif)

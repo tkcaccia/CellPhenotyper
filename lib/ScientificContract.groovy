@@ -38,6 +38,9 @@ class ScientificContract {
             throw new IllegalArgumentException("Invalid --analysis_intent '${requested}'. Use ${DEFINITIONS.keySet().join(', ')}.")
         }
         boolean gridPrimary = uni2Mode in ['grid', 'both']
+        if (cellDetectionMode == 'none' && intent in ['cell_segmentation', 'cell_phenotyping', 'virtual_staining', 'outcome_prediction']) {
+            throw new IllegalArgumentException("analysis_intent=${intent} requires cell identification; choose --cell_detection_mode stardist or consensus.")
+        }
         if (intent == 'cell_phenotyping' && uni2Mode != 'cells') {
             throw new IllegalArgumentException('analysis_intent=cell_phenotyping requires --uni2_sampling_mode cells so cell-centred observations remain the primary clustering route.')
         }

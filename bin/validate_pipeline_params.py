@@ -30,6 +30,58 @@ def format_path(parts: Any) -> str:
     return path or "<root>"
 
 
+FOUNDATION_INNER_PRESETS = {
+    "inner28_stride56": (28, 56),
+    "inner56_stride56": (56, 56),
+    "inner90_stride90": (90, 90),
+}
+
+
+def resolve_foundation_representation(params: dict[str, Any]) -> dict[str, Any]:
+    """Mirror the Nextflow encoder-neutral representation contract.
+
+    Historical ``uni2_*`` values override the new public names only when they
+    are explicitly present, preserving archived parameter files.
+    """
+    encoder = str(params.get("foundation_encoder", "uni2-h")).strip().lower()
+    if params.get("uni2_encoder") not in (None, ""):
+        encoder = str(params["uni2_encoder"]).strip().lower()
+    supported = {"uni2-h", "virchow", "virchow2", "phikon-v2"}
+    if encoder not in supported:
+        raise ValueError("foundation_encoder must name a registered encoder")
+
+    strategy = str(
+        params.get("foundation_inner_strategy", "inner28_stride56")
+    ).strip().lower()
+    if strategy == "custom":
+        inner = int(params.get("foundation_inner_square_px", 28))
+        stride = int(params.get("foundation_grid_stride_px", 56))
+    elif strategy in FOUNDATION_INNER_PRESETS:
+        inner, stride = FOUNDATION_INNER_PRESETS[strategy]
+    else:
+        raise ValueError("foundation_inner_strategy is not registered")
+    if params.get("uni2_inner_square_fixed_px") is not None:
+        inner = int(params["uni2_inner_square_fixed_px"])
+    if params.get("uni2_grid_stride_px") is not None:
+        stride = int(params["uni2_grid_stride_px"])
+    effective_stride = inner if stride == 0 else stride
+
+    extraction = str(
+        params.get("foundation_inner_extraction", "token_subset")
+    ).strip().lower()
+    if params.get("uni2_paired_inner_square_mode") not in (None, ""):
+        extraction = str(params["uni2_paired_inner_square_mode"]).strip().lower()
+    if extraction not in {"token_subset", "masked_forward"}:
+        raise ValueError("foundation_inner_extraction is not registered")
+    return {
+        "encoder": encoder,
+        "strategy": strategy,
+        "inner_square_px": inner,
+        "grid_stride_px": effective_stride,
+        "extraction": extraction,
+    }
+
+
 def cross_field_errors(params: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     min_mpp = float(params.get("input_resolution_min_mpp", 0.05))
@@ -39,13 +91,17 @@ def cross_field_errors(params: dict[str, Any]) -> list[str]:
             "input_resolution_min_mpp must be smaller than input_resolution_max_mpp"
         )
 
-    inner_px = int(params.get("uni2_inner_square_fixed_px", 90))
-    tile_px = int(params.get("uni2_tile_size", 224))
-    grid_stride_px = int(params.get("uni2_grid_stride_px", 0))
-    if inner_px > tile_px:
-        failures.append("uni2_inner_square_fixed_px cannot exceed uni2_tile_size")
-    if grid_stride_px < 0 or grid_stride_px > tile_px:
-        failures.append("uni2_grid_stride_px must be zero or no larger than uni2_tile_size")
+    try:
+        representation = resolve_foundation_representation(params)
+        inner_px = int(representation["inner_square_px"])
+        tile_px = int(params.get("uni2_tile_size", 224))
+        grid_stride_px = int(representation["grid_stride_px"])
+        if inner_px < 1 or inner_px > tile_px:
+            failures.append("foundation inner-square width must fit inside uni2_tile_size")
+        if grid_stride_px < 1 or grid_stride_px > tile_px:
+            failures.append("foundation grid stride must fit inside uni2_tile_size")
+    except (TypeError, ValueError) as error:
+        failures.append(str(error))
 
     if params.get("pathsegmentor_guided_refine_enable") and not params.get(
         "pathsegmentor_enable"

@@ -490,6 +490,7 @@ def _convert_vsi(
 
 def _convert_with_pyvips(src: Path, dst: Path, compression: str, tile: int, quality: int, pyramid: bool) -> str:
     import pyvips
+    import tifffile
 
     compression = _normalize_compression(compression)
     image = pyvips.Image.new_from_file(str(src), access="sequential")
@@ -504,22 +505,76 @@ def _convert_with_pyvips(src: Path, dst: Path, compression: str, tile: int, qual
     except Exception:
         pass
 
+    mpp_x = mpp_y = None
+    try:
+        with tifffile.TiffFile(str(src)) as tif:
+            mpp_x, mpp_y = _ome_physical_sizes_micrometres(tif.ome_metadata)
+    except Exception:
+        pass
+    if mpp_x is None or mpp_y is None:
+        if float(getattr(image, "xres", 0.0) or 0.0) > 0:
+            mpp_x = 1000.0 / float(image.xres)
+            mpp_y = 1000.0 / float(image.yres or image.xres)
+
+    if image.bands == 3:
+        if mpp_x is None or mpp_y is None:
+            raise RuntimeError(
+                "Cannot write a calibrated RGB OME-TIFF without physical pixel-size metadata."
+            )
+        image = image.copy(
+            interpretation="srgb",
+            xres=1000.0 / mpp_x,
+            yres=1000.0 / mpp_y,
+        )
+        ome_xml = _build_rgb_ome_xml(
+            dst.name,
+            int(image.width),
+            int(image.height),
+            str({
+                "uchar": "uint8",
+                "char": "int8",
+                "ushort": "uint16",
+                "short": "int16",
+                "uint": "uint32",
+                "int": "int32",
+                "float": "float32",
+                "double": "float64",
+            }.get(str(image.format), str(image.format))),
+            mpp_x,
+            mpp_y,
+        )
+        image.set_type(pyvips.GValue.gstr_type, "image-description", ome_xml)
+
     kwargs = dict(
         compression=compression,
         tile=True,
         tile_width=tile,
         tile_height=tile,
         pyramid=bool(pyramid),
+        subifd=bool(pyramid),
         bigtiff=True,
         properties=False,
+        resunit="cm",
     )
     if compression == "jpeg":
         kwargs["Q"] = quality
+        # Preserve chromatic detail and avoid the malformed JPEG sampling
+        # factors emitted by raw2ometiff --rgb for these 10x BTF inputs.
+        kwargs["subsample_mode"] = "off"
     elif compression in {"deflate", "lzw"}:
-        kwargs["predictor"] = True
+        kwargs["predictor"] = "horizontal"
 
     image.tiffsave(str(dst), **kwargs)
-    return "pyvips"
+    with tifffile.TiffFile(str(dst)) as tif:
+        series = tif.series[0]
+        levels = list(getattr(series, "levels", ()) or ())
+        if image.bands == 3 and not tif.ome_metadata:
+            raise RuntimeError("pyvips conversion did not preserve explicit OME metadata")
+        if pyramid and len(levels) < 2:
+            raise RuntimeError(
+                f"pyvips conversion did not produce a SubIFD pyramid: levels={len(levels)}"
+            )
+    return "pyvips-ome-subifd"
 
 
 def _convert_with_pillow(src: Path, dst: Path, compression: str, quality: int) -> str:

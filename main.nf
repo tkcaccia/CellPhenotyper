@@ -41,6 +41,7 @@ include { ANNOTATE_PATHSEGMENTOR_EVIDENCE } from './subworkflows/annotate_pathse
 include { RUN_PATHSEGMENTOR_REFINEMENT } from './subworkflows/run_pathsegmentor_refinement'
 
 workflow {
+def foundationRep = PipelineHelpers.resolveFoundationRepresentation(params)
 if (params.cell_measured_assays && !(params.cell_profiles_enable && params.cell_profiles_spatialdata))
   error 'cell_measured_assays requires cell_profiles_enable=true and cell_profiles_spatialdata=true'
 if (params.cell_reference_atlas && !params.cell_profiles_enable)
@@ -268,24 +269,28 @@ error 'pathsegmentor_guided_refine_enable requires pathsegmentor_enable=true'
 def tma_enabled = ((((params.tma_enable == null) ? true : params.tma_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def legacy_consensus_enabled = ((((params.cell_consensus_enable == null) ? false : params.cell_consensus_enable).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def cell_detection_mode = (params.cell_detection_mode ?: (legacy_consensus_enabled ? 'consensus' : 'stardist')).toString().trim().toLowerCase()
-if (!(cell_detection_mode in ['consensus', 'stardist'])) {
-error "Invalid --cell_detection_mode '${params.cell_detection_mode}'. Use consensus or stardist."
+if (!(cell_detection_mode in ['none', 'consensus', 'stardist'])) {
+error "Invalid cell_detection_mode: ${params.cell_detection_mode}"
 }
+def cell_detection_enabled = cell_detection_mode != 'none'
 def cell_consensus_enabled = cell_detection_mode == 'consensus'
 params._resolved_cell_detection_mode = cell_detection_mode
 if (cell_consensus_enabled && resolved_compute_device != 'gpu') {
-error "cell_detection_mode=consensus requires GPU execution. Use --compute_device gpu, or explicitly choose --cell_detection_mode stardist; the pipeline will not change the scientific cell set based on hardware."
+error 'cell_detection_mode=consensus requires GPU execution; use --compute_device gpu.'
 }
 if (!grandqc_enabled && stage_index[end_point] >= stage_index['grandqc']) {
-error "GrandQC is a mandatory upstream stage. Remove --grandqc_enable false or restrict the run to --end_point convert."
+error 'GrandQC is a mandatory upstream stage; use --end_point convert to stop earlier.'
 }
 def uni2_reuse_existing = (((params.uni2_reuse_existing ?: false).toString().trim().toLowerCase()) in ['true', '1', 'yes', 'y', 'on'])
 def uni2_sampling_mode = (params.uni2_sampling_mode ?: 'grid').toString().trim().toLowerCase()
 if (uni2_sampling_mode in ['cell', 'cell_centered', 'cell-centred', 'cell-centered']) uni2_sampling_mode = 'cells'
 if (!(uni2_sampling_mode in ['cells', 'grid', 'both'])) {
-error "Invalid --uni2_sampling_mode '${params.uni2_sampling_mode}'. Use cells, grid, or both."
+error "Invalid uni2_sampling_mode: ${params.uni2_sampling_mode}"
 }
 def uni2_grid_mode = uni2_sampling_mode in ['grid', 'both']
+if (!cell_detection_enabled && (uni2_sampling_mode != 'grid' || gigatime_enabled || marker_quantification_enabled || params.cell_profiles_enable || titan_requested || pathofmpred_requested)) {
+error 'cell_detection_mode=none requires grid and cell-derived branches off.'
+}
 if (params.tissue_hierarchy_enable && !uni2_grid_mode)
   error 'tissue_hierarchy_enable requires the grid or both UNI-2 sampling route'
 def uni2_cell_auxiliary_mode = uni2_sampling_mode == 'both'
@@ -313,7 +318,7 @@ try {
 } catch (Throwable exc) {
   log.warn "Could not write scientific contract reports: ${exc.message}"
 }
-println "Scientific analysis contract: intent=${analysis_intent}, observation_unit=${analysis_contract.observation_unit}, UNI-2 route=${uni2_sampling_mode}, cell detection=${cell_detection_mode}."
+println "Scientific route: intent=${analysis_intent}, unit=${analysis_contract.observation_unit}, foundation=${uni2_sampling_mode}, cells=${cell_detection_mode}."
 if (!validation_readiness.gate_passed) {
   def message = StudyEvidence.gateMessage(validation_readiness)
   if (validation_readiness.gate_mode == 'fail') error message
@@ -321,15 +326,15 @@ if (!validation_readiness.gate_passed) {
 }
 def run_convert = should_run_stage('convert')
 def run_grandqc = should_run_stage('grandqc')
-def run_stardist = should_run_stage('stardist')
+def run_stardist = should_run_stage('stardist') && cell_detection_enabled
 def run_cell_consensus = should_run_stage('cell_consensus') && cell_consensus_enabled
-def run_tma = should_run_stage('tma') && tma_enabled
-def run_gigatime = should_run_stage('gigatime') && gigatime_enabled
+def run_tma = should_run_stage('tma') && tma_enabled && cell_detection_enabled
+def run_gigatime = should_run_stage('gigatime') && gigatime_enabled && cell_detection_enabled
 def run_tissue_mask = should_run_stage('tissue_mask')
 def run_pathsegmentor = should_run_stage('pathsegmentor') && pathsegmentor_enabled
-def run_cell_assignment = should_run_stage('cell_assignment')
-def run_cytoplasm = should_run_stage('cytoplasm')
-def run_marker_quantification = should_run_stage('marker_quantification') && gigatime_enabled && marker_quantification_enabled
+def run_cell_assignment = should_run_stage('cell_assignment') && cell_detection_enabled
+def run_cytoplasm = should_run_stage('cytoplasm') && cell_detection_enabled
+def run_marker_quantification = should_run_stage('marker_quantification') && gigatime_enabled && marker_quantification_enabled && cell_detection_enabled
 def run_grid_tiles = should_run_stage('grid_tiles') && uni2_grid_mode
 def run_uni2 = should_run_stage('uni2') && !uni2_reuse_existing
 def run_kodama = should_run_stage('kodama')
@@ -396,9 +401,9 @@ if (!fuse_tile_inner_square_uni2 || !include_uni2_inner_square) {
 if (include_uni2_nuclei || include_uni2_cyto || kodama_requested_modes.any { it in ['nuclei', 'cyto'] }) {
   error "Grid sampling supports only tile and inner_square modes."
 }
-def supported_grid_encoders = ['uni2-h', 'virchow', 'virchow2', 'phikon-v2'] as Set
-if (!supported_grid_encoders.contains(params.uni2_encoder?.toString()?.toLowerCase())) {
-  error "Grid sampling requires a registered foundation encoder: ${supported_grid_encoders.sort().join(', ')}."
+def gridEncoders = ['uni2-h', 'virchow', 'virchow2', 'phikon-v2'] as Set
+if (!gridEncoders.contains(foundationRep.foundation_encoder)) {
+  error "Grid sampling requires a registered foundation encoder: ${gridEncoders.sort().join(', ')}."
 }
 }
 if (should_run_stage('uni2') && uni2_reuse_existing) {
@@ -488,8 +493,11 @@ gqa_ch = image_input_ch.map { sample_id, _image_input ->
 }
 }
 
+def need_analysis_inputs = stage_index[end_point] >= stage_index['stardist']
+def run_analysis_crop = should_run_stage('stardist') && need_analysis_inputs
+
 def roi_geojson_ch = Channel.empty()
-if (run_stardist) {
+if (run_analysis_crop) {
 def roi_prepare_input_ch = ome_tif_ch
   .join(grandqc_clean_tissue_mask_ch)
   .join(roi_hint_ch)
@@ -505,10 +513,6 @@ roi_geojson_ch = image_input_ch.map { sample_id, _image_input ->
 }
 }
 
-def stardist_roi_geojson_ch = roi_geojson_ch
-
-def need_stardist_outputs = run_stardist || run_cell_consensus || run_tma || run_tissue_mask || pathsegmentor_enabled || run_cell_assignment || run_cytoplasm || run_gigatime || run_marker_quantification || run_grid_tiles || run_uni2 || run_cluster_mask || run_grow_tissue || run_auxiliary_cell_grow_tissue || run_medsam_refine || run_neoplastic_section || params.cell_profiles_enable || params.tissue_hierarchy_enable
-
 def crop_roi_ch = Channel.empty()
 def labels_tif_ch = Channel.empty()
 def labels_full_ch = Channel.empty()
@@ -519,11 +523,11 @@ def tissue_mask_ch = Channel.empty()
 def art_ch = Channel.empty()
 def pathsegmentor_bundle_ch = Channel.empty()
 
-if (need_stardist_outputs) {
-def require_labels_full = (!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2)
-if (run_stardist) {
+if (need_analysis_inputs) {
+def require_labels_full = cell_detection_enabled && ((!use_roi_crop_for_uni2 && run_uni2) || ((run_cytoplasm && (params.expand_full_labels as boolean)) && !use_roi_crop_for_uni2))
+if (run_analysis_crop) {
   def crop_input_ch = ome_tif_ch
-    .join(stardist_roi_geojson_ch)
+    .join(roi_geojson_ch)
     .join(grandqc_clean_tissue_mask_ch)
     .join(converted_resolution_report_ch)
     .map { sample_id, ome_tif, stardist_roi_geojson, clean_tissue_mask, resolution_json ->
@@ -537,11 +541,13 @@ if (run_stardist) {
   crop_roi_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/crop_roi.tif", checkIfExists: true))
   }
-  labels_tif_ch = image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
-  }
-  objects_csv_ch = image_input_ch.map { sample_id, _image_input ->
-    tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
+  if (cell_detection_enabled) {
+    labels_tif_ch = image_input_ch.map { sample_id, _image_input ->
+      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/labels.tif", checkIfExists: true))
+    }
+    objects_csv_ch = image_input_ch.map { sample_id, _image_input ->
+      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/objects.csv", checkIfExists: true))
+    }
   }
   roi_crop_geojson_ch = image_input_ch.map { sample_id, _image_input ->
     tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/roi_all_crop.geojson", checkIfExists: true))
@@ -556,7 +562,7 @@ if (run_stardist) {
     : Channel.empty()
 }
 
-if (run_stardist || run_tissue_mask) {
+if (run_analysis_crop || run_tissue_mask) {
   def cm_ch = grandqc_clean_tissue_mask_ch
     .join(gqa_ch)
     .join(shift_json_ch)
@@ -1025,7 +1031,7 @@ if ((run_cluster_mask || run_grow_tissue) && !uni2_grid_mode) {
 def cluster_mask_ch = Channel.empty()
 def cluster_uncertainty_ch = Channel.empty()
 if (run_cluster_mask) {
-  BUILD_CLUSTER_MASK_OUTPUT(image_input_ch, crop_roi_ch, cluster_csv_ch, labels_for_cluster_ch, grid_objects_ch, grid_metadata_ch, run_stardist, uni2_grid_mode)
+  BUILD_CLUSTER_MASK_OUTPUT(crop_roi_ch, cluster_csv_ch, labels_for_cluster_ch, grid_objects_ch, grid_metadata_ch, uni2_grid_mode)
   cluster_mask_ch = requireStageOutput('cluster_mask', BUILD_CLUSTER_MASK_OUTPUT.out.cluster_mask)
   cluster_uncertainty_ch = BUILD_CLUSTER_MASK_OUTPUT.out.uncertainty_mask
 } else if (run_grow_tissue || run_medsam_refine || (run_cluster_geojson && uni2_grid_mode)) {
@@ -1044,11 +1050,7 @@ def image_for_growth_variant_ch = Channel.empty()
 def tissue_mask_variant_ch = Channel.empty()
 def resolution_for_growth_variant_ch = Channel.empty()
 if (run_grow_tissue || run_medsam_refine) {
-  def image_for_growth_ch = run_stardist
-    ? crop_roi_ch
-    : image_input_ch.map { sample_id, _image_input ->
-      tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/prepared_crop/crop_roi.tif", checkIfExists: true))
-    }
+  def image_for_growth_ch = crop_roi_ch
 
   image_for_growth_variant_ch = image_for_growth_ch
     .flatMap { sample_id, image_tif ->
@@ -1076,7 +1078,7 @@ if (run_grow_tissue || run_medsam_refine) {
 }
 
 def spatial_baseline_mask_ch = Channel.empty()
-def grown_refine_method = (params.grown_tissue_refine_method ?: 'medsam_border_refine').toString().trim().toLowerCase()
+def grown_refine_method = (params.grown_tissue_refine_method ?: 'bora').toString().trim().toLowerCase()
 if (run_grow_tissue) {
   def grow_input_ch = cluster_mask_ch
     .join(image_for_growth_variant_ch)

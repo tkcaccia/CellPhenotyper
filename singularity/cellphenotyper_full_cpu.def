@@ -173,6 +173,12 @@ if missing:
 print("GrandQC bundled runtime check passed")
 PY
   chmod -R a+rX /opt/cellphenotyper/third_party/grandqc
+  BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
+  git clone https://github.com/tkcaccia/Bora /opt/cellphenotyper/third_party/Bora
+  git -C /opt/cellphenotyper/third_party/Bora checkout "${BORA_REVISION}"
+  test "$(git -C /opt/cellphenotyper/third_party/Bora rev-parse HEAD)" = "${BORA_REVISION}"
+  micromamba run -n stardist pip install --no-cache-dir --no-deps /opt/cellphenotyper/third_party/Bora
+  micromamba run -n stardist python -c 'import bora; from bora.cli import parser; parser(); print("Bora runtime check passed")'
   mkdir -p /opt/cellphenotyper/empty-r-library
 
   micromamba clean -a -y
@@ -186,6 +192,8 @@ PY
   export GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
   export MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
   export MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
+  export BORA_HOME=/opt/cellphenotyper/third_party/Bora
+  export BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
   export HOVERNET_REPO_DIR=/opt/cellphenotyper/third_party/hover_net
   export HOVERNET_MONUSAC_CHECKPOINT=/opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
   export R_LIBS_USER=/opt/cellphenotyper/empty-r-library

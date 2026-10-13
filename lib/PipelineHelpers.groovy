@@ -1,4 +1,82 @@
 class PipelineHelpers {
+    /** Resolve one encoder-neutral local/context representation contract.
+     *
+     * `foundation_*` is the public API shared by UNI2-h, Virchow2 and the
+     * other registered patch encoders.  The historical `uni2_*` names remain
+     * accepted as aliases so archived parameter files reproduce their exact
+     * geometry.  Returned `uni2_*` keys are deliberately the normalized
+     * internal names consumed by the existing processes.
+     */
+    static Map resolveFoundationRepresentation(def parameters) {
+        def text = { value -> value == null ? '' : value.toString().trim() }
+        def value = { String name ->
+            parameters != null && parameters.containsKey(name) ? parameters[name] : null
+        }
+        def integer = { rawValue, String name, int fallback ->
+            if (rawValue == null || text(rawValue) == '') return fallback
+            try { return Integer.parseInt(text(rawValue)) }
+            catch (Throwable ignored) { throw new IllegalArgumentException("${name} must be an integer") }
+        }
+
+        def supportedEncoders = ['uni2-h', 'virchow', 'virchow2', 'phikon-v2'] as Set
+        def encoder = text(value('foundation_encoder') ?: 'uni2-h').toLowerCase()
+        def legacyEncoder = text(value('uni2_encoder'))
+        if (legacyEncoder) encoder = legacyEncoder.toLowerCase()
+        if (!supportedEncoders.contains(encoder))
+            throw new IllegalArgumentException("Unsupported foundation_encoder '${encoder}'. Supported encoders: ${supportedEncoders.sort().join(', ')}")
+
+        def presets = [
+            inner28_stride56: [inner: 28, stride: 56],
+            inner56_stride56: [inner: 56, stride: 56],
+            inner90_stride90: [inner: 90, stride: 90],
+        ]
+        def requestedStrategy = text(value('foundation_inner_strategy') ?: 'inner28_stride56').toLowerCase()
+        if (!(requestedStrategy in (presets.keySet() + ['custom'])))
+            throw new IllegalArgumentException("Unknown foundation_inner_strategy '${requestedStrategy}'. Use ${presets.keySet().join(', ')} or custom")
+        def geometry = requestedStrategy == 'custom'
+            ? [inner: integer(value('foundation_inner_square_px'), 'foundation_inner_square_px', 28),
+               stride: integer(value('foundation_grid_stride_px'), 'foundation_grid_stride_px', 56)]
+            : presets[requestedStrategy]
+
+        def legacyInner = value('uni2_inner_square_fixed_px')
+        def legacyStride = value('uni2_grid_stride_px')
+        def legacyGeometry = legacyInner != null || legacyStride != null
+        def inner = legacyInner != null
+            ? integer(legacyInner, 'uni2_inner_square_fixed_px', geometry.inner as int)
+            : geometry.inner as int
+        def stride = legacyStride != null
+            ? integer(legacyStride, 'uni2_grid_stride_px', geometry.stride as int)
+            : geometry.stride as int
+        // Historical zero means that the stride follows the inner width.
+        def effectiveStride = stride == 0 ? inner : stride
+        def tile = integer(value('uni2_tile_size'), 'uni2_tile_size', 224)
+        if (inner < 1 || inner > tile)
+            throw new IllegalArgumentException("Foundation inner-square width must be in 1..${tile} model pixels")
+        if (stride < 0 || effectiveStride > tile)
+            throw new IllegalArgumentException("Foundation grid stride must be zero or in 1..${tile} model pixels")
+
+        def extraction = text(value('foundation_inner_extraction') ?: 'token_subset').toLowerCase()
+        def legacyExtraction = text(value('uni2_paired_inner_square_mode'))
+        if (legacyExtraction) extraction = legacyExtraction.toLowerCase()
+        if (!(extraction in ['token_subset', 'masked_forward']))
+            throw new IllegalArgumentException("foundation_inner_extraction must be token_subset or masked_forward")
+
+        def resolvedStrategy = legacyGeometry
+            ? "legacy_custom_inner${inner}_stride${effectiveStride}"
+            : requestedStrategy
+        [
+            foundation_encoder: encoder,
+            foundation_inner_strategy_resolved: resolvedStrategy,
+            foundation_inner_square_px_resolved: inner,
+            foundation_grid_stride_px_resolved: effectiveStride,
+            foundation_inner_extraction_resolved: extraction,
+            uni2_encoder: encoder,
+            uni2_inner_square_fixed_px: inner,
+            uni2_grid_stride_px: effectiveStride,
+            uni2_paired_inner_square_mode: extraction,
+        ]
+    }
+
     static void validateCohortOptions(def parameters) {
         validateCohortBundleOptions(parameters)
         if (parameters.cohort_niches_enable && !parameters.cell_profiles_enable)

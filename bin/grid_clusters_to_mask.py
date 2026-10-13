@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import tifffile
 
 from labels_to_cluster_mask import (
+    DEFAULT_PALETTE,
     UNCERTAINTY_PALETTE,
     UNCERTAINTY_STATUS_NAMES,
     load_map,
@@ -19,6 +22,8 @@ from labels_to_cluster_mask import (
     write_preview_overlay_png,
 )
 from ome_tiff_metadata import create_tiff_memmap
+from grow_to_tissue import pyramidize_with_raw2ometiff
+from ome_tiff_metadata import validate_ome_tiff
 
 
 REQUIRED_GRID_COLUMNS = {
@@ -46,6 +51,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview-threshold-mb", type=float, default=100.0)
     parser.add_argument("--preview-background", required=True)
     parser.add_argument("--preview-alpha", type=float, default=0.45)
+    parser.add_argument("--pyramid", action="store_true")
+    parser.add_argument("--pyramid-compression", default="LZW")
+    parser.add_argument("--pyramid-workers", type=int, default=4)
+    parser.add_argument("--pyramid-downsample", default="SIMPLE")
     return parser.parse_args()
 
 
@@ -112,8 +121,21 @@ def main() -> None:
     else:
         out_dtype = smallest_mask_dtype(max(args.default, int(grid["cluster"].max())))
 
+    output_path = Path(args.out)
+    uncertainty_output_path = Path(args.uncertainty_out)
+    if args.pyramid:
+        flat_output_path = output_path.with_name(
+            f".{output_path.name}.flat.{os.getpid()}.tif"
+        )
+        flat_uncertainty_path = uncertainty_output_path.with_name(
+            f".{uncertainty_output_path.name}.flat.{os.getpid()}.tif"
+        )
+    else:
+        flat_output_path = output_path
+        flat_uncertainty_path = uncertainty_output_path
+
     output = create_tiff_memmap(
-        args.out,
+        flat_output_path,
         shape=(height, width),
         dtype=out_dtype,
         mpp_x=mpp_x,
@@ -121,7 +143,7 @@ def main() -> None:
     )
     output[:] = args.default
     uncertainty_output = create_tiff_memmap(
-        args.uncertainty_out,
+        flat_uncertainty_path,
         shape=(height, width),
         dtype=np.dtype(np.uint8),
         mpp_x=mpp_x,
@@ -169,6 +191,17 @@ def main() -> None:
         default_value=args.default,
         preview_background_path=args.preview_background,
         alpha=args.preview_alpha,
+        legend_items=[
+            (
+                f"cluster {cluster_id}",
+                tuple(
+                    DEFAULT_PALETTE[
+                        (max(1, int(cluster_id)) - 1) % len(DEFAULT_PALETTE)
+                    ].tolist()
+                ),
+            )
+            for cluster_id in observed_clusters
+        ],
     )
     uncertainty_preview_factor, uncertainty_preview_bytes = write_preview_overlay_png(
         uncertainty_output,
@@ -215,7 +248,48 @@ def main() -> None:
         "preview_estimated_bytes": int(preview_bytes),
         "uncertainty_preview_downsample_factor": int(uncertainty_preview_factor),
         "uncertainty_preview_estimated_bytes": int(uncertainty_preview_bytes),
+        "mask_storage": {
+            "pyramidal": bool(args.pyramid),
+            "compression": str(args.pyramid_compression if args.pyramid else "UNCOMPRESSED"),
+            "downsample": str(args.pyramid_downsample if args.pyramid else "none"),
+        },
     }
+
+    if args.pyramid:
+        output.flush()
+        uncertainty_output.flush()
+        del output
+        del uncertainty_output
+        try:
+            for flat_path, final_path in (
+                (flat_output_path, output_path),
+                (flat_uncertainty_path, uncertainty_output_path),
+            ):
+                pyramidize_with_raw2ometiff(
+                    in_tif=str(flat_path),
+                    out_ome_tif=str(final_path),
+                    compression=str(args.pyramid_compression),
+                    max_workers=max(1, int(args.pyramid_workers)),
+                    downsample=str(args.pyramid_downsample),
+                    overwrite=True,
+                    keep_tmp=False,
+                    legacy=False,
+                )
+                validation = validate_ome_tiff(
+                    final_path,
+                    expected_shape=(height, width),
+                    expected_mpp=(mpp_x, mpp_y),
+                )
+                with tifffile.TiffFile(final_path) as tif:
+                    compression_code = int(tif.series[0].levels[0].pages[0].compression)
+                if compression_code == 1:
+                    raise RuntimeError(f"Expected compressed OME-TIFF, found uncompressed output: {final_path}")
+                validation["compression_code"] = compression_code
+                print(f"[INFO] Validated compressed cluster mask: {json.dumps(validation, sort_keys=True)}")
+        finally:
+            for flat_path in (flat_output_path, flat_uncertainty_path):
+                Path(flat_path).unlink(missing_ok=True)
+
     Path(args.summary).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(
         f"[INFO] Rasterized {len(grid)} clustered grid cores into {args.out}; "

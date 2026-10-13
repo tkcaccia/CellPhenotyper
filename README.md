@@ -1,8 +1,10 @@
 # CellPhenotyper
 
-CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs GrandQC tissue and artifact QC; parallel StarDist, HoVer-Net and CellViT++ multi-detector instance fusion; optional tissue microarray (TMA) analysis; GigaTIME virtual mIF inference; marker quantification; paired UNI-2 embeddings; KODAMA and Leiden clustering; MedSAM tissue-border refinement; full-resolution image-guided cluster-boundary refinement; and final tissue-cluster GeoJSON export.
+CellPhenotyper is a Nextflow DSL2 pipeline for H&E tissue image analysis. It runs GrandQC tissue and artifact QC; parallel StarDist, HoVer-Net and CellViT++ multi-detector instance fusion; optional tissue microarray (TMA) analysis; GigaTIME virtual mIF inference; marker quantification; paired foundation-model embeddings; KODAMA and Leiden clustering; and pinned Bora boundary refinement plus class-aware GeoJSON export. MedSAM is retained only as an explicit legacy sensitivity route.
 
-Final multiclass cluster GeoJSON export uses four-connected, topology-preserving rasterio polygonization of the native-resolution label raster by default. Interior rings and every positive-area annotated component are retained. Unequally noded shared edges are planarized once and rebuilt as label-preserving polygon faces before Shapely coverage simplification reduces vertex count while keeping cluster boundaries coincident. The configured tolerance is an upper search bound rather than an unconditional operation: the exporter measures exact categorical symmetric difference against the unsimplified native coverage and selects the strongest candidate below the declared annotation-error fraction (1% by default). A zero limit requests exact geometry. A final selective shared-boundary pass relaxes only long, implausibly sharp internal vertices; it keeps the external tissue footprint fixed, adds no vertices and reconstructs one mutually exclusive polygon coverage. The production transform uses only the pipeline prediction. Expert annotations are restricted to a separate development benchmark and are neither a pipeline parameter nor an inference input. Per-class hole filling and buffer smoothing remain disabled. The exporter checks every class pair and fails closed instead of publishing a GeoJSON with positive-area overlap; its provenance receipt records the selected raster level, level-zero scaling, connectivity, edge repair, requested and selected tolerance, segment reduction, selective-smoothing settings and displacement, measured fidelity and overlap result. GeoJSON is serialized without optional whitespace to reduce storage without changing geometry.
+Bora now owns both the final multiclass mask refinement and GeoJSON conversion. The default profile applies annealed label competition and native marker-controlled watershed only within the upstream GrandQC/KODAMA foreground footprint, writes a losslessly compressed pyramidal categorical OME-TIFF, and uses Bora's multicore accurate vectorization profile. CellPhenotyper verifies zero support leakage, preserves the exact Bora report/revision, and binds the refined mask, uncertainty/provenance rasters and class-aware GeoJSON with checksummed sidecars. The former CellPhenotyper rasterio/Shapely exporter remains available only on explicit non-Bora or legacy sensitivity routes. No production refinement consumes expert annotations.
+
+Published tissue GeoJSON coordinates always refer to level-zero pixel edges of the original converted OME-TIFF, not `crop_roi.tif`. The pipeline reads the exact integer crop origin from `prepared_crop/shift.json`, validates crop and original dimensions, and applies a translation with unit scale after vectorization. Each GeoJSON and provenance receipt records the coordinate frame, crop-to-original offset, original dimensions and shift-file hash. Cropped rasters remain unchanged; stages that need crop pixels invert the declared translation internally and fail if the GeoJSON and `shift.json` disagree.
 
 Its primary intended use is research-only exploratory multimodal characterization of H&E whole-slide images. Cell segmentation, cell-centred phenotyping, grid-based tissue-domain discovery, virtual staining, and outcome prediction are distinct selectable workflows with different observation units and validation requirements; they must not be presented as one interchangeable clinical result.
 
@@ -12,7 +14,7 @@ Its primary intended use is research-only exploratory multimodal characterizatio
 
 The map distinguishes artifact QC, role-aware multi-detector instance fusion, virtual mIF, TMA analysis, cell-centred and spatial-grid UNI-2 routes, and tissue interpretation. See the [metro-map sources and regeneration instructions](docs/pipeline_metro/README.md) for the curated definition, technical Nextflow DAG, and interactive version.
 
-Before analysis, the conversion stage writes source and converted input-QC JSON reports. They record full-file SHA-256, dimensions, axes, dtype, bit depth, channel/color interpretation, compression, tiling, pyramid levels, all detected physical-resolution sources and any conflicts. Strict defaults reject missing or implausible MPP, anisotropic pixels, contradictory MPP sources without a verified override, non-color converted inputs and non-pyramidal converted images. Brightfield inputs represented as three planar `MINISBLACK` channels, including this layout when exported from Olympus VSI by Bio-Formats, are automatically streamed into an interleaved, pyramidal OME-TIFF with canonical RGB channel order. Source planes are interpreted as `RGB` by default; `--convert_channel_order` accepts any RGB permutation when a scanner exports a different plane order. Lossless TIFF compression retains the literal `RGB` photometric tag; JPEG-in-TIFF uses standard `YCbCr` storage and is decoded to the same canonical RGB samples for analysis. The shared `crop_roi.tif` is also written automatically as a tiled, pyramidal RGB OME-TIFF. It inherits `convert_compression` and `convert_jpeg_quality` from the normalized input, avoiding the major storage expansion caused by lossless re-encoding; its OME dimensions, physical pixel size, codec and pyramid geometry are validated before publication and recorded in `crop_summary.json`.
+Before analysis, the conversion stage writes source and converted input-QC JSON reports. They record full-file SHA-256, dimensions, axes, dtype, bit depth, channel/color interpretation, compression, tiling, pyramid levels, all detected physical-resolution sources and any conflicts. Strict defaults reject missing or implausible MPP, anisotropic pixels, contradictory MPP sources without a verified override, non-color converted inputs and non-pyramidal converted images. Converted level-zero RGB is decoded through libvips at representative locations; BTF conversion additionally compares those pixels with the source, requires exact agreement for lossless codecs, and rejects channel permutations. Brightfield inputs represented as three planar `MINISBLACK` channels, including this layout when exported from Olympus VSI by Bio-Formats, are automatically streamed into an interleaved, pyramidal OME-TIFF with canonical RGB channel order. Source planes are interpreted as `RGB` by default; `--convert_channel_order` accepts any RGB permutation when scanner metadata or visual QC establishes a different source order. LZW is the accuracy-first lossless default and retains the literal `RGB` photometric tag; JPEG is an explicit lossy option. The shared `crop_roi.tif` is also written automatically as a tiled, pyramidal RGB OME-TIFF and inherits the selected compression. Its OME dimensions, physical pixel size, codec and pyramid geometry are validated before publication and recorded in `crop_summary.json`.
 
 After a run, begin with `00_execution/index.html`. The review-first landing page places failed or review-required quality signals and the permitted claim ceiling before the image gallery, then links runtimes, disk use and every indexed output. Open `00_execution/specimen_atlas.html` for a specimen-by-specimen review of source morphology, analysis support, cell instances, virtual markers, tissue domains, uncertainty, boundary refinement and optional research endpoints. Every atlas panel states its observation route, unit and interpretation limit; absent layers remain explicit.
 
@@ -35,7 +37,9 @@ python bin/validate_pipeline_params.py --params pipeline_paramers.yml
 ## Documentation
 
 - [Installation](INSTALL.md)
+- [Tool, model, checkpoint and container access](docs/TOOL_AND_MODEL_ACCESS.md)
 - [How to run](TUTORIAL.md)
+- [Fast tissue segmentation without cells or GigaTIME](docs/FAST_TISSUE_SEGMENTATION.md)
 - [Choose the scientific analysis route](docs/ANALYSIS_ROUTE_GUIDE.md)
 - [Linked cell profiles, neighbourhoods, reference atlas and SpatialData](docs/CELL_ATLAS_USAGE.md)
 - [Exact cell-to-tissue hierarchy membership](docs/CELL_TISSUE_LINKS.md)
@@ -84,7 +88,7 @@ Default image selection is automatic (`runtime_image_mode: auto`):
 
 - Docker profile uses GHCR images.
 - Singularity profile auto-resolves architecture-specific `.sif` assets when available.
-- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: oras` by default, selecting the verified native `2.8-sif-gpu-amd64` SIF from GHCR.
+- Singularity/Apptainer GPU roles use `singularity_gpu_image_source: oras` by default, selecting the verified native `2.9-sif-gpu-amd64` SIF from GHCR.
 - GPU-capable stages select their image and GPU access per task, honoring supported stage-specific device overrides. KODAMA's CUDA backend also uses this route; CPU KODAMA does not reserve a GPU.
 - On arm64, a requested GPU task requires a compatible GPU image; it fails rather than silently selecting a CPU or amd64 image. An explicitly selected CPU-compatible route such as `cell_detection_mode=stardist` remains available.
 - On arm64, StarDist defaults to CPU container unless `--enable_stardist_gpu_on_arm64 true`.
@@ -101,11 +105,11 @@ verification scope and remaining limitations.
 
 Currently verified and published:
 
-- Docker GPU amd64 (`v2.8`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64`
+- Docker GPU amd64 (`v2.9`): `ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64`
 - Docker CPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-amd64`
 - Docker CPU arm64: `ghcr.io/tkcaccia/cellphenotyper:0.2.0`
 - Legacy Docker GPU amd64: `ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64`
-- Published GHCR/ORAS SIF artifacts include the HPC-validated amd64 GPU image `2.8-sif-gpu-amd64`; the existing 2.2 CPU/arm64 assets remain available under `ghcr.io/tkcaccia/cellphenotyper`.
+- Published GHCR/ORAS SIF artifacts include the source-revision-verified amd64 GPU image `2.9-sif-gpu-amd64`; the existing 2.2 CPU/arm64 assets remain available under `ghcr.io/tkcaccia/cellphenotyper`.
 
 The legacy arm64 GPU artifact is published but is not suitable for every GPU generation. In particular, GB10-class (`sm_121`) systems require a rebuilt arm64 GPU SIF with a compatible CUDA/PyTorch stack.
 The amd64 GPU SIF exceeds the GitHub Release 2 GiB asset limit and is therefore distributed natively through GHCR/ORAS. Clusters may pull it once to shared storage and reuse the checksum-verified local file.
@@ -114,33 +118,49 @@ Verify actual published Docker tags before instructing users to pull them:
 
 ```bash
 docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
-docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64
+docker buildx imagetools inspect ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64
 ```
 
-## UNI-2 token setup (required)
+## Tool and model access
 
-1. Create/sign in at [Hugging Face](https://huggingface.co).
-2. Request access to [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h).
-3. Create a read token at [Hugging Face tokens](https://huggingface.co/settings/tokens).
-4. In the project root:
+The published runtime contains the normal software stack and its bundled public
+checkpoints. Optional learned routes have different access requirements:
+
+| Route | Access required before the run |
+|---|---|
+| UNI2-h | Individual approval for [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h) plus a Hugging Face read token |
+| Virchow | Individual approval for [paige-ai/Virchow](https://huggingface.co/paige-ai/Virchow) plus a Hugging Face read token |
+| Virchow2 | Individual approval for [paige-ai/Virchow2](https://huggingface.co/paige-ai/Virchow2) plus a Hugging Face read token |
+| Phikon-v2 | Public download from [owkin/phikon-v2](https://huggingface.co/owkin/phikon-v2); review the Owkin non-commercial license |
+| GigaTIME | Individual approval for [prov-gigatime/GigaTIME](https://huggingface.co/prov-gigatime/GigaTIME) plus a Hugging Face read token |
+| TITAN/CONCH | Individual approval for [MahmoodLab/TITAN](https://huggingface.co/MahmoodLab/TITAN) plus a Hugging Face read token |
+| PathSegmentor | Pinned local source, configuration and checkpoint supplied by the user |
+| PathoFMPred | Private R package and model archive supplied by its provider |
+
+Approval is repository-specific: access to UNI2-h does not grant access to
+Virchow2, GigaTIME or TITAN. Create a read token at
+[Hugging Face tokens](https://huggingface.co/settings/tokens), then store only
+environment-variable references in the git-ignored `tokens.env`:
 
 ```bash
-printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
-source tokens.env
-export HF_TOKEN="${HF_UNI2}"
+umask 077
+printf 'HF_UNI2=%s\nHF_GIGATIME=%s\nHF_TOKEN=%s\n' \
+  '<read-token>' '<read-token>' '<read-token>' > tokens.env
+chmod 600 tokens.env
 ```
 
-Run these `source/export` commands in every new shell before starting Nextflow.
-For Docker profile runs, keep `tokens.env` in the repository root (default bind-mounted working directory) and pass `--hf_token_env_file tokens.env`.
-
-If you get `401 Unauthorized` during UNI-2 download, check token validity and model access approval.
+The same token may populate all variables only when its account has separately
+been approved for every selected repository. Never commit tokens or gated model
+weights. For the complete component-by-component matrix, offline-HPC staging,
+container authentication, cache setup, manual-checkpoint parameters and error
+diagnostics, read [Tool and model access](docs/TOOL_AND_MODEL_ACCESS.md).
 
 ## Project-local model caches (default)
 
 StarDist and Hugging Face model downloads now default to project-local cache paths:
 
 - StarDist: `${REPO}/.keras`
-- UNI-2 / GigaTIME: `${REPO}/.hf_cache`
+- Foundation encoders / GigaTIME: `${REPO}/.hf_cache`
 
 This matters for Docker reruns: because both caches live inside the repository, they are visible inside containerized Nextflow tasks and can be reused offline.
 
@@ -155,11 +175,11 @@ curl -L --retry 5 --connect-timeout 30 \
 
 On the first StarDist run, CellPhenotyper will normalize and extract that zip into `.keras/models/StarDist2D/...` automatically. Later reruns reuse the local cache and do not re-download the pretrained model.
 
-One-time Hugging Face predownload into the default project cache:
+One-time Hugging Face predownload into the default project cache (shown for
+UNI2-h and GigaTIME; use only repositories for which the account has approval):
 
 ```bash
 source tokens.env
-export HF_TOKEN="${HF_UNI2}"
 export HF_HOME="${PWD}/.hf_cache"
 export HF_HUB_CACHE="${HF_HOME}/hub"
 
@@ -167,13 +187,15 @@ python - <<'PY'
 import os
 from huggingface_hub import snapshot_download
 
-snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_TOKEN"].strip())
-snapshot_download("prov-gigatime/GigaTIME", token=os.environ["HF_TOKEN"].strip())
+snapshot_download("MahmoodLab/UNI2-h", token=os.environ["HF_UNI2"].strip())
+snapshot_download("prov-gigatime/GigaTIME", token=os.environ["HF_GIGATIME"].strip())
 print("HF caches ready")
 PY
 ```
 
-Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted cache for both UNI-2 and GigaTIME.
+Later Docker reruns can set `--hf_hub_offline true` and reuse the same mounted
+cache. See the [offline HPC instructions](docs/TOOL_AND_MODEL_ACCESS.md#online-staging-and-offline-hpc-execution)
+for Virchow, Virchow2, Phikon-v2 and TITAN staging.
 
 ## GrandQC tissue and artifact gating
 
@@ -263,8 +285,8 @@ Downstream stages run independently for every configured variant:
 - `11_clustering`
 - `12_cluster_mask`
 - `13_grown_tissue` (cell-centred route only; grid masks bypass growth)
-- `14_medsam_refine_tissue`
-- `15_cluster_geojson`
+- `14_medsam_refine_tissue` (legacy directory name; Bora is the default engine)
+- `15_cluster_geojson` (Bora topology-aware vector output)
 
 Variant-specific filenames are written inside the per-sample folders, for example:
 
@@ -275,18 +297,18 @@ Variant-specific filenames are written inside the per-sample folders, for exampl
 - `<sample>_standard_grown_mask_smooth_class.geojson`
 - `<sample>_fine_grown_mask_smooth_class.geojson`
 
-Step `14_medsam_refine_tissue` also copies the corresponding KODAMA membership PNG for each variant into the MedSAM output folder as:
+Step `14_medsam_refine_tissue` also copies the corresponding KODAMA membership PNG for each variant into the compatibility output folder as:
 
-- `<sample>_standard_medsam_kodama_membership.png`
-- `<sample>_fine_medsam_kodama_membership.png`
+- `<sample>_standard_bora_kodama_membership.png`
+- `<sample>_fine_bora_kodama_membership.png`
 
 That keeps the refined tissue result side by side with the clustering visualization that produced it.
 
-UNI-2 embeddings are generated after their required observations are available. `--uni2_sampling_mode grid` is the default and drives UNI-2, KODAMA, clustering, and cluster-mask generation from regular GrandQC tissue-supported spatial observations without running a cell-centred route. GrandQC artifact candidates are annotated rather than removed before representation learning. `--uni2_sampling_mode cells` explicitly selects nucleus-centred observations. `--uni2_sampling_mode both` keeps the grid route primary and, after it releases the GPU, runs a complete independent cell-centred route under the `<sample>__cells` namespace: UNI-2, KODAMA, clustering, sparse cell-mask construction, tissue growth, MedSAM refinement, and GeoJSON export. The unsuffixed grid mask bypasses cell-mask growth. In grid modes, the calibrated source-pixel stride equals the fixed 90-pixel inner square in UNI-2 input space, so inner-square cores are side by side while the larger 224-pixel context tiles overlap. The compact grid CSV/JSON avoids a full-resolution intermediate label image, and `09_grid_tiles/<sample>/*_uni2_grid_preview.png` provides QC.
+Foundation-model embeddings are generated after their required observations are available. `--uni2_sampling_mode grid` is the default and drives the selected encoder, KODAMA, clustering, and cluster-mask generation from regular GrandQC tissue-supported spatial observations without running a cell-centred route. GrandQC artifact candidates are annotated rather than removed before representation learning. `--uni2_sampling_mode cells` explicitly selects nucleus-centred observations. `--uni2_sampling_mode both` keeps the grid route primary and, after it releases the GPU, runs a complete independent cell-centred route under the `<sample>__cells` namespace. The unsuffixed grid mask bypasses cell-mask growth. The encoder-neutral default `--foundation_inner_strategy inner28_stride56` uses a 28-model-pixel central local region on a 56-model-pixel grid stride inside the overlapping 224-pixel context fields. The compact grid CSV/JSON avoids a full-resolution intermediate label image, and `09_grid_tiles/<sample>/*_uni2_grid_preview.png` provides QC.
 
-Both sampling modes use the optimized paired `tile` + `inner_square` pass: one Python process loads the selected registered encoder once and derives both representations from the same forward pass with model-specific spatial-token handling. UNI2-h remains the default. Experimental `virchow`, `virchow2`, and `phikon-v2` adapters preserve the same observations, 224-pixel tensor geometry, physical sampling, KODAMA settings and clustering policy; Virchow/Virchow2 use CLS-plus-mean-patch pooling and Virchow2 explicitly excludes its four register tokens from spatial and inner-square features. Conservative model-specific batch caps supplement OOM backoff. The source crop is calibrated to `uni2_target_mpp` before the input transform. Per-observation PNG tile export is disabled by default because KODAMA consumes embedding shards; enable `--uni2_save_tiles true` only for QC/debugging. Alternative checkpoints must be approved and staged in the shared Hugging Face cache on the execution host; the pipeline does not acquire access or change the encoder automatically.
+Both sampling modes use the optimized paired `tile` + `inner_square` pass: one Python process loads the selected registered encoder once and derives both representations from the same forward pass with model-specific spatial-token handling. The public API is identical for UNI2-h and Virchow2, for example `--foundation_encoder uni2-h --foundation_inner_strategy inner28_stride56` or `--foundation_encoder virchow2 --foundation_inner_strategy inner28_stride56`. `inner56_stride56`, `inner90_stride90`, and `custom` are explicit alternatives; custom geometry uses `foundation_inner_square_px` and `foundation_grid_stride_px`. `foundation_inner_extraction=token_subset` is the one-pass default, while `masked_forward` is the declared two-pass sensitivity definition. Historical `uni2_encoder`, `uni2_inner_square_fixed_px`, `uni2_grid_stride_px`, and `uni2_paired_inner_square_mode` inputs remain compatibility aliases. Virchow/Virchow2 use CLS-plus-mean-patch pooling and Virchow2 explicitly excludes its four register tokens from spatial and inner-square features. Conservative model-specific batch caps supplement OOM backoff. The source crop is calibrated to `uni2_target_mpp` before the input transform. Alternative checkpoints must be approved and staged in the shared Hugging Face cache on the execution host; the pipeline does not acquire access or change the encoder automatically.
 
-PathSegmentor is also available as an opt-in, CUDA-only evidence branch (`pathsegmentor_enable: true`) using an explicitly supplied pinned source checkout, config and checkpoint. It processes overlapping 1024-pixel fields at 0.25 µm/px, clips all semantic probabilities to the existing GrandQC tissue support, and publishes raw probabilities and tile scores under `09b_pathsegmentor`. After KODAMA clustering, `09c_pathsegmentor_annotations` contains per-grid and per-cell prompt scores plus descriptive cluster summaries. `pathsegmentor_guided_refine_enable` adds a separate `14b_pathsegmentor_refine` sensitivity result: semantic prototypes are learned from eroded KODAMA cluster interiors and may relabel only a declared boundary band (and, only when explicitly enabled, unlabeled pixels inside GrandQC tissue). This branch never changes KODAMA fitting, raw cluster masks, or the default MedSAM output. See [the foundation-encoder and PathSegmentor comparison contract](docs/FOUNDATION_ENCODER_COMPARISON.md).
+PathSegmentor is also available as an opt-in, CUDA-only evidence branch (`pathsegmentor_enable: true`) using an explicitly supplied pinned source checkout, config and checkpoint. It processes overlapping 1024-pixel fields at 0.25 µm/px, clips all semantic probabilities to the existing GrandQC tissue support, and publishes raw probabilities and tile scores under `09b_pathsegmentor`. After KODAMA clustering, `09c_pathsegmentor_annotations` contains per-grid and per-cell prompt scores plus descriptive cluster summaries. `pathsegmentor_guided_refine_enable` adds a separate `14b_pathsegmentor_refine` sensitivity result: semantic prototypes are learned from eroded KODAMA cluster interiors and may relabel only a declared boundary band (and, only when explicitly enabled, unlabeled pixels inside GrandQC tissue). This branch never changes KODAMA fitting, raw cluster masks, or the default Bora output. See [the foundation-encoder and PathSegmentor comparison contract](docs/FOUNDATION_ENCODER_COMPARISON.md).
 
 `--uni2_embedding_storage binary` separates numerical feature arrays from small row metadata, avoiding feature-CSV parsing in R/KODAMA and Python profile/hierarchy consumers. It preserves explicit IDs, precision and checksummed payloads; CSV remains the compatibility default. See [binary storage and benchmark scope](docs/UNI2_BINARY_STORAGE.md). Changing storage requires compatible new extraction outputs, not mixing formats in an existing result directory.
 
@@ -300,7 +322,9 @@ nextflow run main.nf -profile singularity -params-file pipeline_paramers.yml \
   -resume
 ```
 
-Before MedSAM, neighbouring KODAMA labels compete inside a bounded internal-boundary error band. A deterministic mean-field annealing schedule minimizes a robust Lab/optical-density data term plus an edge-weighted, distance-weighted eight-neighbour Potts penalty; only a label present on the local wand-like frontier may invade a pixel. For streamed WSI execution, Lab/optical-density centring, scaling and cluster prototypes are fitted once from a deterministic bounded sample of trusted pixels across the slide and reused for every processing window. MedSAM likewise receives the fixed RGB uint8-to-[0,1] transform in every window; it never rescales a tile by that tile's own minimum or maximum. These slide-consistent contracts prevent 4096-pixel processing-window context from changing identical pixel values and appearing as a rectangular tissue pattern. Protected cluster cores and the tissue/background footprint cannot change. GrandQC candidate artifacts remain tissue unless the post-KODAMA outlier gate confirms them; only those confirmed cores are excluded. MedSAM is then applied per cluster label using the optimized categorical mask and overlapping cluster-border tiles on the pipeline-resolved GPU. A tile containing only one cluster remains valid because MedSAM refines that cluster's external tissue support. After MedSAM cleanup, an optional marker-controlled watershed can snap residual internal boundaries to a configurable spatial scale of luminance, Lab, optical-density, or combined Lab/OD H&E gradients within a bounded 64-pixel band; zero gradient smoothing reproduces the historical microtexture-sensitive route. For exactly two nonzero tissue labels, the default automatic appearance phase then detects large coherent assignment errors from multiscale Lab/optical-density H&E features and pipeline-derived eroded label cores. None of these production stages consumes expert annotations. The summary and QC panel distinguish the grid or grown input, pre-MedSAM competition, raw MedSAM predictions, cleaned labels and the image-guided final result.
+Stages 18 and 19 are now one pinned Bora operation. Bora first applies deterministic annealed-wand competition within a 64-pixel internal boundary band and then native marker-controlled watershed with protected cluster cores. CellPhenotyper sets Bora's outer dilation and morphological closing radius to zero by default, because the upstream GrandQC/KODAMA mask is the authoritative foreground footprint: GrandQC candidates remain tissue and only post-KODAMA confirmed artifact outliers (uncertainty code 5) are hard negatives. The adapter fails closed if Bora places any label outside this support. Bora writes the pyramidal categorical OME-TIFF and performs coverage-aware, shared-boundary-preserving GeoJSON simplification in the same process. CellPhenotyper then adds its existing categorical uncertainty/provenance sidecars without altering Bora's labels. The repository and exact Bora commit are recorded in both the Bora report and output provenance. `grown_tissue_refine_method=medsam_border_refine` remains available only for an explicit legacy sensitivity run; it is no longer the production default. No production refinement consumes expert annotations.
+
+The Bora and legacy vectorization routes both publish final polygons in original-image level-zero pixels. `shift.json` supplies the crop-to-original translation; translation occurs only after topology/fidelity checks, so polygon areas, shared edges and categorical error measurements are unchanged. The stage fails rather than publishing a GeoJSON when any pre-translation geometry lies outside the declared crop or when crop offset, bounding box and image sizes disagree.
 
 ## Linux quick run
 
@@ -353,7 +377,7 @@ nextflow run main.nf \
   --outdir_base results_example_gpu \
   --compute_device gpu \
   --host_arch amd64 \
-  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64 \
+  --gpu_container_image ghcr.io/tkcaccia/cellphenotyper-runtime:2.9-gpu-amd64 \
   --hf_token_env_file tokens.env \
   --hf_token_env_var_name HF_UNI2
 ```
@@ -468,7 +492,7 @@ nextflow run "$REPO/main.nf" \
 Important:
 - Run inside a scheduler allocation (`srun`, `sbatch`, etc.) so Nextflow sees the allocated CPUs.
 - Do not pass `--stardist_pretrained_zip` when the extracted folder already exists under `.../StarDist2D/2D_versatile_he`.
-- In `-profile singularity`, amd64 GPU roles resolve `oras://ghcr.io/tkcaccia/cellphenotyper:2.8-sif-gpu-amd64` by default. A cluster may instead pre-pull `cellphenotyper-2.8-gpu-amd64.sif` to shared storage and pass its absolute path through `--gpu_container_image`.
+- In `-profile singularity`, amd64 GPU roles resolve `oras://ghcr.io/tkcaccia/cellphenotyper:2.9-sif-gpu-amd64` by default. A cluster may instead pre-pull `cellphenotyper-2.9-gpu-amd64.sif` to shared storage and pass its absolute path through `--gpu_container_image`.
 
 Singularity/Apptainer (GPU, Linux arm64 + NVIDIA):
 
@@ -498,7 +522,7 @@ nextflow run main.nf \
   --end_point grow_tissue
 ```
 
-Grid-primary runs intentionally skip `grow_tissue`; use `--start_point cluster_mask --end_point medsam_refine` to reconstruct and refine a grid mask.
+Grid-primary runs intentionally skip `grow_tissue`; use `--start_point cluster_mask --end_point cluster_geojson` to run the Bora refinement/vector pair on a reconstructed grid mask. The public `medsam_refine` stage name is retained as a restart-compatibility alias for the refinement boundary.
 
 ## macOS quick run
 
@@ -590,7 +614,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 docker build -f docker/Dockerfile.full.cpu -t "${IMAGE}" .
 docker push "${IMAGE}"
 ```
-Cell identification has an explicit, hardware-independent scientific mode. The shipped default, `cell_detection_mode=stardist`, runs only StarDist. The optional `cell_detection_mode=consensus` route adds HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask. HoVer-Net defaults to a bounded-disk overlap-tiled route: only GrandQC-supported 4,096-pixel cores run, a 256-pixel halo preserves local context, and centroid ownership removes halo duplicates without slide-wide prediction maps. At most 64 normalized input tiles exist simultaneously. The detectors have no inter-detector dependency and fusion alone waits for all three. In consensus mode, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors by default. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. Its compact gzip JSON therefore omits redundant contours by default. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved; the pipeline never changes the cell population merely because hardware differs.
+Cell identification has an explicit, hardware-independent scientific mode. The shipped default, `cell_detection_mode=stardist`, runs only StarDist. `cell_detection_mode=none` is the true cell-free tissue-grid route: it prepares the shared crop but skips StarDist, HoVer-Net, CellViT++, cell assignment, cytoplasm expansion, and cell profiles. The optional `cell_detection_mode=consensus` route adds HoVer-Net MoNuSAC and CellViT++ on the same MPP-aware crop and GrandQC mask. HoVer-Net defaults to a bounded-disk overlap-tiled route: only GrandQC-supported 4,096-pixel cores run, a 256-pixel halo preserves local context, and centroid ownership removes halo duplicates without slide-wide prediction maps. At most 64 normalized input tiles exist simultaneously. The detectors have no inter-detector dependency and fusion alone waits for all three. In consensus mode, canonical instances require spatial agreement between the broad-scope StarDist and CellViT++ detectors by default. HoVer-Net MoNuSAC is recorded separately as scoped supporting evidence and does not inflate the broad-detector agreement score or shift the canonical centroid. Its compact gzip JSON therefore omits redundant contours by default. The legacy two-of-any-three policy is available only through `--cell_consensus_fusion_acceptance_policy any_two`. Consensus requires a GPU and fails if only CPU execution is resolved; the pipeline never changes the cell population merely because hardware differs. See the [fast tissue-segmentation recipe](docs/FAST_TISSUE_SEGMENTATION.md) for the validated Virchow2/KODAMA/Bora command that also keeps GigaTIME disabled.
 
 GigaTIME is also optional and disabled by default. A normal run does not require a GigaTIME model path or token and does not schedule virtual-marker inference, marker quantification, or marker-derived KODAMA. Enable the branch explicitly with `--gigatime_enable true`; enable its dependent outputs separately when required.
 
@@ -602,7 +626,7 @@ Pipeline-wide hardware auto-tuning is enabled by default. At startup, CellPhenot
 
 Before any image process is submitted, the default storage preflight probes each WSI, adjusts conservatively for a discoverable ROI, estimates active-stage output/work/cache growth, aggregates paths that share a filesystem, and separates expected demand from restart worst-case demand. Expected-capacity failure stops the run; restart-only insufficiency is reported as a warning. The complete calculation is saved as `00_execution/storage_preflight.json`. See [storage preflight](docs/STORAGE_PREFLIGHT.md).
 
-On the cell-centred route, sparse cell-supported cluster labels are grown through tissue before MedSAM. On the grid route, adjacent inner cores already form a dense spatial cluster mask, so `GROW_TO_TISSUE` is skipped and MedSAM receives the grid cluster mask directly as both seed and baseline. MedSAM also receives the crop-aligned GrandQC tissue/ROI mask. GrandQC background is always a hard negative. Artifact candidates are retained unless the cluster-conditioned KODAMA outlier gate confirms them; confirmed outlier cores use uncertainty code 5 and become hard negatives for seeds, prompts, editable bands, intermediate predictions and final labels. The stage asserts zero final leakage and publishes a dedicated tissue-support QC map alongside pixel-level exclusion metrics.
+On the cell-centred route, sparse cell-supported cluster labels are grown through tissue before Bora. On the grid route, adjacent inner cores already form a dense spatial cluster mask, so `GROW_TO_TISSUE` is skipped and Bora receives the grid mask directly. GrandQC background is always a hard negative. Artifact candidates are retained unless the cluster-conditioned KODAMA outlier gate confirms them; confirmed outlier cores use uncertainty code 5 and remain outside the final support. The post-Bora contract asserts zero final leakage and publishes pixel-level support counts in the Bora and provenance reports.
 
 Normalized HoVer-Net and CellViT++ outputs expose both the upstream numeric `type_id` and a readable `type` name. MoNuSAC names are `background`, `epithelial`, `lymphocyte`, `macrophage`, and `neutrophil`; CellViT++ PanNuke names are `neoplastic`, `inflammatory`, `connective`, `dead`, and `epithelial`. The official MoNuSAC label scope is not exhaustive: fibroblasts and other nuclei outside its four positive classes can be treated as background. Therefore HoVer-Net MoNuSAC totals are expected to be lower than general-nucleus detectors and are interpreted as class-specific supporting evidence, not a standalone cellularity estimate. Consensus QC reports both the all-detector count ratio and the StarDist/CellViT++ broad-scope ratio so this distinction is visible.
 
@@ -665,8 +689,9 @@ sizes to storage preflight. This prevents the small preview stored in the VSI
 header from being budgeted as if it were the whole slide.
 
 Input and analysis-crop storage compression is configurable with
-`--convert_compression JPEG|LZW|DEFLATE|NONE`. `JPEG` is lossy and uses
-`--convert_jpeg_quality` (1-100); `LZW` and `DEFLATE` are lossless. The same
+`--convert_compression JPEG|LZW|DEFLATE|NONE`. `LZW` is the lossless default.
+`JPEG` is an explicit lossy option and uses `--convert_jpeg_quality` (1-100);
+`LZW` and `DEFLATE` are lossless. The same
 codec is used for the converted OME-TIFF and the tiled, pyramidal
 `crop_roi.tif`. Downstream models, including HoVer-Net, read those compressed
 TIFFs directly and decode only the tiles needed for computation.

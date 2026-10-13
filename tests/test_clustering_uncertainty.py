@@ -1,6 +1,7 @@
 import sys
 import subprocess
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,9 @@ def test_cluster_process_exposes_stability_and_abstention_contract():
     assert "cluster_resolution_candidates.csv" in module_text
     assert "--observations \"${objects_assigned_csv}\"" in module_text
     assert "grandqc_artifact_kodama_outlier" in script_text
+    assert "reassign_after_target_merge" in script_text
+    assert "post_target_merged_landmark_vote_not_probability" in script_text
+    assert "Recomputing landmark votes after forced merge" in script_text
 
 
 def test_interpretable_cluster_abstentions_map_to_background(tmp_path):
@@ -121,6 +125,22 @@ def test_cluster_palette_is_stable_by_cluster_id_not_observed_subset():
     np.testing.assert_array_equal(first[0, 0], DEFAULT_PALETTE[0])
     np.testing.assert_array_equal(first[0, 1], DEFAULT_PALETTE[2])
     np.testing.assert_array_equal(second[0, 0], DEFAULT_PALETTE[2])
+
+
+def test_kodama_and_tissue_previews_share_cluster_palette_and_raw_membership():
+    script_text = (ROOT / "bin" / "Rcode_Clustering.R").read_text()
+    palette_block = script_text.split("cluster_plot_colors <- function", 1)[1].split(")\n}", 1)[0]
+    r_hex = re.findall(r'#[0-9A-Fa-f]{6}', palette_block)
+    python_hex = ["#" + "".join(f"{channel:02X}" for channel in color) for color in DEFAULT_PALETTE]
+
+    assert r_hex[: len(python_hex)] == python_hex
+    membership_plot = script_text.split("draw_membership_plot <- function", 1)[1].split(
+        "draw_uncertainty_plot <- function", 1
+    )[0]
+    assert "membership[plot_idx] == as.integer(cluster_id)" in membership_plot
+    assert "membership[plot_idx] == as.integer(cluster_id) & accepted[plot_idx]" not in membership_plot
+    assert "pch = 4" in membership_plot
+    assert "total n=%d; accepted n=%d" in membership_plot
 
 
 def test_cell_cluster_mask_publishes_separate_abstention_raster(tmp_path):

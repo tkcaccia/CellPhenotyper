@@ -18,9 +18,9 @@ GPU_MODULES = (
 
 def test_verified_gpu_runtime_is_the_default() -> None:
     assert "default_container_gpu_repo = 'ghcr.io/tkcaccia/cellphenotyper-runtime'" in CONFIG
-    assert "default_container_gpu_tag = '2.8-gpu-amd64'" in CONFIG
+    assert "default_container_gpu_tag = '2.9-gpu-amd64'" in CONFIG
     assert "container_gpu_repo: ghcr.io/tkcaccia/cellphenotyper-runtime" in PARAMETERS
-    assert "container_gpu_tag: 2.8-gpu-amd64" in PARAMETERS
+    assert "container_gpu_tag: 2.9-gpu-amd64" in PARAMETERS
 
 
 def test_published_cpu_runtimes_are_the_defaults() -> None:
@@ -36,9 +36,11 @@ def test_published_cpu_runtimes_are_the_defaults() -> None:
 
 def test_gpu_release_refresh_uses_a_published_base_image() -> None:
     workflow = (ROOT / ".github" / "workflows" / "publish-runtime-release.yml").read_text()
-    dockerfile = (ROOT / "docker" / "Dockerfile.runtime-update.gpu").read_text()
-    assert "BASE_IMAGE=${{ env.IMAGE_REPO }}:2.2-gpu-amd64" in workflow
-    assert "ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper:2.2-gpu-amd64" in dockerfile
+    dockerfile = (ROOT / "docker" / "Dockerfile.source-refresh.gpu").read_text()
+    assert "BASE_IMAGE=${{ env.UPDATE_IMAGE_REPO }}:2.8-gpu-amd64" in workflow
+    assert "ARG BASE_IMAGE=ghcr.io/tkcaccia/cellphenotyper-runtime:2.8-gpu-amd64" in dockerfile
+    assert "SOURCE_COMMIT=${{ github.sha }}" in workflow
+    assert "2.9-sif-gpu-amd64" in (ROOT / "RELEASE.md").read_text()
     assert "2.3-gpu-amd64" not in workflow
     assert "2.3-gpu-amd64" not in dockerfile
 

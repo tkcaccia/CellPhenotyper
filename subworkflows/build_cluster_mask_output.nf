@@ -3,13 +3,11 @@ include { GRID_CLUSTERS_TO_MASK } from '../modules/grid_clusters_to_mask'
 
 workflow BUILD_CLUSTER_MASK_OUTPUT {
     take:
-    image_input_ch
     crop_roi_ch
     cluster_csv_ch
     labels_for_cluster_ch
     grid_objects_ch
     grid_metadata_ch
-    run_stardist
     uni2_grid_mode
 
     main:
@@ -18,11 +16,7 @@ workflow BUILD_CLUSTER_MASK_OUTPUT {
     if (secondaryVariant && !(secondaryVariant.toLowerCase() in ['none', 'false', 'off', '0'])) {
         if (!clusterVariants.contains(secondaryVariant)) clusterVariants << secondaryVariant
     }
-    def previewImageCh = (run_stardist as boolean)
-        ? crop_roi_ch
-        : image_input_ch.map { sample_id, _image_input ->
-            tuple(sample_id, file("${params.outdir_base}/03_stardist/${sample_id}/stardist_out/crop_roi.tif", checkIfExists: true))
-        }
+    def previewImageCh = crop_roi_ch
     def previewVariantCh = previewImageCh.flatMap { sample_id, preview_tif ->
         clusterVariants.collect { variant -> tuple("${sample_id}::${variant}", preview_tif) }
     }

@@ -11,6 +11,12 @@ from collections import defaultdict
 from pathlib import Path
 
 from grow_to_tissue import pyramidize_with_raw2ometiff
+from geojson_coordinates import (
+    CROP_FRAME,
+    ORIGINAL_FRAME,
+    original_to_crop_feature_collection,
+    read_crop_transform,
+)
 from ome_tiff_metadata import validate_ome_tiff
 
 
@@ -22,10 +28,20 @@ def polygon_components(geometry):
             yield from polygon_components(child)
 
 
-def load_sections(path: Path, cluster_variant: str) -> list[dict]:
+def load_sections(path: Path, cluster_variant: str, shift_path: Path) -> tuple[list[dict], str]:
     from shapely.geometry import shape
 
     payload = json.loads(path.read_text())
+    metadata = payload.get("cellphenotyper_coordinate_system")
+    source_frame = (
+        metadata.get("coordinate_space")
+        if isinstance(metadata, dict)
+        else CROP_FRAME
+    )
+    if source_frame == ORIGINAL_FRAME:
+        payload = original_to_crop_feature_collection(payload, shift_path)
+    elif source_frame != CROP_FRAME:
+        raise RuntimeError(f"Unsupported cluster GeoJSON coordinate frame: {source_frame!r}")
     sections = []
     for feature_index, feature in enumerate(payload.get("features", []), 1):
         geometry = shape(feature.get("geometry"))
@@ -51,7 +67,7 @@ def load_sections(path: Path, cluster_variant: str) -> list[dict]:
             })
     if not sections:
         raise RuntimeError(f"No polygonal tissue sections found in {path}")
-    return sections
+    return sections, source_frame
 
 
 class SectionGrid:
@@ -155,14 +171,34 @@ def write_sections_csv(sections: list[dict], path: Path, mpp: float, selected_id
             })
 
 
-def write_geojson(section: dict, path: Path, origin: tuple[int, int] | None = None) -> None:
+def write_geojson(
+    section: dict,
+    path: Path,
+    *,
+    original_offset: tuple[int, int] | None = None,
+    coordinate_transform: dict | None = None,
+    crop_origin: tuple[int, int] | None = None,
+) -> None:
     from shapely.affinity import translate
     from shapely.geometry import mapping
 
     geometry = section["geometry"]
-    coordinate_space = "roi_crop_level0_pixels"
-    if origin is not None:
-        geometry = translate(geometry, xoff=-origin[0], yoff=-origin[1])
+    if coordinate_transform is not None:
+        if original_offset is not None:
+            raise ValueError("Provide original_offset or coordinate_transform, not both")
+        original_offset = (
+            int(coordinate_transform["dx"]), int(coordinate_transform["dy"])
+        )
+    if original_offset is not None and crop_origin is not None:
+        raise ValueError("A GeoJSON cannot use both original-image and local-crop offsets")
+    coordinate_space = CROP_FRAME
+    if original_offset is not None:
+        geometry = translate(
+            geometry, xoff=original_offset[0], yoff=original_offset[1]
+        )
+        coordinate_space = ORIGINAL_FRAME
+    elif crop_origin is not None:
+        geometry = translate(geometry, xoff=-crop_origin[0], yoff=-crop_origin[1])
         coordinate_space = "selected_section_crop_pixels"
     properties = {
         key: section[key]
@@ -172,10 +208,35 @@ def write_geojson(section: dict, path: Path, origin: tuple[int, int] | None = No
         )
     }
     properties["coordinate_space"] = coordinate_space
-    path.write_text(json.dumps({
+    payload = {
         "type": "FeatureCollection",
         "features": [{"type": "Feature", "properties": properties, "geometry": mapping(geometry)}],
-    }))
+    }
+    if original_offset is not None:
+        payload["cellphenotyper_coordinate_system"] = {
+            "coordinate_space": ORIGINAL_FRAME,
+            "units": "level_zero_pixels",
+            "pixel_reference": "pixel_edges",
+            "transform": {
+                "type": "translation",
+                "crop_to_original_offset_xy": list(original_offset),
+                "scale_xy": [1.0, 1.0],
+            },
+        }
+        if coordinate_transform is not None:
+            payload["cellphenotyper_coordinate_system"].update({
+                "crop_size_xy": [
+                    coordinate_transform["crop_size"]["width"],
+                    coordinate_transform["crop_size"]["height"],
+                ],
+                "original_size_xy": (
+                    [coordinate_transform["full_size"]["width"],
+                     coordinate_transform["full_size"]["height"]]
+                    if coordinate_transform.get("full_size") else None
+                ),
+                "shift_json_sha256": coordinate_transform["source_sha256"],
+            })
+    path.write_text(json.dumps(payload))
 
 
 def write_crop(
@@ -296,7 +357,10 @@ def main() -> None:
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    sections = load_sections(Path(args.cluster_geojson), args.cluster_variant)
+    transform = read_crop_transform(Path(args.shift))
+    sections, source_geojson_frame = load_sections(
+        Path(args.cluster_geojson), args.cluster_variant, Path(args.shift)
+    )
     names = {name.strip().lower() for name in args.neoplastic_names.split(",") if name.strip()}
     counts = count_cells(Path(args.objects), sections, names, args.spatial_bin_size)
     selected = select_section(sections)
@@ -308,10 +372,15 @@ def main() -> None:
         args.max_workers,
     )
     write_sections_csv(sections, outdir / "section_neoplastic_counts.csv", mpp, selected["section_id"])
-    write_geojson(selected, outdir / "selected_section.geojson")
+    original_offset = (transform["dx"], transform["dy"])
+    write_geojson(
+        selected,
+        outdir / "selected_section.geojson",
+        coordinate_transform=transform,
+    )
     write_geojson(
         selected, outdir / "selected_section_crop.geojson",
-        (crop_metadata["crop_origin_x"], crop_metadata["crop_origin_y"]),
+        crop_origin=(crop_metadata["crop_origin_x"], crop_metadata["crop_origin_y"]),
     )
     summary = {
         "selection_rule": "maximum named neoplastic consensus-cell count; ties by total cells, area, section ID",
@@ -321,6 +390,9 @@ def main() -> None:
         "selected_neoplastic_cells": selected["neoplastic_cells"],
         "selected_total_cells": selected["total_cells"],
         "selected_area_px2": selected["area_px2"],
+        "source_cluster_geojson_coordinate_space": source_geojson_frame,
+        "published_selected_section_coordinate_space": ORIGINAL_FRAME,
+        "analysis_crop_to_original_offset_xy": list(original_offset),
         **counts,
         **crop_metadata,
     }

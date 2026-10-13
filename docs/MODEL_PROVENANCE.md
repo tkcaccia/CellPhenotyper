@@ -28,11 +28,18 @@ A technically successful run may therefore have a failing `model_provenance` qua
 | CellViT++ HIPT | [component-specific license](https://github.com/TIO-IKIM/CellViT-plus-plus/blob/main/LICENSE) | HIPT-derived and original components include Commons Clause restrictions in addition to Apache-2.0 terms. |
 | GigaTIME | [repository license file](https://huggingface.co/prov-gigatime/GigaTIME/blob/main/LICENSE) | The restrictive research-only license file conflicts with the `apache-2.0` model-card metadata. Release use remains blocked until the provider resolves or clarifies that conflict. |
 | UNI2-h | [CC BY-NC-ND 4.0 gated terms](https://huggingface.co/MahmoodLab/UNI2-h) | Verified gated, non-commercial academic-use terms; checkpoint redistribution is prohibited. |
+| Virchow | [Apache-2.0 and gated model-card terms](https://huggingface.co/paige-ai/Virchow) | Each user must accept the repository's additional access and responsible-use terms; approval is not inherited from another model. |
+| Virchow2 | [CC BY-NC-ND 4.0 gated terms](https://huggingface.co/paige-ai/Virchow2) | Verified gated, non-commercial academic-use terms; checkpoint redistribution is prohibited. |
+| Phikon-v2 | [Owkin non-commercial license](https://huggingface.co/owkin/phikon-v2/blob/main/LICENSE) | Publicly downloadable but restricted to non-commercial use under the upstream license. |
 | MedSAM | [Apache-2.0 software](https://github.com/bowang-lab/MedSAM) | The downloaded ViT-B checkpoint terms still require a separately verified statement. |
+| Bora | [repository](https://github.com/tkcaccia/Bora), pinned revision `00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e` | No license file or declared repository license was present when integrated on 2026-09-26. Internal testing is recorded, but public redistribution and release-ready claims remain blocked until explicit terms are added and reviewed. |
 | TITAN | [CC BY-NC-ND 4.0 gated terms](https://huggingface.co/MahmoodLab/TITAN) | Verified gated, non-commercial academic-use terms; the resolved snapshot commit is recorded even when `main` was requested. |
 | PathoFMPred | Private installed package | Package version, installed serialized model databases, `DESCRIPTION`, `NAMESPACE`, declared license and source URL are recorded. Missing private source or license metadata remains a release blocker. |
 
 The registry intentionally uses `null` or a blocking status when evidence is unavailable. Do not replace these with assumptions inferred from a related software repository, paper or dataset.
+
+The acquisition procedure for every bundled, public, gated, run-supplied and
+private component is maintained in [Tool and model access](TOOL_AND_MODEL_ACCESS.md).
 
 ## Legacy outputs
 

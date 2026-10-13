@@ -99,8 +99,8 @@
       "role": "experimental pathology image representation feeding unchanged KODAMA",
       "source_repository": "https://huggingface.co/paige-ai/Virchow",
       "artifact_source": "https://huggingface.co/paige-ai/Virchow",
-      "license": "model-card terms must be accepted and recorded before use",
-      "license_status": "gated_terms_require_run_specific_audit",
+      "license": "Apache-2.0 plus gated model-card access and responsible-use terms",
+      "license_status": "verified_upstream_gated",
       "training_domain": "self-supervised histopathology foundation-model representation",
       "metadata_globs": ["09_embeddings/**/.virchow_embedding_complete.json"],
       "stage_presence_globs": ["09_embeddings/**/virchow_embeddings_shard*.csv.gz"]
@@ -112,8 +112,8 @@
       "role": "experimental pathology image representation feeding unchanged KODAMA",
       "source_repository": "https://huggingface.co/paige-ai/Virchow2",
       "artifact_source": "https://huggingface.co/paige-ai/Virchow2",
-      "license": "model-card terms must be accepted and recorded before use",
-      "license_status": "gated_terms_require_run_specific_audit",
+      "license": "CC BY-NC-ND 4.0 with gated non-commercial academic-use terms",
+      "license_status": "verified_upstream",
       "training_domain": "self-supervised histopathology foundation-model representation",
       "metadata_globs": ["09_embeddings/**/.virchow2_embedding_complete.json"],
       "stage_presence_globs": ["09_embeddings/**/virchow2_embeddings_shard*.csv.gz"]
@@ -125,8 +125,8 @@
       "role": "experimental pathology image representation feeding unchanged KODAMA",
       "source_repository": "https://huggingface.co/owkin/phikon-v2",
       "artifact_source": "https://huggingface.co/owkin/phikon-v2",
-      "license": "model-card terms must be reviewed and recorded before use",
-      "license_status": "terms_require_run_specific_audit",
+      "license": "Owkin non-commercial license",
+      "license_status": "verified_upstream_noncommercial",
       "training_domain": "self-supervised histopathology foundation-model representation",
       "metadata_globs": ["09_embeddings/**/.phikon-v2_embedding_complete.json"],
       "stage_presence_globs": ["09_embeddings/**/phikon-v2_embeddings_shard*.csv.gz"]

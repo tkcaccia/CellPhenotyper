@@ -9,6 +9,7 @@ ARG BIOCGENERICS_REVISION=32f12a9b54e4fe33dc447f3e2c488b0d91b6a61b
 ARG S4VECTORS_REVISION=fc819a547a51d682f7788ae16a42c26840b1ed2f
 ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 ARG CONCH_REVISION=141cc09c
+ARG BORA_REVISION=00d9cc5d3d06cc4d55a5ec2e71676d7f7f52c92e
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git build-essential pkg-config \
@@ -169,6 +170,12 @@ RUN mkdir -p /opt/cellphenotyper/third_party && \
 
 RUN mkdir -p /opt/cellphenotyper/empty-r-library
 
+RUN git clone https://github.com/tkcaccia/Bora /opt/cellphenotyper/third_party/Bora && \
+    git -C /opt/cellphenotyper/third_party/Bora checkout "${BORA_REVISION}" && \
+    test "$(git -C /opt/cellphenotyper/third_party/Bora rev-parse HEAD)" = "${BORA_REVISION}" && \
+    micromamba run -n stardist pip install --no-cache-dir --no-deps /opt/cellphenotyper/third_party/Bora && \
+    micromamba run -n stardist python -c 'import bora; from bora.cli import parser; parser(); print("Bora runtime check passed")'
+
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV PATH=/opt/micromamba/envs/stardist/bin:$PATH
@@ -178,6 +185,8 @@ ENV CELLPHENOTYPER_HOME=/opt/cellphenotyper
 ENV GRANDQC_HOME=/opt/cellphenotyper/third_party/grandqc
 ENV MEDSAM_REPO_DIR=/opt/cellphenotyper/third_party/MedSAM
 ENV MEDSAM_CHECKPOINT=/opt/cellphenotyper/third_party/MedSAM/work_dir/MedSAM/medsam_vit_b.pth
+ENV BORA_HOME=/opt/cellphenotyper/third_party/Bora
+ENV BORA_REVISION=${BORA_REVISION}
 ENV HOVERNET_REPO_DIR=/opt/cellphenotyper/third_party/hover_net
 ENV HOVERNET_MONUSAC_CHECKPOINT=/opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
 ENV CELLVIT_EXECUTABLE=/opt/micromamba/envs/cellvit/bin/cellvit-inference

@@ -17,7 +17,7 @@ PARAMS_PATH = ROOT / "pipeline_paramers.yml"
 sys.path.insert(0, str(ROOT / "bin"))
 
 from validate_pipeline_params import load_mapping  # noqa: E402
-from validate_pipeline_params import cross_field_errors
+from validate_pipeline_params import cross_field_errors, resolve_foundation_representation
 
 
 def test_pre_medsam_temperature_schedule_must_cool() -> None:
@@ -99,6 +99,42 @@ def test_grid_is_the_default_uni2_sampling_route() -> None:
     assert "params.uni2_sampling_mode ?: 'grid'" in (ROOT / "main.nf").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("encoder", ["uni2-h", "virchow2"])
+def test_shared_foundation_inner_strategy_api(encoder: str) -> None:
+    options = {
+        "foundation_encoder": encoder,
+        "foundation_inner_strategy": "inner28_stride56",
+        "foundation_inner_extraction": "token_subset",
+    }
+    validate(options)
+    resolved = resolve_foundation_representation(options)
+    assert resolved == {
+        "encoder": encoder,
+        "strategy": "inner28_stride56",
+        "inner_square_px": 28,
+        "grid_stride_px": 56,
+        "extraction": "token_subset",
+    }
+
+
+def test_foundation_default_and_legacy_geometry_resolution() -> None:
+    params = yaml.safe_load(PARAMS_PATH.read_text(encoding="utf-8"))
+    resolved = resolve_foundation_representation(params)
+    assert resolved["encoder"] == "uni2-h"
+    assert (resolved["inner_square_px"], resolved["grid_stride_px"]) == (28, 56)
+    legacy = resolve_foundation_representation({
+        "foundation_encoder": "virchow2",
+        "foundation_inner_strategy": "inner28_stride56",
+        "uni2_encoder": "uni2-h",
+        "uni2_inner_square_fixed_px": 90,
+        "uni2_grid_stride_px": 0,
+        "uni2_paired_inner_square_mode": "masked_forward",
+    })
+    assert legacy["encoder"] == "uni2-h"
+    assert (legacy["inner_square_px"], legacy["grid_stride_px"]) == (90, 90)
+    assert legacy["extraction"] == "masked_forward"
+
+
 def test_optional_model_branches_are_disabled_by_default() -> None:
     schema = load_schema()
     params = yaml.safe_load(PARAMS_PATH.read_text(encoding="utf-8"))
@@ -119,6 +155,34 @@ def test_optional_model_branches_are_disabled_by_default() -> None:
         assert params[name] is False
         assert f"{name}" in config
     assert "? false : params.gigatime_kodama_enable" in main
+
+
+def test_cell_free_tissue_route_is_schema_valid_and_rejects_cell_branches() -> None:
+    validate(
+        {
+            "analysis_intent": "tissue_domain_discovery",
+            "cell_detection_mode": "none",
+            "uni2_sampling_mode": "grid",
+            "gigatime_enable": False,
+            "marker_quantification_enable": False,
+            "cell_profiles_enable": False,
+            "titan_enable": False,
+            "pathofmpred_enable": False,
+            "foundation_encoder": "virchow2",
+            "uni2_include_inner_square": True,
+            "uni2_fuse_tile_inner_square": True,
+            "uni2_use_roi_crop": True,
+        }
+    )
+    for invalid in (
+        {"cell_detection_mode": "none", "uni2_sampling_mode": "cells"},
+        {"cell_detection_mode": "none", "uni2_sampling_mode": "both"},
+        {"cell_detection_mode": "none", "uni2_sampling_mode": "grid", "gigatime_enable": True},
+        {"cell_detection_mode": "none", "uni2_sampling_mode": "grid", "cell_profiles_enable": True},
+        {"cell_detection_mode": "none", "uni2_sampling_mode": "grid", "analysis_intent": "cell_segmentation"},
+    ):
+        with pytest.raises(jsonschema.ValidationError):
+            validate(invalid)
 
 
 @pytest.mark.parametrize("storage", ["csv", "binary"])

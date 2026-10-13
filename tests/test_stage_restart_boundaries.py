@@ -17,7 +17,8 @@ def test_medsam_is_an_independent_restart_stage() -> None:
     assert "medsam_refine_tissue: 'medsam_refine'" in PIPELINE_INPUTS
     assert PIPELINE_INPUTS.index("'grow_tissue', 'medsam_refine', 'cluster_geojson'") > 0
     assert "def run_medsam_refine = should_run_stage('medsam_refine')" in MAIN
-    assert "if (runMedsamRefine && grownRefineMethod == 'medsam_border_refine')" in SPATIAL
+    assert "if (runMedsamRefine && grownRefineMethod in ['bora', 'medsam_border_refine'])" in SPATIAL
+    assert "REFINE_WITH_BORA(refineInputCh, runtime_plan)" in SPATIAL
 
 
 def test_cluster_geojson_restart_consumes_published_medsam_output() -> None:
@@ -26,7 +27,8 @@ def test_cluster_geojson_restart_consumes_published_medsam_output() -> None:
         '${sample_id}_${clusterVariant}_grown_mask_refined.ome.tif'
     )
     assert expected in SPATIAL
-    assert "} else if (runClusterGeoJSON && grownRefineMethod == 'medsam_border_refine') {" in SPATIAL
+    assert "} else if (runClusterGeoJSON && grownRefineMethod in ['bora', 'medsam_border_refine']) {" in SPATIAL
+    assert "15_cluster_geojson/${sample_id}/${sample_id}_${variant}_grown_mask_smooth_class.geojson" in SPATIAL
     assert (
         "} else if (run_grow_tissue || run_medsam_refine || "
         "(run_cluster_geojson && uni2_grid_mode)) {"

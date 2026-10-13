@@ -1,0 +1,40 @@
+# Fast, cell-free tissue-domain segmentation.
+# Supply image_input/outdir_base on the command line or copy this file and edit them.
+run_full_pipeline: true
+analysis_intent: tissue_domain_discovery
+start_point: convert
+end_point: cluster_geojson
+
+# Prepare the shared crop, but do not run StarDist, HoVer-Net, CellViT++,
+# cell assignment, cytoplasm expansion, or any cell-profile workflow.
+cell_detection_mode: none
+tma_enable: false
+cell_profiles_enable: false
+
+# Do not run virtual-marker inference or marker-derived analysis.
+gigatime_enable: false
+marker_quantification_enable: false
+gigatime_kodama_enable: false
+
+# Tissue-grid representation used by the validated fast route.
+uni2_sampling_mode: grid
+foundation_encoder: virchow2
+foundation_inner_strategy: inner90_stride90
+foundation_inner_extraction: token_subset
+uni2_include_inner_square: true
+uni2_fuse_tile_inner_square: true
+uni2_use_roi_crop: true
+kodama_embedding_mode: tile
+kodama_ncomp: 50
+
+# Choose the graph-derived number of domains and refine with Bora.
+cluster_target_clusters: 0
+grown_tissue_refine_method: bora
+grandqc_enable: true
+grandqc_clean_tissue_policy: tissue_only
+
+# Optional learned branches remain off.
+pathsegmentor_enable: false
+pathsegmentor_guided_refine_enable: false
+titan_enable: false
+pathofmpred_enable: false

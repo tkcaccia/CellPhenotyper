@@ -17,11 +17,16 @@ def test_requested_stages_fail_when_their_output_channel_is_empty() -> None:
 
 
 def test_gigatime_and_marker_exact_restarts_load_stardist_prerequisites() -> None:
-    expected = (
-        "run_gigatime || run_marker_quantification || run_grid_tiles || run_uni2 || "
-        "run_cluster_mask"
-    )
-    assert expected in MAIN
+    assert "def need_analysis_inputs = stage_index[end_point] >= stage_index['stardist']" in MAIN
+
+
+def test_cell_free_grid_route_decouples_crop_from_stardist() -> None:
+    assert "def cell_detection_enabled = cell_detection_mode != 'none'" in MAIN
+    assert "def run_stardist = should_run_stage('stardist') && cell_detection_enabled" in MAIN
+    assert "def run_analysis_crop = should_run_stage('stardist') && need_analysis_inputs" in MAIN
+    assert "if (run_analysis_crop)" in MAIN
+    assert "BUILD_CLUSTER_MASK_OUTPUT(crop_roi_ch" in MAIN
+    assert "def image_for_growth_ch = crop_roi_ch" in MAIN
 
 
 def test_grandqc_is_mandatory_for_every_analysis_stage() -> None:

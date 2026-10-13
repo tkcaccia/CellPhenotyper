@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import math
 import re
@@ -243,6 +244,137 @@ def inspect_image_layout(path: Path) -> tuple[dict[str, Any], list[str]]:
     }, errors
 
 
+def _vips_patch(image, x: int, y: int, size: int):
+    import numpy as np
+
+    patch = image.crop(int(x), int(y), int(size), int(size)).cast("float")
+    array = np.frombuffer(patch.write_to_memory(), dtype=np.float32)
+    return array.reshape(size, size, patch.bands)[..., :3]
+
+
+def _probe_positions(width: int, height: int, size: int) -> list[tuple[int, int]]:
+    xmax = max(0, width - size)
+    ymax = max(0, height - size)
+    fractions = (0.05, 0.5, 0.9)
+    return sorted(
+        {
+            (int(round(xmax * fx)), int(round(ymax * fy)))
+            for fy in fractions
+            for fx in fractions
+        }
+    )
+
+
+def probe_rgb_decoding(path: Path, patch_size: int = 128) -> dict[str, Any]:
+    """Decode representative level-0 pixels through the pathology I/O stack."""
+    import numpy as np
+    import pyvips
+
+    image = pyvips.Image.new_from_file(str(path), access="random", page=0)
+    if image.bands < 3:
+        raise RuntimeError(f"RGB decode probe requires >=3 bands, found {image.bands}")
+    size = max(1, min(int(patch_size), int(image.width), int(image.height)))
+    positions = _probe_positions(int(image.width), int(image.height), size)
+    summaries = []
+    for x, y in positions:
+        pixels = _vips_patch(image, x, y, size)
+        if not np.isfinite(pixels).all():
+            raise RuntimeError(f"Non-finite decoded pixels at ({x}, {y})")
+        summaries.append(
+            {
+                "xy": [x, y],
+                "mean_rgb": [float(v) for v in pixels.mean(axis=(0, 1))],
+                "std_rgb": [float(v) for v in pixels.std(axis=(0, 1))],
+            }
+        )
+    return {
+        "backend": "pyvips-level0",
+        "shape_yxc": [int(image.height), int(image.width), int(image.bands)],
+        "interpretation": str(image.interpretation),
+        "patch_size": size,
+        "patches_decoded": len(summaries),
+        "patches": summaries,
+    }
+
+
+def compare_reference_pixels(
+    reference_path: Path,
+    converted_path: Path,
+    *,
+    lossless: bool,
+    patch_size: int = 128,
+) -> dict[str, Any]:
+    """Compare spatially identical RGB patches and detect channel permutation."""
+    import numpy as np
+    import pyvips
+
+    reference = pyvips.Image.new_from_file(
+        str(reference_path), access="random", page=0
+    )
+    converted = pyvips.Image.new_from_file(
+        str(converted_path), access="random", page=0
+    )
+    source_shape = (int(reference.height), int(reference.width), int(reference.bands))
+    output_shape = (int(converted.height), int(converted.width), int(converted.bands))
+    if source_shape[:2] != output_shape[:2]:
+        raise RuntimeError(
+            f"Converted level-0 dimensions differ from source: {output_shape[:2]} != {source_shape[:2]}"
+        )
+    if reference.bands < 3 or converted.bands < 3:
+        raise RuntimeError(
+            f"Pixel fidelity comparison requires RGB source/output, got bands={reference.bands}/{converted.bands}"
+        )
+    size = max(
+        1,
+        min(
+            int(patch_size),
+            int(reference.width),
+            int(reference.height),
+        ),
+    )
+    candidates = []
+    for x, y in _probe_positions(int(reference.width), int(reference.height), size):
+        source = _vips_patch(reference, x, y, size)
+        candidates.append((float(source.std()), x, y, source))
+    selected = sorted(candidates, reverse=True)[: min(3, len(candidates))]
+    source_pixels = []
+    converted_pixels = []
+    positions = []
+    for _, x, y, source in selected:
+        source_pixels.append(source.reshape(-1, 3))
+        converted_pixels.append(_vips_patch(converted, x, y, size).reshape(-1, 3))
+        positions.append([x, y])
+    source_values = np.concatenate(source_pixels, axis=0)
+    converted_values = np.concatenate(converted_pixels, axis=0)
+    permutation_mae = {}
+    for permutation in itertools.permutations(range(3)):
+        name = "".join("RGB"[index] for index in permutation)
+        permutation_mae[name] = float(
+            np.abs(source_values - converted_values[:, permutation]).mean()
+        )
+    best_permutation = min(permutation_mae, key=permutation_mae.get)
+    difference = source_values - converted_values
+    return {
+        "reference_image": str(reference_path),
+        "source_shape_yxc": list(source_shape),
+        "converted_shape_yxc": list(output_shape),
+        "lossless_expected": bool(lossless),
+        "patch_size": size,
+        "sampled_positions": positions,
+        "mae_rgb": [float(v) for v in np.abs(difference).mean(axis=0)],
+        "mae": float(np.abs(difference).mean()),
+        "rmse": float(np.sqrt(np.mean(difference * difference))),
+        "max_abs_error": float(np.abs(difference).max()),
+        "exact": bool(np.array_equal(source_values, converted_values)),
+        "permutation_mae": permutation_mae,
+        "best_output_channel_order": best_permutation,
+        "identity_advantage": float(
+            min(value for key, value in permutation_mae.items() if key != "RGB")
+            - permutation_mae["RGB"]
+        ),
+    }
+
+
 def _add_mpp_candidate(
     candidates: list[dict[str, Any]], source: str, mpp_x: Any, mpp_y: Any
 ) -> None:
@@ -445,6 +577,8 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     failures: list[str] = []
     require_rgb = bool(getattr(args, "require_rgb", False))
     require_pyramid = bool(getattr(args, "require_pyramid", False))
+    require_decodable = bool(getattr(args, "require_decodable", False))
+    compare_pixels = bool(getattr(args, "compare_reference_pixels", False))
     hash_file = bool(getattr(args, "hash_file", True))
     max_metadata_conflict_fraction = float(
         getattr(args, "max_metadata_conflict_fraction", 0.02)
@@ -524,6 +658,16 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             f"observed pyramid_level_count={pyramid_level_count}."
         )
 
+    decode_probe = None
+    if require_decodable:
+        try:
+            decode_probe = probe_rgb_decoding(path)
+        except Exception as exc:
+            failures.append(
+                "Converted RGB pixels are not decodable through the pathology I/O stack: "
+                f"{exc}"
+            )
+
     if info.mpp_x is None or info.mpp_y is None:
         failures.append(
             "Physical pixel size could not be resolved. Provide valid TIFF/OME metadata or --override-mpp."
@@ -550,6 +694,7 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     reference: dict[str, Any] | None = None
     byte_identical_to_reference = None
     conversion_relationship = None
+    pixel_fidelity = None
     if args.reference_report:
         reference_path = Path(args.reference_report)
         reference = json.loads(reference_path.read_text())
@@ -574,6 +719,41 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 if byte_identical_to_reference
                 else "rewritten_recompressed_or_resampled"
             )
+        if compare_pixels:
+            reference_image = Path(str(reference.get("image") or ""))
+            if not reference_image.is_file():
+                failures.append(
+                    f"Source image for conversion pixel comparison is unavailable: {reference_image}"
+                )
+            else:
+                compression = str(layout.get("compression") or "").upper()
+                lossless = not any(
+                    token in compression for token in ("JPEG", "WEBP", "JXL")
+                )
+                try:
+                    pixel_fidelity = compare_reference_pixels(
+                        reference_image,
+                        path,
+                        lossless=lossless,
+                    )
+                    if pixel_fidelity["best_output_channel_order"] != "RGB" and pixel_fidelity["identity_advantage"] < -0.5:
+                        failures.append(
+                            "Converted RGB channel order differs from the source: "
+                            f"best order={pixel_fidelity['best_output_channel_order']}."
+                        )
+                    if lossless and not pixel_fidelity["exact"]:
+                        failures.append(
+                            "Lossless conversion changed level-0 RGB pixels: "
+                            f"MAE={pixel_fidelity['mae']:.6g}, "
+                            f"max_abs_error={pixel_fidelity['max_abs_error']:.6g}."
+                        )
+                    if not lossless and pixel_fidelity["mae"] > 15.0:
+                        failures.append(
+                            "Lossy conversion changed RGB pixels beyond the allowed sampled MAE: "
+                            f"{pixel_fidelity['mae']:.6g} > 15."
+                        )
+                except Exception as exc:
+                    failures.append(f"Converted/source RGB pixel comparison failed: {exc}")
 
     effective_mpp = None
     anisotropy = None
@@ -611,6 +791,8 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "requirements": {
             "three_channel_rgb": require_rgb,
             "pyramidal": require_pyramid,
+            "decodable_level0_rgb": require_decodable,
+            "reference_pixel_comparison": compare_pixels,
             "full_file_sha256": hash_file,
         },
         "limits": {
@@ -625,6 +807,8 @@ def validate(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "warnings": warnings,
         "failures": failures,
         "metadata_read_error": read_error,
+        "decode_probe": decode_probe,
+        "pixel_fidelity": pixel_fidelity,
     }
     if reference is not None:
         report["reference_report"] = str(Path(args.reference_report).resolve())
@@ -649,6 +833,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-report", default="")
     parser.add_argument("--require-rgb", action="store_true")
     parser.add_argument("--require-pyramid", action="store_true")
+    parser.add_argument("--require-decodable", action="store_true")
+    parser.add_argument("--compare-reference-pixels", action="store_true")
     parser.add_argument("--skip-file-hash", dest="hash_file", action="store_false")
     parser.set_defaults(hash_file=True)
     parser.add_argument("--strict", action="store_true")

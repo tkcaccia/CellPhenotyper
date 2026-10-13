@@ -37,8 +37,8 @@ STAGE_DEFS = [
     {"id": "clustering", "folder": "11_clustering", "title": "Clustering and Interpretation Evidence", "expected": ["_cluster.csv", "_cluster_summary.csv", "_cluster_stability.csv", "_cluster_resolution_candidates.csv", "_cluster_kodama_uncertainty.png", "cluster_spatial_coherence.csv", "cluster_marker_enrichment.csv", "cluster_spatial_uncertainty.png", "cluster_abstentions.geojson", "blinded_review_form.csv", "cluster_interpretation_summary.json", ".Rout"]},
     {"id": "cluster_mask", "folder": "12_cluster_mask", "title": "Cluster and Abstention Masks", "expected": ["_cluster_mask.tif", "_cluster_uncertainty_mask.tif", "_cluster_uncertainty_preview.png", "_cluster_mask_summary.json"]},
     {"id": "grown_tissue", "folder": "13_grown_tissue", "title": "Cell-Mask Tissue Growth (cell route only)", "expected": ["_grown_mask.ome.tif"]},
-    {"id": "medsam_refine_tissue", "folder": "14_medsam_refine_tissue", "title": "MedSAM + Full-Resolution Boundary Refinement", "expected": ["_grown_mask_refined.ome.tif", "_grown_mask_refined_uncertainty.tif", "_grown_mask_refined_provenance.tif", ".ome.tif.provenance.json", "_medsam_editable_band.png", "_medsam_raw_vs_final_panel.png", "_medsam_tissue_support.png", "_medsam_grandqc_empty_exclusion.png", "_medsam_kodama_membership.png"]},
-    {"id": "cluster_geojson", "folder": "15_cluster_geojson", "title": "Cluster GeoJSON", "expected": [".geojson", ".geojson.provenance.json"]},
+    {"id": "medsam_refine_tissue", "folder": "14_medsam_refine_tissue", "title": "Bora Boundary Refinement (legacy folder name)", "expected": ["_grown_mask_refined.ome.tif", "_grown_mask_refined_uncertainty.tif", "_grown_mask_refined_provenance.tif", ".ome.tif.provenance.json", "_bora_refined_qc_preview.png", "_bora_kodama_membership.png", "_bora_summary.json"]},
+    {"id": "cluster_geojson", "folder": "15_cluster_geojson", "title": "Bora Topology-Aware Cluster GeoJSON", "expected": [".geojson", ".geojson.provenance.json"]},
     {"id": "neoplastic_section", "folder": "16_neoplastic_section", "title": "Neoplastic-Enriched Tissue Section", "expected": ["selected_section.ome.tif", "section_neoplastic_counts.csv", "selected_section_summary.json", "selected_section_preview.png"]},
     {"id": "titan", "folder": "17_titan", "title": "TITAN Section Representation", "expected": ["titan_embedding.csv", "titan_patch_features.h5", "titan_metadata.json"]},
     {"id": "pathofmpred", "folder": "18_pathofmpred", "title": "PathoFMPred Research Predictions", "expected": ["pathofmpred_predictions.csv", "pathofmpred_research_report.html", "pathofmpred_continuous_radar.png", "pathofmpred_binary_predictions.png"]},
@@ -516,10 +516,12 @@ def collect_quality_signals(outdir: Path) -> list[dict]:
     for path in (Path(row["absolute_path"]) for row in vector_records if row["relative_path"].endswith(".geojson.provenance.json")):
         payload = read_json_mapping(path)
         binding = payload.get("producer_output_binding", "unavailable")
-        valid_schema = payload.get("schema_version") == "cellphenotyper.vectorized_refinement_provenance.v1"
-        signals.append({"kind": "vectorized_refinement_provenance", "status": "technical_provenance_recorded" if valid_schema and binding == "exact_output_sha256_verified" and not payload.get("stub") else "review",
+        schema = payload.get("schema_version")
+        legacy_valid = schema == "cellphenotyper.vectorized_refinement_provenance.v1" and binding == "exact_output_sha256_verified"
+        bora_valid = schema == "cellphenotyper.bora_geojson_provenance.v1" and bool(payload.get("output", {}).get("sha256"))
+        signals.append({"kind": "vectorized_refinement_provenance", "status": "technical_provenance_recorded" if (legacy_valid or bora_valid) and not payload.get("stub") else "review",
                         "path": str(path.absolute()),
-                        "details": f"producer_binding={binding}; source_label_zero_included={payload.get('source_label_zero_included', False)}; native-label scope, not per-polygon confidence; source hashes not reverified by this report"})
+                        "details": f"schema={schema}; producer_binding={binding}; source_label_zero_included={payload.get('source_label_zero_included', False)}; native-label scope, not per-polygon confidence; source hashes not reverified by this report"})
     review_path = outdir / "00_execution" / "human_review.json"
     if review_path.exists():
         payload = read_json_mapping(review_path)
