@@ -40,9 +40,10 @@ dependencies:
   - accelerate
   - safetensors
   - einops
-  - einops-exts
 
   # StarDist stack installed through pip for ARM compatibility
   - pip:
     - stardist
     - csbdeep
+    # einops-exts is distributed on PyPI, not conda-forge.
+    - einops-exts
