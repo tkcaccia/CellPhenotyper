@@ -28,8 +28,9 @@ pass rate, independent-patient accuracy, or biological validity of other
 virtual channels.
 
 The separately calibrated MoNuSAC prostate ROI
-`TCGA-G9-6356-01Z-00-DX1_6` still fails StarDist nuclear QC after the shadow
-fix: nearby-nucleus AUC 0.668 and boundary contrast 0.016 (70 detected nuclei).
+`TCGA-G9-6356-01Z-00-DX1_6` still fails StarDist nuclear QC after the
+overlap-denominator correction: nearby-nucleus AUC 0.668 and boundary contrast
+0.016 (70 detected nuclei).
 Macenko and tissue-Reinhard color transfers to five released reference H&E
 patches produced AUC 0.625 and 0.586 on that same ROI; neither passed. The
 public [paired control and failure comparison](https://tkcaccia.github.io/Tambua-Analysis/#dapi-qc)
@@ -37,6 +38,19 @@ shows the native-grid images and exact QC reports. These observations support
 correct operation on the paired control and a failure of transfer to this
 MoNuSAC field. They do **not** identify the precise cause of the transfer
 failure. No stain transfer was enabled in production.
+
+The overlap-denominator correction removes one *numerical* darkening mechanism;
+it does not guarantee shadow-free or biologically correct predictions. The
+corrected MoNuSAC image still has visible spatial shading. Its edge-to-core
+ratio of 1.148 is a global statistic over detected nuclei and cannot exclude a
+local dark region. The 120 saved MoNuSAC marker previews, and the earlier ORION
+gallery, were generated before the correction and still display the old border
+artifact. They have not been regenerated or accepted by the nuclear QC gate.
+On the released paired patch, a bounded CPU test of 128-pixel reflected image
+context worsened outer-24-pixel DAPI-reference AUC from 0.855 to 0.838; it was
+rejected. The [edge comparison](https://tkcaccia.github.io/Tambua-Analysis/assets/dapi-shadow-audit/report.json)
+records the exact method and scores. This test does not determine the cause of
+the MoNuSAC transfer failure.
 
 ## Pipeline handoff checked
 
