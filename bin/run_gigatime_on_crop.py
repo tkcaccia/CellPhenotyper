@@ -1262,9 +1262,15 @@ class JpegTileExporter:
                 self.preview_arrays[channel_name][py0:py1, px0:px1] = np.asarray(preview, dtype=np.uint8)
 
     def write_outputs(self, metadata: dict) -> None:
+        display_transforms = {}
         for channel_name, arr in self.preview_arrays.items():
             preview_path = self.image_dir / f"{channel_name}.jpg"
-            Image.fromarray(arr, mode="L").save(
+            display_arr = arr
+            if channel_name.upper() == "DAPI":
+                from gigatime_display import tone_map_dapi_preview
+
+                display_arr, display_transforms[channel_name] = tone_map_dapi_preview(arr)
+            Image.fromarray(display_arr, mode="L").save(
                 preview_path,
                 format="JPEG",
                 quality=max(60, min(95, self.quality)),
@@ -1279,6 +1285,8 @@ class JpegTileExporter:
             "full_image_scale": float(self.preview_scale),
             "save_tiles": bool(self.save_tiles),
             "saved_tiles": dict(self.saved_tiles),
+            "full_image_preview_display_transforms": display_transforms,
+            "preview_note": "Display-only mapping; native scores, cell quantification and nuclear QC use unmodified GigaTIME values. JPEG tiles retain linear display.",
             "metadata": metadata,
         }
         (self.outdir / "gigatime_jpg_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
