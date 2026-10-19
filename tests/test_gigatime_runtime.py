@@ -1,8 +1,10 @@
 import importlib.util
+import inspect
 import sys
 import unittest
 import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -68,6 +70,66 @@ class GigaTIMERuntimeTest(unittest.TestCase):
         self.assertFalse(any(issubclass(item.category, FutureWarning) for item in caught))
         self.assertTrue(cleaned[3, 3])
         self.assertFalse(cleaned[8, 8])
+
+    @staticmethod
+    def _area_api_variants(operation, legacy_name):
+        # Exercise both public API signatures against the installed, real
+        # connected-component algorithm. This does not install another skimage.
+        modern_backend = "max_size" in inspect.signature(operation).parameters
+
+        def inclusive(ar, *, max_size):
+            kwargs = {"max_size": max_size} if modern_backend else {legacy_name: max_size + 1}
+            return operation(ar, **kwargs)
+
+        def legacy_holes(ar, area_threshold):
+            return inclusive(ar, max_size=area_threshold - 1)
+
+        def legacy_objects(ar, min_size):
+            return inclusive(ar, max_size=min_size - 1)
+
+        return {"modern_inclusive": inclusive,
+                "legacy_exclusive": legacy_holes if legacy_name == "area_threshold" else legacy_objects}
+
+    def test_hole_area_preserves_components_below_at_and_above_threshold(self):
+        mask = np.ones((9, 20), dtype=bool)
+        mask[3, 2:5] = False   # area 3: fill
+        mask[3, 7:11] = False  # area 4: preserve
+        mask[3, 13:18] = False # area 5: preserve
+        expected = mask.copy()
+        expected[3, 2:5] = True
+        original = mask.copy()
+        for api, operation in self._area_api_variants(gigatime.remove_small_holes, "area_threshold").items():
+            with self.subTest(api=api), patch.object(gigatime, "remove_small_holes", operation):
+                result = gigatime.clean_background_skip_mask(mask, close_radius=0, hole_area=4, min_obj_area=0)
+                np.testing.assert_array_equal(result, expected)
+                np.testing.assert_array_equal(mask, original)
+
+    def test_object_area_preserves_components_below_at_and_above_threshold(self):
+        mask = np.zeros((9, 20), dtype=bool)
+        mask[3, 2:5] = True   # area 3: remove
+        mask[3, 7:11] = True  # area 4: preserve
+        mask[3, 13:18] = True # area 5: preserve
+        expected = mask.copy()
+        expected[3, 2:5] = False
+        original = mask.copy()
+        for api, operation in self._area_api_variants(gigatime.remove_small_objects, "min_size").items():
+            with self.subTest(api=api), patch.object(gigatime, "remove_small_objects", operation):
+                result = gigatime.clean_background_skip_mask(mask, close_radius=0, hole_area=0, min_obj_area=4)
+                np.testing.assert_array_equal(result, expected)
+                np.testing.assert_array_equal(mask, original)
+
+    def test_disabled_or_unit_area_thresholds_preserve_background_masks(self):
+        mixed = np.zeros((9, 9), dtype=bool)
+        mixed[1:5, 1:5] = True
+        mixed[2, 2] = False
+        mixed[7, 7] = True
+        for mask in (mixed, np.zeros_like(mixed), np.ones_like(mixed)):
+            for threshold in (0, 1):
+                with self.subTest(threshold=threshold, foreground=int(mask.sum())):
+                    result = gigatime.clean_background_skip_mask(mask, close_radius=0,
+                        hole_area=threshold, min_obj_area=threshold)
+                    np.testing.assert_array_equal(result, mask)
+                    self.assertEqual(result.dtype, np.dtype(bool))
 
     @unittest.skipUnless(TORCH_AVAILABLE and torch.cuda.is_available(), "CUDA runtime required")
     def test_cuda_oom_reduces_batch_and_retries_same_positions(self):

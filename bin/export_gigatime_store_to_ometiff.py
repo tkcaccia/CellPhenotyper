@@ -288,7 +288,7 @@ class LazyGigaTIMEReader:
         channel_indices: list[int] | None = None,
         export_dtype: np.dtype | None = None,
     ) -> np.ndarray:
-        if self.channels == 1:
+        if len(self.arr.shape) == 2:
             block = np.asarray(self.arr[y0:y1, x0:x1])[None, ...]
         elif self.axes == "CYX":
             block = np.asarray(self.arr[:, y0:y1, x0:x1])
@@ -336,7 +336,9 @@ class LazyGigaTIMEReader:
     ) -> np.ndarray:
         channels = list(channel_indices) if channel_indices is not None else list(range(self.channels))
         try:
-            if self.axes == "CYX":
+            if len(self.arr.shape) == 2:
+                block = np.asarray(self.arr.oindex[ys, xs])[None, ...]
+            elif self.axes == "CYX":
                 if len(channels) == 1:
                     block = np.asarray(self.arr.oindex[channels[0], ys, xs])[None, ...]
                 else:
@@ -345,8 +347,6 @@ class LazyGigaTIMEReader:
                 block = np.moveaxis(np.asarray(self.arr.oindex[ys, xs, channels]), -1, 0)
             elif self.axes == "YCX":
                 block = np.moveaxis(np.asarray(self.arr.oindex[ys, channels, xs]), 1, 0)
-            elif self.channels == 1:
-                block = np.asarray(self.arr.oindex[ys, xs])[None, ...]
             else:
                 raise ValueError(f"Unsupported image axes '{self.axes}'")
         except Exception:
@@ -354,10 +354,13 @@ class LazyGigaTIMEReader:
             # indexing. Fall back to row-wise reads; slower, but bounded memory.
             rows = []
             for y in ys:
-                if self.channels == 1:
+                if len(self.arr.shape) == 2:
                     row = np.asarray(self.arr[int(y), xs])[None, :]
                 elif self.axes == "CYX":
-                    row = np.asarray(self.arr[channels, int(y), xs])
+                    if len(channels) == 1:
+                        row = np.asarray(self.arr[channels[0], int(y), xs])[None, :]
+                    else:
+                        row = np.asarray(self.arr[channels, int(y), xs])
                 elif self.axes == "YXC":
                     row = np.moveaxis(np.asarray(self.arr[int(y), xs, :])[:, channels], -1, 0)
                 elif self.axes == "YCX":
@@ -504,20 +507,34 @@ def verify_written_ome_tiff(
     expected_channels: list[str],
     require_pyramid: bool,
     expected_physical_size_um: float | None = None,
+    expected_pyramid_shapes: list[tuple[int, int]] | None = None,
 ) -> dict:
     expected_c, expected_y, expected_x = (int(v) for v in expected_shape_cyx)
     with tifffile.TiffFile(path) as tf:
         if not tf.is_ome:
             raise ValueError(f"{path} is not marked as an OME-TIFF")
+        if not tf.ome_metadata:
+            raise ValueError("OME-TIFF metadata is empty")
+        pixels, channels = _ome_pixels_and_channels(tf.ome_metadata)
+        size_c = int(pixels.attrib.get("SizeC", "-1"))
+        if size_c != expected_c:
+            raise ValueError(f"OME SizeC mismatch: observed {size_c}, expected {expected_c}")
+
+        def cyx_shape(level) -> tuple[str, tuple[int, ...], dict[str, int]]:
+            axes = str(getattr(level, "axes", "")).upper()
+            shape = tuple(int(v) for v in level.shape)
+            # tifffile squeezes the singleton C axis of a valid SizeC=1
+            # scalar OME image. Only that exact metadata-backed case is YX.
+            if axes == "YX" and expected_c == size_c == 1:
+                return axes, shape, {"C": 1, "Y": shape[0], "X": shape[1]}
+            if "C" not in axes or "Y" not in axes or "X" not in axes:
+                raise ValueError(f"OME-TIFF axes must include C,Y,X; got axes={axes!r} shape={shape}")
+            if any(shape[i] != 1 for i, axis in enumerate(axes) if axis not in "CYX"):
+                raise ValueError(f"OME-TIFF must contain scalar channel planes, not axes={axes!r} shape={shape}")
+            return axes, shape, {axis: shape[axes.index(axis)] for axis in ("C", "Y", "X")}
+
         series = tf.series[0]
-        axes = str(getattr(series, "axes", "")).upper()
-        shape = tuple(int(v) for v in series.shape)
-        if "C" not in axes or "Y" not in axes or "X" not in axes:
-            raise ValueError(f"OME-TIFF axes must include C,Y,X; got axes={axes!r} shape={shape}")
-        observed = {
-            axis: int(shape[axes.index(axis)])
-            for axis in ("C", "Y", "X")
-        }
+        axes, shape, observed = cyx_shape(series)
         expected = {"C": expected_c, "Y": expected_y, "X": expected_x}
         if observed != expected:
             raise ValueError(f"OME-TIFF shape mismatch: observed {observed}, expected {expected}")
@@ -525,24 +542,25 @@ def verify_written_ome_tiff(
             raise ValueError(f"OME-TIFF dtype mismatch: observed {series.dtype}, expected {expected_dtype}")
         if require_pyramid and len(series.levels) <= 1:
             raise ValueError("OME-TIFF pyramid is required but no pyramid levels were written")
-        if require_pyramid:
-            prev_y, prev_x = expected_y, expected_x
-            for idx, level in enumerate(series.levels[1:], start=1):
-                level_axes = str(getattr(level, "axes", axes)).upper()
-                level_shape = tuple(int(v) for v in level.shape)
-                ly = int(level_shape[level_axes.index("Y")])
-                lx = int(level_shape[level_axes.index("X")])
-                if ly > prev_y or lx > prev_x:
-                    raise ValueError(
-                        f"Pyramid level {idx} is not downsampled: {(ly, lx)} after {(prev_y, prev_x)}"
-                    )
-                prev_y, prev_x = ly, lx
-        if not tf.ome_metadata:
-            raise ValueError("OME-TIFF metadata is empty")
-        pixels, channels = _ome_pixels_and_channels(tf.ome_metadata)
-        size_c = int(pixels.attrib.get("SizeC", "-1"))
-        if size_c != expected_c:
-            raise ValueError(f"OME SizeC mismatch: observed {size_c}, expected {expected_c}")
+        if expected_pyramid_shapes is not None and len(series.levels) != 1 + len(expected_pyramid_shapes):
+            raise ValueError(
+                f"OME-TIFF pyramid level count mismatch: observed {len(series.levels) - 1}, "
+                f"expected {len(expected_pyramid_shapes)}"
+            )
+        prev_y, prev_x = expected_y, expected_x
+        for idx, level in enumerate(series.levels[1:], start=1):
+            _, _, level_shape = cyx_shape(level)
+            ly, lx = level_shape["Y"], level_shape["X"]
+            if level_shape["C"] != expected_c or np.dtype(level.dtype) != np.dtype(expected_dtype):
+                raise ValueError(f"Pyramid level {idx} channel count or dtype differs from the base image")
+            if ly > prev_y or lx > prev_x or (ly, lx) == (prev_y, prev_x):
+                raise ValueError(f"Pyramid level {idx} is not downsampled: {(ly, lx)} after {(prev_y, prev_x)}")
+            if expected_pyramid_shapes is not None and (ly, lx) != tuple(expected_pyramid_shapes[idx - 1]):
+                raise ValueError(
+                    f"Pyramid level {idx} shape mismatch: observed {(ly, lx)}, "
+                    f"expected {tuple(expected_pyramid_shapes[idx - 1])}"
+                )
+            prev_y, prev_x = ly, lx
         physical_size = {
             "x": pixels.attrib.get("PhysicalSizeX"),
             "x_unit": pixels.attrib.get("PhysicalSizeXUnit"),
@@ -786,8 +804,11 @@ def main():
             expected_shape_cyx=(c, h, w),
             expected_dtype=export_dtype,
             expected_channels=channel_names,
-            require_pyramid=not args.no_pyramid,
+            # Small images already fit one output tile and need no reduced
+            # levels, even when the default pyramid option is enabled.
+            require_pyramid=bool(pyramid_shapes),
             expected_physical_size_um=physical_size_um,
+            expected_pyramid_shapes=pyramid_shapes,
         )
         verification_path = (
             Path(args.verification_json).resolve()

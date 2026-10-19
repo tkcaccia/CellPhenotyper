@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import csv
 import gc
+import inspect
 import json
 import math
 import os
@@ -1150,11 +1151,17 @@ def clean_background_skip_mask(
     if close_radius > 0:
         mask = closing(mask, disk(close_radius), mode="ignore")
     if hole_area > 0:
-        # The legacy area_threshold removed regions strictly smaller than the
-        # threshold; max_size is inclusive in scikit-image >= 0.26.
-        mask = remove_small_holes(mask, max_size=max(0, hole_area - 1))
+        # Preserve removal strictly below the requested pixel area. The new
+        # max_size API (0.26+) includes equality; older APIs exclude equality.
+        if "max_size" in inspect.signature(remove_small_holes).parameters:
+            mask = remove_small_holes(mask, max_size=max(0, hole_area - 1))
+        else:
+            mask = remove_small_holes(mask, area_threshold=hole_area)
     if min_obj_area > 0:
-        mask = remove_small_objects(mask, max_size=max(0, min_obj_area - 1))
+        if "max_size" in inspect.signature(remove_small_objects).parameters:
+            mask = remove_small_objects(mask, max_size=max(0, min_obj_area - 1))
+        else:
+            mask = remove_small_objects(mask, min_size=min_obj_area)
     return np.asarray(mask, dtype=bool)
 
 
