@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import tifffile
 import torch
 from torch import nn
@@ -22,6 +22,8 @@ from skimage.morphology import closing, disk, remove_small_holes, remove_small_o
 
 from gigatime_resolution import choose_downsample_factor, estimate_prediction_gib
 from gigatime_hardware import choose_gigatime_hardware_settings
+from gigatime_seam_qc import assess_prediction_seams
+from model_provenance import checkpoint_record, hf_model_provenance
 
 try:
     import pyvips
@@ -64,6 +66,17 @@ CHANNEL_NAMES = [
 ]
 
 CHANNEL_INDEX_BY_NAME = {name: idx for idx, name in enumerate(CHANNEL_NAMES)}
+
+GIGATIME_VALUE_SEMANTICS = {
+    "value_type": "uncalibrated_virtual_marker_score",
+    "bounded_range": [0.0, 1.0],
+    "calibrated_probability": False,
+    "measured_protein_abundance": False,
+    "research_use_only": True,
+    "legacy_filename_note": (
+        "The compatibility filenames gigatime_probs.* do not imply probability calibration."
+    ),
+}
 
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -680,18 +693,23 @@ class LazyMaskReader:
         self.tf = tifffile.TiffFile(self.path)
         self.series = self.tf.series[0]
         arr = zarr.open(self.series.aszarr(), mode="r")
+        self.singleton_axis = None
         if arr.ndim == 3:
             if arr.shape[0] == 1:
-                arr = arr[0]
+                self.singleton_axis = 0
+                shape = arr.shape[1:]
             elif arr.shape[-1] == 1:
-                arr = arr[..., 0]
+                self.singleton_axis = 2
+                shape = arr.shape[:2]
             else:
                 raise ValueError(f"Unsupported mask shape after squeeze: {arr.shape}")
-        if arr.ndim != 2:
+        elif arr.ndim == 2:
+            shape = arr.shape
+        else:
             raise ValueError(f"Unsupported mask shape after squeeze: {arr.shape}")
         self.arr = arr
-        self.height = int(arr.shape[0])
-        self.width = int(arr.shape[1])
+        self.height = int(shape[0])
+        self.width = int(shape[1])
 
     def close(self) -> None:
         try:
@@ -707,37 +725,35 @@ class LazyMaskReader:
 
     def read_block(self, y0: int, y1: int, x0: int, x1: int, target_shape: tuple[int, int]) -> np.ndarray:
         ty, tx = target_shape
-        if (self.height, self.width) == target_shape:
-            out = np.asarray(self.arr[y0:y1, x0:x1])
+        y_idx = np.minimum(self.height - 1, np.floor(
+            (np.arange(y0, y1) + .5) * self.height / ty).astype(np.int64))
+        x_idx = np.minimum(self.width - 1, np.floor(
+            (np.arange(x0, x1) + .5) * self.width / tx).astype(np.int64))
+        if self.singleton_axis == 0:
+            out = np.asarray(self.arr.oindex[0, y_idx, x_idx])
+        elif self.singleton_axis == 2:
+            out = np.asarray(self.arr.oindex[y_idx, x_idx, 0])
         else:
-            y_idx = np.minimum(
-                np.round(np.linspace(y0 * self.height / ty, (y1 - 1) * self.height / ty, y1 - y0)).astype(np.int64),
-                self.height - 1,
-            )
-            x_idx = np.minimum(
-                np.round(np.linspace(x0 * self.width / tx, (x1 - 1) * self.width / tx, x1 - x0)).astype(np.int64),
-                self.width - 1,
-            )
             out = np.asarray(self.arr.oindex[y_idx, x_idx])
-        out = np.squeeze(out)
-        if out.ndim != 2:
-            raise ValueError(f"Unsupported mask block shape after squeeze: {out.shape}")
+        if out.shape != (y1 - y0, x1 - x0):
+            raise ValueError(f"Unsupported mask block shape: {out.shape}")
         if not np.issubdtype(out.dtype, np.integer):
-            out = np.rint(out).astype(np.int64, copy=False)
+            raise ValueError("Cell labels must be an integer mask")
+        if np.any(out < 0):
+            raise ValueError("Cell labels must be nonnegative")
         return out
 
 
-def _scan_max_label(mask_reader: LazyMaskReader, target_shape: tuple[int, int], block_size: int) -> int:
+def _scan_labels(mask_reader: LazyMaskReader, target_shape: tuple[int, int], block_size: int) -> np.ndarray:
     ty, tx = target_shape
-    max_label = 0
+    observed: set[int] = set()
     for y0 in range(0, ty, block_size):
         y1 = min(ty, y0 + block_size)
         for x0 in range(0, tx, block_size):
             x1 = min(tx, x0 + block_size)
             block = mask_reader.read_block(y0, y1, x0, x1, target_shape)
-            if block.size:
-                max_label = max(max_label, int(block.max()))
-    return max_label
+            observed.update(int(v) for v in np.unique(block) if v > 0)
+    return np.asarray(sorted(observed), dtype=np.int64)
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -764,33 +780,34 @@ class TileQuantifier:
         target_shape: tuple[int, int],
         channel_names: list[str],
         block_size: int,
-        max_label: int | None = None,
+        label_ids: np.ndarray | None = None,
     ):
         self.mask_name = str(mask_name)
         self.mask_path = str(mask_path)
         self.target_shape = (int(target_shape[0]), int(target_shape[1]))
         self.channel_names = list(channel_names)
         self.mask_reader = LazyMaskReader(mask_path)
-        self.max_label = int(max_label) if max_label is not None else _scan_max_label(
+        self.label_ids = np.asarray(label_ids, dtype=np.int64) if label_ids is not None else _scan_labels(
             self.mask_reader,
             self.target_shape,
             block_size,
         )
-        self.enabled = self.max_label > 0
-        self.counts = np.zeros(self.max_label + 1, dtype=np.int64) if self.enabled else None
-        self.sum_y = np.zeros(self.max_label + 1, dtype=np.float64) if self.enabled else None
-        self.sum_x = np.zeros(self.max_label + 1, dtype=np.float64) if self.enabled else None
-        self.min_y = np.full(self.max_label + 1, np.iinfo(np.int64).max, dtype=np.int64) if self.enabled else None
-        self.min_x = np.full(self.max_label + 1, np.iinfo(np.int64).max, dtype=np.int64) if self.enabled else None
-        self.max_y = np.full(self.max_label + 1, -1, dtype=np.int64) if self.enabled else None
-        self.max_x = np.full(self.max_label + 1, -1, dtype=np.int64) if self.enabled else None
+        self.enabled = len(self.label_ids) > 0
+        n_labels = len(self.label_ids)
+        self.counts = np.zeros(n_labels, dtype=np.int64) if self.enabled else None
+        self.sum_y = np.zeros(n_labels, dtype=np.float64) if self.enabled else None
+        self.sum_x = np.zeros(n_labels, dtype=np.float64) if self.enabled else None
+        self.min_y = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64) if self.enabled else None
+        self.min_x = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64) if self.enabled else None
+        self.max_y = np.full(n_labels, -1, dtype=np.int64) if self.enabled else None
+        self.max_x = np.full(n_labels, -1, dtype=np.int64) if self.enabled else None
         self.sums_by_channel = (
-            np.zeros((len(self.channel_names), self.max_label + 1), dtype=np.float64)
+            np.zeros((len(self.channel_names), n_labels), dtype=np.float64)
             if self.enabled
             else None
         )
         self.max_by_channel = (
-            np.full((len(self.channel_names), self.max_label + 1), -np.inf, dtype=np.float32)
+            np.full((len(self.channel_names), n_labels), -np.inf, dtype=np.float32)
             if self.enabled
             else None
         )
@@ -813,22 +830,28 @@ class TileQuantifier:
             return
 
         labels = mask_block[positive].astype(np.int64, copy=False)
-        self.counts += np.bincount(labels, minlength=self.max_label + 1)
+        indices = np.searchsorted(self.label_ids, labels)
+        if np.any(indices == len(self.label_ids)) or not np.array_equal(self.label_ids[indices], labels):
+            raise ValueError("Cell mask changed after the label inventory was frozen")
+        n_labels = len(self.label_ids)
+        self.counts += np.bincount(indices, minlength=n_labels)
 
         y_local, x_local = np.nonzero(positive)
         abs_y = y_local.astype(np.int64, copy=False) + int(y0)
         abs_x = x_local.astype(np.int64, copy=False) + int(x0)
-        self.sum_y += np.bincount(labels, weights=abs_y.astype(np.float64, copy=False), minlength=self.max_label + 1)
-        self.sum_x += np.bincount(labels, weights=abs_x.astype(np.float64, copy=False), minlength=self.max_label + 1)
-        np.minimum.at(self.min_y, labels, abs_y)
-        np.minimum.at(self.min_x, labels, abs_x)
-        np.maximum.at(self.max_y, labels, abs_y)
-        np.maximum.at(self.max_x, labels, abs_x)
+        self.sum_y += np.bincount(indices, weights=abs_y.astype(np.float64, copy=False), minlength=n_labels)
+        self.sum_x += np.bincount(indices, weights=abs_x.astype(np.float64, copy=False), minlength=n_labels)
+        np.minimum.at(self.min_y, indices, abs_y)
+        np.minimum.at(self.min_x, indices, abs_x)
+        np.maximum.at(self.max_y, indices, abs_y)
+        np.maximum.at(self.max_x, indices, abs_x)
 
         for ch_idx in range(tile_probs_cyx.shape[0]):
             values = tile_probs_cyx[ch_idx][positive].astype(np.float64, copy=False)
-            self.sums_by_channel[ch_idx] += np.bincount(labels, weights=values, minlength=self.max_label + 1)
-            np.maximum.at(self.max_by_channel[ch_idx], labels, values)
+            if not np.isfinite(values).all() or np.any((values < 0) | (values > 1)):
+                raise ValueError("GigaTIME virtual-marker scores must be finite in [0, 1]")
+            self.sums_by_channel[ch_idx] += np.bincount(indices, weights=values, minlength=n_labels)
+            np.maximum.at(self.max_by_channel[ch_idx], indices, values)
 
     def write_outputs(self, outdir: Path, sample_id: str) -> dict:
         outdir.mkdir(parents=True, exist_ok=True)
@@ -836,7 +859,6 @@ class TileQuantifier:
         labels_sorted = np.asarray([], dtype=np.int64)
         if self.enabled:
             labels_sorted = np.flatnonzero(self.counts > 0)
-            labels_sorted = labels_sorted[labels_sorted > 0]
 
         quant_csv = outdir / f"{sample_id}_{self.mask_name}_gigatime_quantification.csv"
         mean_csv = outdir / f"{sample_id}_{self.mask_name}_gigatime_mean_intensity.csv"
@@ -846,6 +868,9 @@ class TileQuantifier:
         base_fields = [
             "label_id",
             "mask_name",
+            "value_semantics",
+            "calibrated_probability",
+            "measured_protein_abundance",
             "area_px",
             "centroid_y_px",
             "centroid_x_px",
@@ -873,30 +898,33 @@ class TileQuantifier:
             mean_writer.writeheader()
             stats_writer.writeheader()
 
-            for label_id_np in labels_sorted:
-                label_id = int(label_id_np)
-                count = int(self.counts[label_id])
+            for index in labels_sorted:
+                label_id = int(self.label_ids[index])
+                count = int(self.counts[index])
                 if count <= 0:
                     continue
                 base = {
                     "label_id": label_id,
                     "mask_name": self.mask_name,
+                    "value_semantics": GIGATIME_VALUE_SEMANTICS["value_type"],
+                    "calibrated_probability": False,
+                    "measured_protein_abundance": False,
                     "area_px": count,
-                    "centroid_y_px": float(self.sum_y[label_id] / count),
-                    "centroid_x_px": float(self.sum_x[label_id] / count),
-                    "bbox_ymin_px": int(self.min_y[label_id]),
-                    "bbox_xmin_px": int(self.min_x[label_id]),
-                    "bbox_ymax_px": int(self.max_y[label_id] + 1),
-                    "bbox_xmax_px": int(self.max_x[label_id] + 1),
+                    "centroid_y_px": float(self.sum_y[index] / count),
+                    "centroid_x_px": float(self.sum_x[index] / count),
+                    "bbox_ymin_px": int(self.min_y[index]),
+                    "bbox_xmin_px": int(self.min_x[index]),
+                    "bbox_ymax_px": int(self.max_y[index] + 1),
+                    "bbox_xmax_px": int(self.max_x[index] + 1),
                 }
                 quant_row = dict(base)
                 mean_row = dict(base)
                 stats_row = dict(base)
                 for ch_idx, ch_name in enumerate(self.channel_names):
                     safe_name = ch_name.strip() or "unnamed"
-                    mean_val = float(self.sums_by_channel[ch_idx, label_id] / count)
-                    sum_val = float(self.sums_by_channel[ch_idx, label_id])
-                    max_val = float(self.max_by_channel[ch_idx, label_id])
+                    mean_val = float(self.sums_by_channel[ch_idx, index] / count)
+                    sum_val = float(self.sums_by_channel[ch_idx, index])
+                    max_val = float(self.max_by_channel[ch_idx, index])
                     mean_row[safe_name] = mean_val
                     stats_row[f"{safe_name}__mean"] = mean_val
                     stats_row[f"{safe_name}__sum"] = sum_val
@@ -915,7 +943,296 @@ class TileQuantifier:
             "image_shape_cyx": [len(self.channel_names), int(self.target_shape[0]), int(self.target_shape[1])],
             "channel_names": list(self.channel_names),
             "objects_quantified": object_count,
+            "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
+            "mask_compartment_contract": (
+                "Scores were summarized over pixels assigned to the named segmentation compartment."
+            ),
             "quantification_csv": str(quant_csv.resolve()),
+        }
+
+
+class MarkerScoreQC:
+    """Collect bounded, deterministic marker-score QC without retaining WSI pixels."""
+
+    def __init__(
+        self,
+        *,
+        outdir: Path,
+        target_shape: tuple[int, int],
+        channel_names: list[str],
+        tissue_mask_path: str = "",
+        max_samples: int = 250_000,
+        histogram_bins: int = 256,
+    ):
+        self.outdir = Path(outdir)
+        self.target_shape = (int(target_shape[0]), int(target_shape[1]))
+        self.channel_names = list(channel_names)
+        self.max_samples = max(1, int(max_samples))
+        self.histogram_bins = max(16, int(histogram_bins))
+        total_pixels = max(1, int(self.target_shape[0]) * int(self.target_shape[1]))
+        self.sample_stride = max(1, int(math.ceil(math.sqrt(total_pixels / self.max_samples))))
+        channels = len(self.channel_names)
+        self.histograms = np.zeros((channels, self.histogram_bins), dtype=np.int64)
+        self.finite_counts = np.zeros(channels, dtype=np.int64)
+        self.nonfinite_counts = np.zeros(channels, dtype=np.int64)
+        self.sums = np.zeros(channels, dtype=np.float64)
+        self.sumsq = np.zeros(channels, dtype=np.float64)
+        self.minimum = np.full(channels, np.inf, dtype=np.float64)
+        self.maximum = np.full(channels, -np.inf, dtype=np.float64)
+        self.near_zero_counts = np.zeros(channels, dtype=np.int64)
+        self.lower_saturation_counts = np.zeros(channels, dtype=np.int64)
+        self.upper_saturation_counts = np.zeros(channels, dtype=np.int64)
+        self.out_of_range_counts = np.zeros(channels, dtype=np.int64)
+        self.correlation_count = 0
+        self.correlation_sum = np.zeros(channels, dtype=np.float64)
+        self.correlation_crossprod = np.zeros((channels, channels), dtype=np.float64)
+        self.tissue_counts = np.zeros(channels, dtype=np.int64)
+        self.background_counts = np.zeros(channels, dtype=np.int64)
+        self.tissue_sums = np.zeros(channels, dtype=np.float64)
+        self.background_sums = np.zeros(channels, dtype=np.float64)
+        self.tissue_mask_path = str(tissue_mask_path or "")
+        self.tissue_mask_reader = LazyMaskReader(self.tissue_mask_path) if self.tissue_mask_path else None
+
+    def _axis_indices(self, start: int, end: int) -> np.ndarray:
+        first = int(start) + ((self.sample_stride - (int(start) % self.sample_stride)) % self.sample_stride)
+        if first >= int(end):
+            return np.asarray([], dtype=np.int64)
+        return np.arange(first, int(end), self.sample_stride, dtype=np.int64) - int(start)
+
+    def accumulate_tile(self, y0: int, y1: int, x0: int, x1: int, scores_cyx: np.ndarray) -> None:
+        y_idx = self._axis_indices(y0, y1)
+        x_idx = self._axis_indices(x0, x1)
+        if y_idx.size == 0 or x_idx.size == 0:
+            return
+        sampled = np.asarray(scores_cyx[:, y_idx[:, None], x_idx[None, :]], dtype=np.float64)
+        sampled = sampled.reshape(sampled.shape[0], -1)
+        if sampled.shape[0] != len(self.channel_names):
+            raise ValueError(
+                f"Marker QC channel mismatch: scores={sampled.shape[0]} names={len(self.channel_names)}"
+            )
+
+        all_finite = np.all(np.isfinite(sampled), axis=0)
+        finite_matrix = sampled[:, all_finite]
+        if finite_matrix.shape[1] > 0:
+            self.correlation_count += int(finite_matrix.shape[1])
+            self.correlation_sum += finite_matrix.sum(axis=1)
+            self.correlation_crossprod += finite_matrix @ finite_matrix.T
+
+        tissue_sample = None
+        if self.tissue_mask_reader is not None:
+            tissue_block = self.tissue_mask_reader.read_block(y0, y1, x0, x1, self.target_shape)
+            tissue_sample = np.asarray(tissue_block[y_idx[:, None], x_idx[None, :]] > 0).reshape(-1)
+
+        for ch_idx in range(sampled.shape[0]):
+            values = sampled[ch_idx]
+            finite = np.isfinite(values)
+            finite_values = values[finite]
+            self.finite_counts[ch_idx] += int(finite_values.size)
+            self.nonfinite_counts[ch_idx] += int(values.size - finite_values.size)
+            if finite_values.size == 0:
+                continue
+            clipped = np.clip(finite_values, 0.0, 1.0)
+            self.histograms[ch_idx] += np.histogram(
+                clipped, bins=self.histogram_bins, range=(0.0, 1.0)
+            )[0]
+            self.sums[ch_idx] += float(finite_values.sum())
+            self.sumsq[ch_idx] += float(np.square(finite_values).sum())
+            self.minimum[ch_idx] = min(self.minimum[ch_idx], float(finite_values.min()))
+            self.maximum[ch_idx] = max(self.maximum[ch_idx], float(finite_values.max()))
+            self.near_zero_counts[ch_idx] += int(np.count_nonzero(finite_values <= 1.0e-7))
+            self.lower_saturation_counts[ch_idx] += int(np.count_nonzero(finite_values <= 1.0e-3))
+            self.upper_saturation_counts[ch_idx] += int(np.count_nonzero(finite_values >= 1.0 - 1.0e-3))
+            self.out_of_range_counts[ch_idx] += int(
+                np.count_nonzero((finite_values < 0.0) | (finite_values > 1.0))
+            )
+            if tissue_sample is not None:
+                tissue_finite = tissue_sample & finite
+                background_finite = (~tissue_sample) & finite
+                self.tissue_counts[ch_idx] += int(np.count_nonzero(tissue_finite))
+                self.background_counts[ch_idx] += int(np.count_nonzero(background_finite))
+                self.tissue_sums[ch_idx] += float(values[tissue_finite].sum())
+                self.background_sums[ch_idx] += float(values[background_finite].sum())
+
+    def _histogram_quantile(self, channel_index: int, probability: float) -> float | None:
+        hist = self.histograms[channel_index]
+        total = int(hist.sum())
+        if total <= 0:
+            return None
+        target = max(1, int(math.ceil(float(probability) * total)))
+        bin_index = int(np.searchsorted(np.cumsum(hist), target, side="left"))
+        return float((bin_index + 0.5) / self.histogram_bins)
+
+    def _correlation_matrix(self) -> list[list[float | None]]:
+        n = int(self.correlation_count)
+        channels = len(self.channel_names)
+        if n < 2:
+            return [[None for _ in range(channels)] for _ in range(channels)]
+        covariance = self.correlation_crossprod - np.outer(self.correlation_sum, self.correlation_sum) / n
+        variances = np.maximum(np.diag(covariance), 0.0)
+        denom = np.sqrt(np.outer(variances, variances))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            correlation = covariance / denom
+        correlation[~np.isfinite(correlation)] = np.nan
+        correlation = np.clip(correlation, -1.0, 1.0)
+        return [
+            [None if not np.isfinite(value) else float(value) for value in row]
+            for row in correlation
+        ]
+
+    def _draw_preview(self, rows: list[dict], correlation: list[list[float | None]], path: Path) -> None:
+        width = 1600
+        top = 70
+        row_h = 24
+        heat_cell = max(12, min(22, int(480 / max(1, len(rows)))))
+        heat_size = heat_cell * len(rows)
+        height = max(top + row_h * len(rows) + 60, top + heat_size + 90)
+        image = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((20, 18), "GigaTIME virtual-marker score QC (descriptive; not calibration)", fill="black")
+        bar_x0, bar_x1 = 180, 600
+        draw.text((bar_x0, 45), "sampled score range: p05 to p95; median marker", fill="#333333")
+        for idx, row in enumerate(rows):
+            y = top + idx * row_h
+            draw.text((20, y), str(row["channel"]), fill="black")
+            p05 = float(row.get("p05") or 0.0)
+            p50 = float(row.get("p50") or 0.0)
+            p95 = float(row.get("p95") or 0.0)
+            draw.line((bar_x0, y + 7, bar_x1, y + 7), fill="#DDDDDD", width=2)
+            draw.line(
+                (bar_x0 + p05 * (bar_x1 - bar_x0), y + 7, bar_x0 + p95 * (bar_x1 - bar_x0), y + 7),
+                fill="#0072B2",
+                width=5,
+            )
+            mx = bar_x0 + p50 * (bar_x1 - bar_x0)
+            draw.line((mx, y + 2, mx, y + 12), fill="#D55E00", width=2)
+            tissue_difference = row.get("tissue_background_difference")
+            tissue_text = "NA" if tissue_difference is None else f"{float(tissue_difference):.3f}"
+            draw.text(
+                (bar_x1 + 18, y),
+                f"mean={row['mean']:.3f}  tissue-bg={tissue_text}",
+                fill="#333333",
+            )
+
+        heat_x0 = 1050
+        draw.text((heat_x0, 45), "sampled channel correlation", fill="#333333")
+        for row_idx, corr_row in enumerate(correlation):
+            for col_idx, value in enumerate(corr_row):
+                if value is None:
+                    color = (220, 220, 220)
+                elif value >= 0:
+                    strength = int(round(220 * float(value)))
+                    color = (255 - strength, 255 - strength // 2, 255)
+                else:
+                    strength = int(round(220 * abs(float(value))))
+                    color = (255, 255 - strength // 2, 255 - strength)
+                x0 = heat_x0 + col_idx * heat_cell
+                y0 = top + row_idx * heat_cell
+                draw.rectangle((x0, y0, x0 + heat_cell - 1, y0 + heat_cell - 1), fill=color)
+        image.save(path)
+
+    def write_outputs(self) -> dict:
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        rows: list[dict] = []
+        warnings: list[str] = []
+        for ch_idx, channel_name in enumerate(self.channel_names):
+            count = int(self.finite_counts[ch_idx])
+            if count <= 0:
+                warnings.append(f"{channel_name}: no finite sampled scores")
+                continue
+            mean = float(self.sums[ch_idx] / count)
+            variance = max(0.0, float(self.sumsq[ch_idx] / count - mean * mean))
+            p05 = self._histogram_quantile(ch_idx, 0.05)
+            p50 = self._histogram_quantile(ch_idx, 0.50)
+            p95 = self._histogram_quantile(ch_idx, 0.95)
+            tissue_mean = (
+                float(self.tissue_sums[ch_idx] / self.tissue_counts[ch_idx])
+                if self.tissue_counts[ch_idx] > 0
+                else None
+            )
+            background_mean = (
+                float(self.background_sums[ch_idx] / self.background_counts[ch_idx])
+                if self.background_counts[ch_idx] > 0
+                else None
+            )
+            difference = (
+                float(tissue_mean - background_mean)
+                if tissue_mean is not None and background_mean is not None
+                else None
+            )
+            row = {
+                "channel": channel_name,
+                "sampled_finite_pixels": count,
+                "sampled_nonfinite_pixels": int(self.nonfinite_counts[ch_idx]),
+                "minimum": float(self.minimum[ch_idx]),
+                "p05": p05,
+                "p50": p50,
+                "p95": p95,
+                "maximum": float(self.maximum[ch_idx]),
+                "mean": mean,
+                "standard_deviation": float(math.sqrt(variance)),
+                "dynamic_range_p95_minus_p05": float(p95 - p05) if p05 is not None and p95 is not None else None,
+                "near_zero_fraction": float(self.near_zero_counts[ch_idx] / count),
+                "lower_saturation_fraction": float(self.lower_saturation_counts[ch_idx] / count),
+                "upper_saturation_fraction": float(self.upper_saturation_counts[ch_idx] / count),
+                "out_of_range_fraction": float(self.out_of_range_counts[ch_idx] / count),
+                "tissue_sampled_pixels": int(self.tissue_counts[ch_idx]),
+                "background_sampled_pixels": int(self.background_counts[ch_idx]),
+                "tissue_mean": tissue_mean,
+                "background_mean": background_mean,
+                "tissue_background_difference": difference,
+            }
+            rows.append(row)
+            if self.nonfinite_counts[ch_idx] > 0:
+                warnings.append(f"{channel_name}: non-finite sampled scores")
+            if self.out_of_range_counts[ch_idx] > 0:
+                warnings.append(f"{channel_name}: sampled scores outside [0,1]")
+            if row["dynamic_range_p95_minus_p05"] is not None and row["dynamic_range_p95_minus_p05"] < 0.005:
+                warnings.append(f"{channel_name}: sampled p05-p95 range below 0.005")
+
+        correlation = self._correlation_matrix()
+        payload = {
+            "status": "review" if warnings else "pass",
+            "scope": "technical_distribution_qc_only",
+            "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
+            "sampling": {
+                "method": "deterministic_spatial_grid",
+                "stride_px": int(self.sample_stride),
+                "target_max_samples": int(self.max_samples),
+                "joint_finite_samples_for_correlation": int(self.correlation_count),
+                "approximate_statistics": True,
+            },
+            "tissue_mask": str(Path(self.tissue_mask_path).resolve()) if self.tissue_mask_path else None,
+            "channels": rows,
+            "channel_correlation": {
+                "channel_names": list(self.channel_names),
+                "matrix": correlation,
+            },
+            "warnings": warnings,
+            "interpretation_limit": (
+                "Distribution and tissue/background checks detect technical collapse or scale anomalies; "
+                "they do not validate marker biology, probability calibration, or measured protein abundance."
+            ),
+        }
+        json_path = self.outdir / "gigatime_marker_score_qc.json"
+        tsv_path = self.outdir / "gigatime_marker_score_qc.tsv"
+        preview_path = self.outdir / "gigatime_marker_score_qc.png"
+        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        fieldnames = list(rows[0].keys()) if rows else ["channel", "sampled_finite_pixels"]
+        with tsv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
+            writer.writeheader()
+            writer.writerows(rows)
+        if rows:
+            self._draw_preview(rows, correlation, preview_path)
+        if self.tissue_mask_reader is not None:
+            self.tissue_mask_reader.close()
+            self.tissue_mask_reader = None
+        return {
+            "status": payload["status"],
+            "report": json_path.name,
+            "table": tsv_path.name,
+            "preview": preview_path.name if preview_path.exists() else None,
+            "warnings": list(warnings),
         }
         summary_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return {
@@ -1109,9 +1426,10 @@ def _zarr_root_attrs(metadata: dict, channel_names: list[str]) -> dict:
             ],
         }],
         "omero": {
-            "name": "GigaTIME probabilities",
+            "name": "GigaTIME uncalibrated virtual-marker scores",
             "channels": channel_labels,
         },
+        "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
         "gigatime": metadata,
     }
     return root_attrs
@@ -1152,9 +1470,15 @@ def clean_background_skip_mask(
     if hole_area > 0:
         # The legacy area_threshold removed regions strictly smaller than the
         # threshold; max_size is inclusive in scikit-image >= 0.26.
-        mask = remove_small_holes(mask, max_size=max(0, hole_area - 1))
+        try:
+            mask = remove_small_holes(mask, max_size=max(0, hole_area - 1))
+        except TypeError:
+            mask = remove_small_holes(mask, area_threshold=hole_area)
     if min_obj_area > 0:
-        mask = remove_small_objects(mask, max_size=max(0, min_obj_area - 1))
+        try:
+            mask = remove_small_objects(mask, max_size=max(0, min_obj_area - 1))
+        except TypeError:
+            mask = remove_small_objects(mask, min_size=min_obj_area)
     return np.asarray(mask, dtype=bool)
 
 
@@ -1245,6 +1569,35 @@ def region_tissue_fraction(
     if view.size == 0:
         return 0.0
     return float(view.mean())
+
+
+def background_block_skip_decision(
+    mask_small: np.ndarray,
+    final_h: int,
+    final_w: int,
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+    *,
+    halo_px: int,
+    max_tissue_fraction: float,
+) -> tuple[bool, float]:
+    """Skip only when an expanded block is truly empty in the coarse mask."""
+    halo_px = max(0, int(halo_px))
+    expanded = (
+        max(0, int(y0) - halo_px),
+        min(int(final_h), int(y1) + halo_px),
+        max(0, int(x0) - halo_px),
+        min(int(final_w), int(x1) + halo_px),
+    )
+    fraction = region_tissue_fraction(
+        mask_small,
+        final_h,
+        final_w,
+        *expanded,
+    )
+    return bool(fraction <= float(max_tissue_fraction)), float(fraction)
 
 
 def axis_patch_starts(length: int, patch_size: int, stride: int) -> list[int]:
@@ -1441,6 +1794,10 @@ def build_ome_pyramid_metadata(channel_names: list[str], level_shapes: list[tupl
     metadata: dict = {
         "axes": "CYX",
         "Channel": {"Name": list(channel_names)},
+        "Description": (
+            "GigaTIME uncalibrated virtual-marker scores in [0,1]. "
+            "Values are not calibrated probabilities or measured protein abundance."
+        ),
     }
     if level_shapes:
         metadata["MapAnnotation"] = {
@@ -1491,7 +1848,9 @@ def resolve_device(requested: str) -> torch.device:
     return torch.device("cpu")
 
 
-def load_model(repo_id: str, token: str | None, device: torch.device, offline: bool) -> GigaTIMEModel:
+def load_model(
+    repo_id: str, token: str | None, device: torch.device, offline: bool,
+) -> tuple[GigaTIMEModel, dict]:
     from huggingface_hub import snapshot_download
 
     local_dir = snapshot_download(repo_id=repo_id, token=token, local_files_only=offline)
@@ -1504,7 +1863,9 @@ def load_model(repo_id: str, token: str | None, device: torch.device, offline: b
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    return model
+    provenance = hf_model_provenance(repo_id, local_dir, requested_revision="main")
+    provenance["checkpoints"] = [checkpoint_record(weights_path, logical_name="GigaTIME")]
+    return model, provenance
 
 
 def build_quantifiers(
@@ -1516,7 +1877,6 @@ def build_quantifiers(
     block_size: int,
 ) -> list[TileQuantifier]:
     quantifiers: list[TileQuantifier] = []
-    shared_max_label: int | None = None
     if nuclei_mask_path:
         nuclei_quantifier = TileQuantifier(
             mask_name="nuclei",
@@ -1525,7 +1885,6 @@ def build_quantifiers(
             channel_names=channel_names,
             block_size=block_size,
         )
-        shared_max_label = int(nuclei_quantifier.max_label)
         quantifiers.append(nuclei_quantifier)
     if cyto_mask_path:
         quantifiers.append(
@@ -1535,7 +1894,6 @@ def build_quantifiers(
                 target_shape=target_shape,
                 channel_names=channel_names,
                 block_size=block_size,
-                max_label=shared_max_label,
             )
         )
     return quantifiers
@@ -1544,6 +1902,7 @@ def build_quantifiers(
 def consume_tile_outputs(
     *,
     quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
     jpg_exporter: JpegTileExporter | None,
     y0: int,
     y1: int,
@@ -1552,6 +1911,7 @@ def consume_tile_outputs(
     tile_probs_all_cyx: np.ndarray,
     jpg_channel_indices: list[int],
 ) -> None:
+    score_qc.accumulate_tile(y0, y1, x0, x1, tile_probs_all_cyx)
     for quantifier in quantifiers:
         quantifier.accumulate_tile(y0, y1, x0, x1, tile_probs_all_cyx)
     if jpg_exporter is not None:
@@ -1562,6 +1922,7 @@ def finalize_aux_outputs(
     *,
     sample_id: str,
     quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
     quant_dir: Path | None,
     jpg_exporter: JpegTileExporter | None,
     metadata: dict,
@@ -1574,11 +1935,17 @@ def finalize_aux_outputs(
                 summaries.append(quantifier.write_outputs(quant_dir, sample_id))
         if jpg_exporter is not None:
             jpg_exporter.write_outputs(metadata)
+        score_qc_summary = score_qc.write_outputs()
+        metadata["marker_score_qc"] = score_qc_summary
+        (score_qc.outdir / "gigatime_metadata.json").write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8"
+        )
         if quant_dir is not None:
             (quant_dir / f"{sample_id}_gigatime_integrated_quantification_summary.json").write_text(
                 json.dumps(
                     {
                         "sample_id": sample_id,
+                        "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
                         "summaries": summaries,
                     },
                     indent=2,
@@ -1611,6 +1978,7 @@ def blockwise_write_ometiff_outputs(
     output_channel_indices: list[int],
     output_channel_names: list[str],
     quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
     quant_dir: Path | None,
     jpg_exporter: JpegTileExporter | None,
     jpg_channel_indices: list[int],
@@ -1701,6 +2069,8 @@ def blockwise_write_ometiff_outputs(
             )
         metadata["background_skip"] = dict(skip_meta)
         metadata["background_skip"]["min_fraction"] = float(skip_background_min_fraction)
+        metadata["background_skip"]["decision_region_halo_px"] = int(patch_size)
+        metadata["background_skip"]["decision_rule"] = "expanded_region_fraction_lte_threshold"
 
         with LazyCropReader(source_path, page, factor) as reader:
             if reader.final_h != final_h or reader.final_w != final_w:
@@ -1725,13 +2095,23 @@ def blockwise_write_ometiff_outputs(
                             flush=True,
                         )
                     if skip_mask_small is not None:
-                        frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                        protect_labels = frac < float(skip_background_min_fraction) and any(
+                        skip_candidate, frac = background_block_skip_decision(
+                            skip_mask_small,
+                            final_h,
+                            final_w,
+                            y0,
+                            y1,
+                            x0,
+                            x1,
+                            halo_px=patch_size,
+                            max_tissue_fraction=skip_background_min_fraction,
+                        )
+                        protect_labels = skip_candidate and any(
                             quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
                         )
                         if protect_labels:
                             label_protected_tiles += 1
-                        if frac < float(skip_background_min_fraction) and not protect_labels:
+                        if skip_candidate and not protect_labels:
                             skipped_tiles += 1
                             done += 1
                             if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -1764,6 +2144,7 @@ def blockwise_write_ometiff_outputs(
                     ]
                     consume_tile_outputs(
                         quantifiers=quantifiers,
+                        score_qc=score_qc,
                         jpg_exporter=jpg_exporter,
                         y0=y0,
                         y1=y1,
@@ -1795,6 +2176,7 @@ def blockwise_write_ometiff_outputs(
         finalize_aux_outputs(
             sample_id=sample_id,
             quantifiers=quantifiers,
+            score_qc=score_qc,
             quant_dir=quant_dir,
             jpg_exporter=jpg_exporter,
             metadata=metadata,
@@ -1878,6 +2260,7 @@ def blockwise_write_ometiff_outputs(
         finalize_aux_outputs(
             sample_id=sample_id,
             quantifiers=quantifiers,
+            score_qc=score_qc,
             quant_dir=quant_dir,
             jpg_exporter=jpg_exporter,
             metadata=metadata,
@@ -1908,6 +2291,7 @@ def blockwise_write_zarr_outputs(
     output_channel_indices: list[int],
     output_channel_names: list[str],
     quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
     quant_dir: Path | None,
     jpg_exporter: JpegTileExporter | None,
     jpg_channel_indices: list[int],
@@ -2000,6 +2384,8 @@ def blockwise_write_zarr_outputs(
         )
     metadata["background_skip"] = dict(skip_meta)
     metadata["background_skip"]["min_fraction"] = float(skip_background_min_fraction)
+    metadata["background_skip"]["decision_region_halo_px"] = int(patch_size)
+    metadata["background_skip"]["decision_rule"] = "expanded_region_fraction_lte_threshold"
 
     with LazyCropReader(source_path, page, factor) as reader:
         print(
@@ -2022,13 +2408,23 @@ def blockwise_write_zarr_outputs(
                     flush=True,
                 )
             if skip_mask_small is not None:
-                frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                protect_labels = frac < float(skip_background_min_fraction) and any(
+                skip_candidate, frac = background_block_skip_decision(
+                    skip_mask_small,
+                    final_h,
+                    final_w,
+                    y0,
+                    y1,
+                    x0,
+                    x1,
+                    halo_px=patch_size,
+                    max_tissue_fraction=skip_background_min_fraction,
+                )
+                protect_labels = skip_candidate and any(
                     quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
                 )
                 if protect_labels:
                     label_protected_tiles += 1
-                if frac < float(skip_background_min_fraction) and not protect_labels:
+                if skip_candidate and not protect_labels:
                     skipped_tiles += 1
                     done += 1
                     if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -2061,6 +2457,7 @@ def blockwise_write_zarr_outputs(
             ]
             consume_tile_outputs(
                 quantifiers=quantifiers,
+                score_qc=score_qc,
                 jpg_exporter=jpg_exporter,
                 y0=y0,
                 y1=y1,
@@ -2090,6 +2487,7 @@ def blockwise_write_zarr_outputs(
     finalize_aux_outputs(
         sample_id=sample_id,
         quantifiers=quantifiers,
+        score_qc=score_qc,
         quant_dir=quant_dir,
         jpg_exporter=jpg_exporter,
         metadata=metadata,
@@ -2117,6 +2515,7 @@ def blockwise_process_without_store(
     skip_background_min_obj_area: int,
     skip_background_hole_area: int,
     quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
     quant_dir: Path | None,
     jpg_exporter: JpegTileExporter | None,
     jpg_channel_indices: list[int],
@@ -2162,6 +2561,8 @@ def blockwise_process_without_store(
         )
     metadata["background_skip"] = dict(skip_meta)
     metadata["background_skip"]["min_fraction"] = float(skip_background_min_fraction)
+    metadata["background_skip"]["decision_region_halo_px"] = int(patch_size)
+    metadata["background_skip"]["decision_rule"] = "expanded_region_fraction_lte_threshold"
 
     with LazyCropReader(source_path, page, factor) as reader:
         print(
@@ -2184,13 +2585,23 @@ def blockwise_process_without_store(
                     flush=True,
                 )
             if skip_mask_small is not None:
-                frac = region_tissue_fraction(skip_mask_small, final_h, final_w, y0, y1, x0, x1)
-                protect_labels = frac < float(skip_background_min_fraction) and any(
+                skip_candidate, frac = background_block_skip_decision(
+                    skip_mask_small,
+                    final_h,
+                    final_w,
+                    y0,
+                    y1,
+                    x0,
+                    x1,
+                    halo_px=patch_size,
+                    max_tissue_fraction=skip_background_min_fraction,
+                )
+                protect_labels = skip_candidate and any(
                     quantifier.has_positive_labels(y0, y1, x0, x1) for quantifier in quantifiers
                 )
                 if protect_labels:
                     label_protected_tiles += 1
-                if frac < float(skip_background_min_fraction) and not protect_labels:
+                if skip_candidate and not protect_labels:
                     skipped_tiles += 1
                     done += 1
                     if done == 1 or done == total_tiles or done % max(1, total_tiles // 20) == 0:
@@ -2223,6 +2634,7 @@ def blockwise_process_without_store(
             ]
             consume_tile_outputs(
                 quantifiers=quantifiers,
+                score_qc=score_qc,
                 jpg_exporter=jpg_exporter,
                 y0=y0,
                 y1=y1,
@@ -2248,6 +2660,7 @@ def blockwise_process_without_store(
     finalize_aux_outputs(
         sample_id=sample_id,
         quantifiers=quantifiers,
+        score_qc=score_qc,
         quant_dir=quant_dir,
         jpg_exporter=jpg_exporter,
         metadata=metadata,
@@ -2347,7 +2760,7 @@ def write_outputs(
     tifffile.imwrite(
         outdir / "gigatime_probs.ome.tif",
         final,
-        metadata={"axes": "CYX", "Channel": {"Name": output_channel_names}},
+        metadata=build_ome_pyramid_metadata(output_channel_names, []),
         compression=compression,
         predictor=predictor,
         bigtiff=final.nbytes >= (4 * 1024 * 1024 * 1024),
@@ -2363,6 +2776,45 @@ def write_outputs(
             os.remove(outdir / temp_name)
         except OSError:
             pass
+
+
+def finalize_dense_aux_outputs(
+    *,
+    sample_id: str,
+    accum: np.ndarray,
+    counts: np.ndarray,
+    valid_shape: tuple[int, int],
+    tile_size: int,
+    quantifiers: list[TileQuantifier],
+    score_qc: MarkerScoreQC,
+    quant_dir: Path | None,
+    jpg_exporter: JpegTileExporter | None,
+    jpg_channel_indices: list[int],
+    metadata: dict,
+) -> None:
+    h, w = (int(valid_shape[0]), int(valid_shape[1]))
+    for y0, y1, x0, x1 in iter_output_tiles(h, w, max(1, int(tile_size))):
+        denom = counts[:, y0:y1, x0:x1]
+        tile_scores = accum[:, y0:y1, x0:x1] / denom
+        consume_tile_outputs(
+            quantifiers=quantifiers,
+            score_qc=score_qc,
+            jpg_exporter=jpg_exporter,
+            y0=y0,
+            y1=y1,
+            x0=x0,
+            x1=x1,
+            tile_probs_all_cyx=tile_scores,
+            jpg_channel_indices=jpg_channel_indices,
+        )
+    finalize_aux_outputs(
+        sample_id=sample_id,
+        quantifiers=quantifiers,
+        score_qc=score_qc,
+        quant_dir=quant_dir,
+        jpg_exporter=jpg_exporter,
+        metadata=metadata,
+    )
 
 
 def parse_args():
@@ -2421,6 +2873,8 @@ def parse_args():
     ap.add_argument("--nuclei-mask", default="", help="Optional nuclei label mask used for on-the-fly quantification.")
     ap.add_argument("--cyto-mask", default="", help="Optional cytoplasm label mask used for on-the-fly quantification.")
     ap.add_argument("--quant-dir", default="", help="Optional output directory for integrated marker quantification CSV/JSON files.")
+    ap.add_argument("--qc-tissue-mask", default="",
+                    help="Optional GrandQC clean-tissue crop mask used only for marker-score tissue/background QC.")
     ap.add_argument("--strict-target-mpp", action="store_true",
                     help="Honor the requested target MPP when source calibration is available instead of relaxing scale for disk budget.")
     ap.add_argument("--pyramid", action="store_true",
@@ -2439,19 +2893,61 @@ def parse_args():
                     help="Optional precomputed coarse tissue mask (PNG/TIFF/NPY) used for blank-block skipping.")
     ap.add_argument("--skip-background-downsample", type=int, default=32,
                     help="Downsample factor used to build the coarse tissue mask for blank-block skipping.")
-    ap.add_argument("--skip-background-min-fraction", type=float, default=0.02,
-                    help="Minimum coarse tissue fraction required to run a block instead of leaving it as zero fill.")
+    ap.add_argument("--skip-background-min-fraction", type=float, default=0.0,
+                    help="Maximum tissue fraction allowed for skipping an expanded block; 0 skips only fully empty regions.")
     ap.add_argument("--skip-background-close-radius", type=int, default=8,
                     help="Morphological closing radius for the coarse tissue mask used in blank-block skipping.")
     ap.add_argument("--skip-background-min-obj-area", type=int, default=2048,
                     help="Minimum coarse tissue object area retained in the blank-block skip mask.")
     ap.add_argument("--skip-background-hole-area", type=int, default=2048,
                     help="Maximum coarse hole area filled in the blank-block skip mask.")
+    ap.add_argument("--seam-qc-mode", choices=["off", "warn", "fail"], default="warn",
+                    help="Action when block-boundary continuity QC fails.")
+    ap.add_argument("--seam-qc-max-p95-excess", type=float, default=0.10,
+                    help="Maximum allowed p95 boundary-gradient excess on the 0..1 probability scale.")
+    ap.add_argument("--seam-qc-min-affected-fraction", type=float, default=0.05,
+                    help="Minimum sampled boundary fraction required to fail the seam gate.")
     return ap.parse_args()
+
+
+def run_output_seam_qc(
+    args: argparse.Namespace,
+    prediction_path: Path,
+    metadata: dict,
+    channel_names: list[str],
+) -> None:
+    if str(args.seam_qc_mode).lower() == "off":
+        return
+    report = assess_prediction_seams(
+        prediction_path,
+        outdir=Path(args.outdir),
+        block_size=int(args.block_size),
+        channel_names=channel_names,
+        max_p95_excess=float(args.seam_qc_max_p95_excess),
+        min_affected_fraction=float(args.seam_qc_min_affected_fraction),
+        mode=str(args.seam_qc_mode),
+    )
+    metadata["seam_qc"] = {
+        "status": report["status"],
+        "gate_mode": str(args.seam_qc_mode),
+        "failed_channel_boundaries": int(report["failed_channel_boundaries"]),
+        "channel_boundary_tests": int(report["channel_boundary_tests"]),
+        "report": "gigatime_seam_qc.json",
+        "preview": "gigatime_seam_qc.png",
+    }
+    (Path(args.outdir) / "gigatime_metadata.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
 
 
 def main():
     args = parse_args()
+    if not 0.0 <= float(args.skip_background_min_fraction) <= 1.0:
+        raise ValueError("--skip-background-min-fraction must be between 0 and 1")
+    if not 0.0 <= float(args.seam_qc_max_p95_excess) <= 1.0:
+        raise ValueError("--seam-qc-max-p95-excess must be between 0 and 1")
+    if not 0.0 <= float(args.seam_qc_min_affected_fraction) <= 1.0:
+        raise ValueError("--seam-qc-min-affected-fraction must be between 0 and 1")
     token = (os.environ.get("HF_TOKEN") or "").strip() or None
     offline = str(os.environ.get("HF_HUB_OFFLINE", "")).strip().lower() in {"1", "true", "yes", "on"}
     device = resolve_device(args.device)
@@ -2506,6 +3002,7 @@ def main():
     image_meta["store_channels"] = list(output_channel_names) if args.output_format != "none" else []
     image_meta["jpg_markers"] = list(jpg_channel_names)
     image_meta["model_channels"] = list(CHANNEL_NAMES)
+    image_meta["value_semantics"] = dict(GIGATIME_VALUE_SEMANTICS)
     image_meta["quantification_channels"] = (
         list(CHANNEL_NAMES)
         if str(args.quant_dir or "").strip() and (str(args.nuclei_mask or "").strip() or str(args.cyto_mask or "").strip())
@@ -2569,7 +3066,8 @@ def main():
             flush=True,
         )
 
-    model = load_model(args.repo_id, token=token, device=device, offline=offline)
+    model, model_provenance = load_model(args.repo_id, token=token, device=device, offline=offline)
+    image_meta["model_provenance"] = model_provenance
     target_shape = tuple(int(v) for v in image_meta["inference_shape_yx"])
     quantifiers = build_quantifiers(
         nuclei_mask_path=str(args.nuclei_mask or ""),
@@ -2577,6 +3075,12 @@ def main():
         target_shape=target_shape,
         channel_names=list(CHANNEL_NAMES),
         block_size=max(512, int(args.block_size)),
+    )
+    score_qc = MarkerScoreQC(
+        outdir=Path(args.outdir),
+        target_shape=target_shape,
+        channel_names=list(CHANNEL_NAMES),
+        tissue_mask_path=str(args.qc_tissue_mask or ""),
     )
     quant_dir = Path(args.quant_dir).resolve() if str(args.quant_dir or "").strip() else None
     jpg_exporter = None
@@ -2617,6 +3121,7 @@ def main():
                 output_channel_indices=output_channel_indices,
                 output_channel_names=output_channel_names,
                 quantifiers=quantifiers,
+                score_qc=score_qc,
                 quant_dir=quant_dir,
                 jpg_exporter=jpg_exporter,
                 jpg_channel_indices=jpg_channel_indices,
@@ -2644,6 +3149,7 @@ def main():
                 output_channel_indices=output_channel_indices,
                 output_channel_names=output_channel_names,
                 quantifiers=quantifiers,
+                score_qc=score_qc,
                 quant_dir=quant_dir,
                 jpg_exporter=jpg_exporter,
                 jpg_channel_indices=jpg_channel_indices,
@@ -2679,6 +3185,7 @@ def main():
                 skip_background_min_obj_area=int(args.skip_background_min_obj_area),
                 skip_background_hole_area=int(args.skip_background_hole_area),
                 quantifiers=quantifiers,
+                score_qc=score_qc,
                 quant_dir=quant_dir,
                 jpg_exporter=jpg_exporter,
                 jpg_channel_indices=jpg_channel_indices,
@@ -2689,6 +3196,8 @@ def main():
             f"[OK] GigaTIME wrote {out_path} "
             f"shape={((len(output_channel_names) if args.output_format != 'none' else len(jpg_channel_names)), image_meta['inference_shape_yx'][0], image_meta['inference_shape_yx'][1])}"
         )
+        if args.output_format != "none":
+            run_output_seam_qc(args, out_path, image_meta, output_channel_names)
         return
 
     disk_backed = float(image_meta["estimated_prediction_gib"]) > float(args.disk_buffer_threshold_gib)
@@ -2702,6 +3211,19 @@ def main():
         batch_size=args.batch_size,
         disk_backed=disk_backed,
         scratch_dir=Path(args.outdir),
+    )
+    finalize_dense_aux_outputs(
+        sample_id=sample_id,
+        accum=accum,
+        counts=counts,
+        valid_shape=valid_shape,
+        tile_size=int(args.block_size),
+        quantifiers=quantifiers,
+        score_qc=score_qc,
+        quant_dir=quant_dir,
+        jpg_exporter=jpg_exporter,
+        jpg_channel_indices=jpg_channel_indices,
+        metadata=image_meta,
     )
     write_outputs(
         Path(args.outdir),
@@ -2717,6 +3239,12 @@ def main():
     print(
         f"[OK] GigaTIME wrote {(Path(args.outdir) / 'gigatime_probs.ome.tif')} "
         f"shape={(len(output_channel_names), valid_shape[0], valid_shape[1])}"
+    )
+    run_output_seam_qc(
+        args,
+        Path(args.outdir) / "gigatime_probs.ome.tif",
+        image_meta,
+        output_channel_names,
     )
 
 

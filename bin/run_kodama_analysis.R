@@ -20,7 +20,7 @@ output_dir <- args[2]
 embedding_mode <- "all"
 dims_to_run <- 20L
 spark_top <- 100L
-landmarks <- 1000L
+landmarks <- 10000L
 kodama_ncomp <- 2L
 n_cores <- 4L
 backend <- "cpu"
@@ -81,7 +81,7 @@ if (!is.finite(spark_top) || spark_top < 1L) {
   spark_top <- 100L
 }
 if (!is.finite(landmarks) || landmarks < 1L) {
-  landmarks <- 1000L
+  landmarks <- 10000L
 }
 if (!is.finite(kodama_ncomp) || kodama_ncomp < 1L) {
   kodama_ncomp <- 2L

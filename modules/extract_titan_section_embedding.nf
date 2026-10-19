@@ -2,11 +2,10 @@ process EXTRACT_TITAN_SECTION_EMBEDDING {
     tag "${sample_id}:${cluster_variant}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/17_titan/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.titan_cpus as int)) }
-    memory { "${Math.max(8, Math.min(params.max_memory_gb as int, params.titan_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.titan_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(8, params.titan_memory_gb as int)))} GB" }
     time { params.titan_time as String }
     containerOptions {
         def modelPath = (params.titan_model ?: '').toString().trim()
@@ -55,5 +54,6 @@ process EXTRACT_TITAN_SECTION_EMBEDDING {
     mkdir -p "titan_${sample_id}_${cluster_variant}"
     touch "titan_${sample_id}_${cluster_variant}/titan_embedding.csv"
     touch "titan_${sample_id}_${cluster_variant}/titan_patch_features.h5"
+    printf '{"model_provenance":{"used_model":false}}\n' > "titan_${sample_id}_${cluster_variant}/titan_metadata.json"
     """
 }

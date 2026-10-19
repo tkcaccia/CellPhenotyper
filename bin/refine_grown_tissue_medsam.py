@@ -34,6 +34,7 @@ from grow_to_tissue import (
 )
 from grow_to_tissue_core import compute_boundary, to_float_rgb
 from medsam_border_refine import DEFAULT_MEDSAM_CHECKPOINT, MedSAMConfig, MedSAMUnavailableError, run_medsam_border_refine
+from model_provenance import checkpoint_record, git_revision
 
 
 def sample_prefix(sample_id: str, out_path: str | Path) -> str:
@@ -257,6 +258,48 @@ class TiffWindowReader:
                 self._tf.close()
 
 
+class ScaledBinaryMaskReader:
+    """Read a low-resolution mask in target-image coordinates without seams."""
+
+    def __init__(self, path: str, target_shape: Tuple[int, int], name: str = "tissue mask"):
+        self.reader = TiffWindowReader(path, name)
+        self.source_shape = self.reader.spatial_shape()
+        self.target_shape = tuple(map(int, target_shape))
+
+    def read(self, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
+        target_h, target_w = self.target_shape
+        source_h, source_w = self.source_shape
+        y_index = np.minimum(
+            source_h - 1,
+            np.floor(np.arange(y0, y1, dtype=np.float64) * source_h / max(1, target_h)).astype(np.int64),
+        )
+        x_index = np.minimum(
+            source_w - 1,
+            np.floor(np.arange(x0, x1, dtype=np.float64) * source_w / max(1, target_w)).astype(np.int64),
+        )
+        sy0, sy1 = int(y_index.min()), int(y_index.max()) + 1
+        sx0, sx1 = int(x_index.min()), int(x_index.max()) + 1
+        source = ensure_2d(self.reader.read(sy0, sy1, sx0, sx1), "scaled tissue-mask block")
+        return np.asarray(source[np.ix_(y_index - sy0, x_index - sx0)] != 0)
+
+    def read_stride(self, step: int) -> np.ndarray:
+        """Read a globally aligned preview without constructing the full-size mask."""
+        step = max(1, int(step))
+        target_h, target_w = self.target_shape
+        source_h, source_w = self.source_shape
+        target_y = np.arange(0, target_h, step, dtype=np.int64)
+        target_x = np.arange(0, target_w, step, dtype=np.int64)
+        source_y = np.minimum(source_h - 1, np.floor(target_y * source_h / max(1, target_h)).astype(np.int64))
+        source_x = np.minimum(source_w - 1, np.floor(target_x * source_w / max(1, target_w)).astype(np.int64))
+        sy0, sy1 = int(source_y.min()), int(source_y.max()) + 1
+        sx0, sx1 = int(source_x.min()), int(source_x.max()) + 1
+        source = ensure_2d(self.reader.read(sy0, sy1, sx0, sx1), "scaled tissue-mask preview")
+        return np.asarray(source[np.ix_(source_y - sy0, source_x - sx0)] != 0)
+
+    def close(self) -> None:
+        self.reader.close()
+
+
 def tiff_spatial_shape(path: str, name: str) -> Tuple[int, int]:
     if not os.path.exists(path):
         raise FileNotFoundError(f"{name} not found: {path}")
@@ -296,6 +339,52 @@ def commit_bounds(y0: int, y1: int, x0: int, x1: int, shape: Tuple[int, int], ov
     return int(cy0), int(cy1), int(cx0), int(cx1)
 
 
+def refine_internal_cluster_boundaries(
+    image: np.ndarray,
+    labels: np.ndarray,
+    radius: int,
+) -> Tuple[np.ndarray, Dict[str, int]]:
+    """Snap only inter-cluster boundaries to local full-resolution image gradients."""
+    radius = max(0, int(radius))
+    source = np.asarray(labels)
+    if radius == 0 or source.size == 0:
+        return source.copy(), {"enabled": int(radius > 0), "editable_pixels": 0, "changed_pixels": 0}
+
+    foreground = source > 0
+    internal = np.zeros(source.shape, dtype=bool)
+    vertical = (source[:-1, :] != source[1:, :]) & foreground[:-1, :] & foreground[1:, :]
+    horizontal = (source[:, :-1] != source[:, 1:]) & foreground[:, :-1] & foreground[:, 1:]
+    internal[:-1, :] |= vertical
+    internal[1:, :] |= vertical
+    internal[:, :-1] |= horizontal
+    internal[:, 1:] |= horizontal
+    if not internal.any():
+        return source.copy(), {"enabled": 1, "editable_pixels": 0, "changed_pixels": 0}
+
+    from scipy.ndimage import distance_transform_edt
+    from skimage.color import rgb2gray
+    from skimage.filters import sobel
+    from skimage.segmentation import watershed
+
+    editable = (distance_transform_edt(~internal) <= radius) & foreground
+    markers = source.astype(np.int32, copy=True)
+    markers[editable] = 0
+    if not np.any(markers > 0):
+        return source.copy(), {"enabled": 1, "editable_pixels": int(editable.sum()), "changed_pixels": 0}
+
+    gradient = sobel(rgb2gray(to_uint8_rgb(image)))
+    snapped = watershed(gradient, markers=markers, mask=foreground)
+    result = source.copy()
+    valid = editable & (snapped > 0)
+    result[valid] = snapped[valid].astype(source.dtype, copy=False)
+    return result, {
+        "enabled": 1,
+        "editable_pixels": int(editable.sum()),
+        "changed_pixels": int(np.count_nonzero(result != source)),
+        "radius_px": radius,
+    }
+
+
 def make_medsam_config(args) -> MedSAMConfig:
     return MedSAMConfig(
         checkpoint=str(args.medsam_checkpoint),
@@ -313,6 +402,17 @@ def make_medsam_config(args) -> MedSAMConfig:
         cluster_tile_size=int(args.medsam_cluster_tile_size),
         cluster_tile_overlap=int(args.medsam_cluster_tile_overlap),
     )
+
+
+def medsam_model_provenance(config: MedSAMConfig) -> dict:
+    checkpoint = Path(config.checkpoint).resolve()
+    return {
+        "source_repository": "https://github.com/bowang-lab/MedSAM",
+        "requested_revision": None,
+        "resolved_revision": git_revision(config.repo_dir),
+        "cache_path": str(checkpoint.parent),
+        "checkpoints": [checkpoint_record(checkpoint, logical_name="medsam_vit_b")],
+    }
 
 
 def pyramidize_or_fallback(tmp_flat: Path, out_path: str, args) -> None:
@@ -451,6 +551,28 @@ def medsam_change_map(image: np.ndarray, raw_labels: np.ndarray, refined_labels:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+def grandqc_empty_exclusion_map(
+    image: np.ndarray,
+    tissue_support: np.ndarray,
+    labels_before_support: np.ndarray,
+    final_labels: np.ndarray,
+) -> np.ndarray:
+    """Visualize GrandQC empty-area negatives and verify final label exclusion."""
+    rgb = to_uint8_rgb(image).astype(np.float32)
+    support = np.asarray(tissue_support).astype(bool)
+    before = np.asarray(labels_before_support)
+    final = np.asarray(final_labels)
+    if support.shape != before.shape or support.shape != final.shape or rgb.shape[:2] != support.shape:
+        raise ValueError("GrandQC exclusion QC inputs must share one spatial shape")
+    empty = ~support
+    removed = empty & (before > 0)
+    leaked = empty & (final > 0)
+    rgb[empty] = (0.35 * rgb[empty]) + 0.65 * np.array([55, 120, 220], dtype=np.float32)
+    rgb[removed] = (0.20 * rgb[removed]) + 0.80 * np.array([255, 40, 40], dtype=np.float32)
+    rgb[leaked] = np.array([255, 0, 255], dtype=np.float32)
+    return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
 def crop_change_summary(raw_labels: np.ndarray, refined_labels: np.ndarray) -> Dict[str, int]:
     raw = np.asarray(raw_labels)
     refined = np.asarray(refined_labels)
@@ -516,12 +638,14 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
     image_reader = TiffWindowReader(args.image, "image")
     seed_reader = TiffWindowReader(args.seed_mask, "seed mask")
     grown_reader = TiffWindowReader(args.grown_mask, "grown mask")
+    tissue_reader = None
     try:
         shape = seed_reader.spatial_shape()
         if grown_reader.spatial_shape() != shape:
             raise ValueError(f"Step-15 and step-16 masks must share the same shape: {shape} vs {grown_reader.spatial_shape()}")
         if image_reader.spatial_shape() != shape:
             raise ValueError(f"Image and masks must share the same spatial shape: {image_reader.spatial_shape()} vs {shape}")
+        tissue_reader = ScaledBinaryMaskReader(args.tissue_mask, shape)
 
         label_dtype = seed_reader.dtype if np.issubdtype(seed_reader.dtype, np.integer) else np.uint16
         if np.dtype(label_dtype).itemsize > np.dtype(grown_reader.dtype).itemsize and np.issubdtype(grown_reader.dtype, np.integer):
@@ -572,7 +696,10 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                 mpp_y=args.source_mpp_y,
             )
 
+        input_grown_pixels = 0
         raw_pixels = 0
+        grandqc_support_pixels = 0
+        excluded_background_pixels = 0
         print(
             f"[INFO] Large-image streaming MedSAM enabled: shape={shape}, tile_size={tile_size}, "
             f"overlap={overlap}, image_reader={image_reader.kind}, grown_reader={grown_reader.kind}, device={med_cfg.device}",
@@ -581,13 +708,18 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         for y0 in range(0, h, block_rows):
             y1 = min(h, y0 + block_rows)
             block = ensure_2d(grown_reader.read(y0, y1, 0, w), "grown mask block").astype(label_dtype, copy=False)
+            tissue_block = tissue_reader.read(y0, y1, 0, w)
+            input_grown_pixels += int(np.count_nonzero(block))
+            grandqc_support_pixels += int(np.count_nonzero(tissue_block))
+            excluded_background_pixels += int(np.count_nonzero((block > 0) & ~tissue_block))
+            block = np.where(tissue_block, block, 0).astype(label_dtype, copy=False)
             if resume_tmp is None:
                 refined_out[y0:y1, :] = block
             raw_pixels += int(np.count_nonzero(block))
             if y0 == 0 or y1 == h or ((y0 // block_rows) % 50 == 0):
                 action = "Initialized" if resume_tmp is None else "Checked"
                 print(f"[INFO] {action} refined output rows {y0}:{y1}", flush=True)
-            del block
+            del block, tissue_block
         refined_out.flush()
 
         ys = tile_starts(h, tile_size, overlap)
@@ -600,6 +732,12 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         cleanup_added_pixels = 0
         cleanup_removed_pixels = 0
         cleanup_relabel_pixels = 0
+        medsam_added_pixels = 0
+        medsam_removed_pixels = 0
+        medsam_relabel_pixels = 0
+        medsam_outside_grandqc_pixels = 0
+        image_guided_editable_pixels = 0
+        image_guided_changed_pixels = 0
         tile_runtime_sec = 0.0
         tile_cfg = replace(
             med_cfg,
@@ -641,12 +779,17 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                         )
                     continue
                 tile_seed = ensure_2d(seed_reader.read(y0, y1, x0, x1), "seed mask tile").astype(label_dtype, copy=False)
+                tile_tissue = tissue_reader.read(y0, y1, x0, x1)
+                tile_seed = np.where(tile_tissue, tile_seed, 0).astype(label_dtype, copy=False)
                 if not np.any(tile_seed > 0):
                     skipped_no_seed += 1
+                    del tile_seed, tile_tissue
                     continue
                 tile_grown = ensure_2d(grown_reader.read(y0, y1, x0, x1), "grown mask tile").astype(label_dtype, copy=False)
+                tile_grown = np.where(tile_tissue, tile_grown, 0).astype(label_dtype, copy=False)
                 if not np.any(tile_grown > 0):
                     skipped_no_seed += 1
+                    del tile_seed, tile_grown, tile_tissue
                     continue
                 if processed_tiles < resume_tiles:
                     processed_tiles += 1
@@ -674,7 +817,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                             "checkpoint": str(tmp_flat),
                         },
                     )
-                    del tile_seed, tile_grown
+                    del tile_seed, tile_grown, tile_tissue
                     continue
                 tile_image = image_reader.read(y0, y1, x0, x1)
                 tile_start = time.perf_counter()
@@ -685,6 +828,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                         baseline_tissue_mask=tile_grown > 0,
                         config=tile_cfg,
                         baseline_label_map=tile_grown,
+                        allowed_support_mask=tile_tissue,
                     )
                 except MedSAMUnavailableError:
                     raise
@@ -692,14 +836,32 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                     failed_tiles += 1
                     raise
                 tile_runtime_sec += float(runtime_sec)
-                refined_tile = np.asarray(artifacts.get("label_map", tile_grown), dtype=label_dtype)
-
+                medsam_tile = np.asarray(artifacts.get("label_map", tile_grown), dtype=label_dtype).copy()
                 ly0, ly1 = cy0 - y0, cy1 - y0
                 lx0, lx1 = cx0 - x0, cx1 - x0
+                tile_tissue_commit = tile_tissue[ly0:ly1, lx0:lx1]
+                medsam_outside_grandqc_pixels += int(
+                    np.count_nonzero((medsam_tile[ly0:ly1, lx0:lx1] > 0) & ~tile_tissue_commit)
+                )
+                medsam_tile[~tile_tissue] = 0
+                refined_tile = medsam_tile
+                if args.image_guided_internal_refine:
+                    refined_tile, boundary_meta = refine_internal_cluster_boundaries(
+                        tile_image, refined_tile, int(args.internal_boundary_radius),
+                    )
+                    image_guided_editable_pixels += int(boundary_meta["editable_pixels"])
+                    image_guided_changed_pixels += int(boundary_meta["changed_pixels"])
+                refined_tile[~tile_tissue] = 0
+
                 raw_commit = tile_grown[ly0:ly1, lx0:lx1]
+                medsam_commit = medsam_tile[ly0:ly1, lx0:lx1]
                 new_commit = refined_tile[ly0:ly1, lx0:lx1]
                 raw_fg = raw_commit > 0
+                medsam_fg = medsam_commit > 0
                 new_fg = new_commit > 0
+                medsam_removed_pixels += int(np.count_nonzero(raw_fg & ~medsam_fg))
+                medsam_added_pixels += int(np.count_nonzero(medsam_fg & ~raw_fg))
+                medsam_relabel_pixels += int(np.count_nonzero((raw_commit != medsam_commit) & raw_fg & medsam_fg))
                 cleanup_removed_pixels += int(np.count_nonzero(raw_fg & ~new_fg))
                 cleanup_added_pixels += int(np.count_nonzero(new_fg & ~raw_fg))
                 cleanup_relabel_pixels += int(np.count_nonzero((raw_commit != new_commit) & raw_fg & new_fg))
@@ -730,10 +892,27 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                         "checkpoint": str(tmp_flat),
                     },
                 )
-                del tile_image, tile_seed, tile_grown, refined_tile, raw_commit, new_commit
+                del tile_image, tile_seed, tile_grown, tile_tissue, tile_tissue_commit, medsam_tile, refined_tile, raw_commit, medsam_commit, new_commit
                 gc.collect()
 
+        # Enforce the tissue contract over the complete checkpoint, including
+        # checkpoints created by older interrupted runs.
+        final_background_clamp_pixels = 0
+        final_outside_grandqc_pixels = 0
+        for y0 in range(0, h, block_rows):
+            y1 = min(h, y0 + block_rows)
+            final_block = np.asarray(refined_out[y0:y1, :]).copy()
+            tissue_block = tissue_reader.read(y0, y1, 0, w)
+            final_background_clamp_pixels += int(np.count_nonzero((final_block > 0) & ~tissue_block))
+            final_block[~tissue_block] = 0
+            final_outside_grandqc_pixels += int(np.count_nonzero((final_block > 0) & ~tissue_block))
+            refined_out[y0:y1, :] = final_block
+            del final_block, tissue_block
         refined_out.flush()
+        if final_outside_grandqc_pixels:
+            raise RuntimeError(
+                f"GrandQC empty-area contract violated: {final_outside_grandqc_pixels} final pixels remain outside support"
+            )
         print("[INFO] Streaming MedSAM loop complete; counting final refined pixels", flush=True)
         final_pixels = count_nonzero_2d_blocks(refined_out, block_rows=block_rows)
         diag_step = preview_step_for_shape(shape, max_side=2048)
@@ -742,6 +921,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         seed_preview = ensure_2d(read_stride_tiled(seed_reader, diag_step, tile_size=tile_size), "seed mask preview")
         raw_preview = ensure_2d(read_stride_tiled(grown_reader, diag_step, tile_size=tile_size), "grown mask preview")
         refined_preview = array_stride_tiled(refined_out, diag_step, tile_size=tile_size)
+        tissue_preview = tissue_reader.read_stride(diag_step)
         raw_vs_final_change = to_uint8_rgb(image_preview)
         raw_only = (raw_preview > 0) & ~(refined_preview > 0)
         final_only = (refined_preview > 0) & ~(raw_preview > 0)
@@ -755,6 +935,10 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         save_png(outdir / f"{prefix}_medsam_refined_labels.png", overlay_labels(image_preview, refined_preview))
         save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_preview, raw_preview > 0, refined_preview > 0))
         save_png(outdir / f"{prefix}_medsam_streaming_change_map.png", raw_vs_final_change)
+        grandqc_exclusion_preview = grandqc_empty_exclusion_map(
+            image_preview, tissue_preview, raw_preview, refined_preview,
+        )
+        save_png(outdir / f"{prefix}_medsam_grandqc_empty_exclusion.png", grandqc_exclusion_preview)
         save_png(Path(args.preview), overlay_labels(image_preview, refined_preview, alpha=float(args.preview_alpha)))
 
         panel_path = outdir / f"{prefix}_medsam_raw_vs_final_panel.png"
@@ -763,6 +947,7 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
                 ("Original image", to_uint8_rgb(image_preview)),
                 ("Step-15 labels", overlay_labels(image_preview, seed_preview)),
                 ("Grown labels before MedSAM", overlay_labels(image_preview, raw_preview)),
+                ("GrandQC empty: blue; removed labels: red; leakage: magenta", grandqc_exclusion_preview),
                 ("Streaming MedSAM refined labels", overlay_labels(image_preview, refined_preview)),
                 ("What refinements changed", raw_vs_final_change),
             ],
@@ -814,15 +999,33 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
             "tiles_failed": int(failed_tiles),
             "tile_size": int(tile_size),
             "tile_overlap": int(overlap),
+            "input_grown_pixels": int(input_grown_pixels),
             "raw_pixels": int(raw_pixels),
             "final_pixels": int(final_pixels),
+            "grandqc_support_pixels": int(grandqc_support_pixels),
+            "grandqc_empty_pixels": int((h * w) - grandqc_support_pixels),
+            "excluded_background_pixels": int(excluded_background_pixels),
+            "medsam_pixels_outside_grandqc_before_clamp": int(medsam_outside_grandqc_pixels),
+            "final_background_clamp_pixels": int(final_background_clamp_pixels),
+            "final_pixels_outside_grandqc": int(final_outside_grandqc_pixels),
+            "tissue_mask_source_shape_yx": list(map(int, tissue_reader.source_shape)),
+            "background_exclusion_contract": "grandqc_clean_tissue_intersection_roi",
+            "grandqc_empty_area_role": "hard_negative_support_during_medsam",
             "cleanup_removed_pixels": int(cleanup_removed_pixels),
             "cleanup_added_pixels": int(cleanup_added_pixels),
             "cleanup_relabel_pixels": int(cleanup_relabel_pixels),
+            "medsam_removed_pixels": int(medsam_removed_pixels),
+            "medsam_added_pixels": int(medsam_added_pixels),
+            "medsam_relabel_pixels": int(medsam_relabel_pixels),
+            "image_guided_internal_refine": bool(args.image_guided_internal_refine),
+            "internal_boundary_radius_px": int(args.internal_boundary_radius),
+            "image_guided_editable_pixels": int(image_guided_editable_pixels),
+            "image_guided_changed_pixels": int(image_guided_changed_pixels),
             "diagnostic_preview_step": int(diag_step),
             "image_reader": image_reader.kind,
             "grown_reader": grown_reader.kind,
             "seed_reader": seed_reader.kind,
+            "model_provenance": medsam_model_provenance(med_cfg),
         }
         if random_fullres_qc is not None:
             summary["random_fullres_qc"] = random_fullres_qc
@@ -848,6 +1051,8 @@ def run_large_image_streaming_medsam(args, med_cfg: MedSAMConfig) -> None:
         image_reader.close()
         seed_reader.close()
         grown_reader.close()
+        if tissue_reader is not None:
+            tissue_reader.close()
 
 
 def main() -> None:
@@ -858,6 +1063,7 @@ def main() -> None:
     ap.add_argument("--image", required=True, help="ROI image TIFF used by the pipeline")
     ap.add_argument("--seed-mask", required=True, help="Step-15 cluster mask TIFF")
     ap.add_argument("--grown-mask", required=True, help="Step-16 grown tissue mask TIFF")
+    ap.add_argument("--tissue-mask", required=True, help="GrandQC clean-tissue intersection with the optional ROI")
     ap.add_argument("--out", required=True, help="Output refined OME-TIFF path")
     ap.add_argument("--resolution-json", default="",
                     help="Pipeline shift/resolution JSON containing authoritative source_mpp metadata.")
@@ -908,6 +1114,10 @@ def main() -> None:
     ap.add_argument("--medsam-cluster-tile-overlap", type=int, default=512)
     ap.add_argument("--medsam-force-core-preservation", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--medsam-save-debug", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--image-guided-internal-refine", action=argparse.BooleanOptionalAction, default=True,
+                    help="Refine inter-cluster boundaries with a full-resolution marker-controlled watershed.")
+    ap.add_argument("--internal-boundary-radius", type=int, default=64,
+                    help="Maximum pixel distance that image-guided refinement may move an inter-cluster boundary.")
     args = ap.parse_args()
 
     args.source_mpp_x, args.source_mpp_y = read_mpp_json(args.resolution_json, args.default_mpp)
@@ -952,6 +1162,22 @@ def main() -> None:
     if image_rgb.ndim == 2 and image_rgb.shape != seed_labels.shape:
         raise ValueError(f"Image and masks must share the same spatial shape: {image_rgb.shape} vs {seed_labels.shape}")
 
+    diag_step = preview_step_for_shape(seed_labels.shape, max_side=2048)
+    grown_before_support_preview = np.asarray(preview_subsample(grown_labels, diag_step)).copy()
+
+    tissue_reader = ScaledBinaryMaskReader(args.tissue_mask, seed_labels.shape)
+    try:
+        tissue_support = tissue_reader.read(0, seed_labels.shape[0], 0, seed_labels.shape[1])
+        tissue_source_shape = tissue_reader.source_shape
+    finally:
+        tissue_reader.close()
+    excluded_seed_background_pixels = int(np.count_nonzero((seed_labels > 0) & ~tissue_support))
+    excluded_background_pixels = int(np.count_nonzero((grown_labels > 0) & ~tissue_support))
+    grandqc_support_pixels = int(np.count_nonzero(tissue_support))
+    grandqc_empty_pixels = int(tissue_support.size - grandqc_support_pixels)
+    seed_labels = np.where(tissue_support, seed_labels, 0).astype(label_dtype, copy=False)
+    grown_labels = np.where(tissue_support, grown_labels, 0).astype(label_dtype, copy=False)
+
     try:
         refined_tissue, probability_map, runtime_sec, med_meta, artifacts = run_medsam_border_refine(
             image=image_rgb,
@@ -959,12 +1185,27 @@ def main() -> None:
             baseline_tissue_mask=grown_labels > 0,
             config=med_cfg,
             baseline_label_map=grown_labels,
+            allowed_support_mask=tissue_support,
         )
     except MedSAMUnavailableError as exc:
         raise RuntimeError(f"MedSAM unavailable: {exc}") from exc
 
-    refined_labels = np.asarray(artifacts.get("label_map", grown_labels), dtype=label_dtype)
-    raw_labels = np.asarray(artifacts.get("raw_medsam_label_map", refined_labels), dtype=label_dtype)
+    medsam_labels = np.asarray(artifacts.get("label_map", grown_labels), dtype=label_dtype).copy()
+    medsam_outside_grandqc_pixels = int(np.count_nonzero((medsam_labels > 0) & ~tissue_support))
+    medsam_labels[~tissue_support] = 0
+    refined_labels = medsam_labels
+    boundary_meta = {"enabled": 0, "editable_pixels": 0, "changed_pixels": 0, "radius_px": 0}
+    if args.image_guided_internal_refine:
+        refined_labels, boundary_meta = refine_internal_cluster_boundaries(
+            image_rgb, refined_labels, int(args.internal_boundary_radius),
+        )
+    refined_labels[~tissue_support] = 0
+    final_outside_grandqc_pixels = int(np.count_nonzero((refined_labels > 0) & ~tissue_support))
+    if final_outside_grandqc_pixels:
+        raise RuntimeError(
+            f"GrandQC empty-area contract violated: {final_outside_grandqc_pixels} final pixels remain outside support"
+        )
+    raw_medsam_labels = np.asarray(artifacts.get("raw_medsam_label_map", medsam_labels), dtype=label_dtype)
     protected_core = np.asarray(artifacts.get("protected_core", np.zeros_like(grown_labels)), dtype=bool)
     editable_band = np.asarray(artifacts.get("editable_band", np.zeros_like(grown_labels)), dtype=bool)
 
@@ -977,7 +1218,8 @@ def main() -> None:
         debug_dir.mkdir(parents=True, exist_ok=True)
         meta = dict(med_meta)
         meta["sample_id"] = args.sample_id
-        meta["raw_pixels"] = int((raw_labels > 0).sum())
+        meta["raw_medsam_pixels"] = int((raw_medsam_labels > 0).sum())
+        meta["cleaned_medsam_pixels"] = int((medsam_labels > 0).sum())
         meta["final_pixels"] = int((refined_labels > 0).sum())
         (debug_dir / "meta.json").write_text(json.dumps(meta, indent=2))
         for name, arr in artifacts.items():
@@ -990,29 +1232,47 @@ def main() -> None:
         "source_mpp_x": float(args.source_mpp_x),
         "source_mpp_y": float(args.source_mpp_y),
         "medsam_runtime_sec": round(float(runtime_sec), 3),
-        "raw_pixels": int((raw_labels > 0).sum()),
+        "baseline_pixels": int((grown_labels > 0).sum()),
+        "raw_medsam_pixels": int((raw_medsam_labels > 0).sum()),
+        "cleaned_medsam_pixels": int((medsam_labels > 0).sum()),
         "final_pixels": int((refined_labels > 0).sum()),
-        "cleanup_removed_pixels": int(((raw_labels > 0) & ~(refined_labels > 0)).sum()),
-        "cleanup_added_pixels": int(((refined_labels > 0) & ~(raw_labels > 0)).sum()),
-        "cleanup_relabel_pixels": int(((raw_labels != refined_labels) & (raw_labels > 0) & (refined_labels > 0)).sum()),
+        "excluded_background_pixels": int(excluded_background_pixels),
+        "excluded_seed_background_pixels": int(excluded_seed_background_pixels),
+        "grandqc_support_pixels": int(grandqc_support_pixels),
+        "grandqc_empty_pixels": int(grandqc_empty_pixels),
+        "medsam_pixels_outside_grandqc_before_clamp": int(medsam_outside_grandqc_pixels),
+        "final_pixels_outside_grandqc": int(final_outside_grandqc_pixels),
+        "tissue_mask_source_shape_yx": list(map(int, tissue_source_shape)),
+        "background_exclusion_contract": "grandqc_clean_tissue_intersection_roi",
+        "grandqc_empty_area_role": "hard_negative_support_during_medsam",
+        "medsam_removed_pixels": int(((grown_labels > 0) & ~(medsam_labels > 0)).sum()),
+        "medsam_added_pixels": int(((medsam_labels > 0) & ~(grown_labels > 0)).sum()),
+        "medsam_relabel_pixels": int(((grown_labels != medsam_labels) & (grown_labels > 0) & (medsam_labels > 0)).sum()),
+        "image_guided_changed_pixels": int(boundary_meta["changed_pixels"]),
         "protected_core_pixels": int(protected_core.sum()),
         "editable_band_pixels": int(editable_band.sum()),
+        "image_guided_internal_refine": bool(args.image_guided_internal_refine),
+        "internal_boundary_radius_px": int(args.internal_boundary_radius),
+        "image_guided_editable_pixels": int(boundary_meta["editable_pixels"]),
+        "model_provenance": medsam_model_provenance(med_cfg),
     }
-    diag_step = preview_step_for_shape(seed_labels.shape, max_side=2048)
     summary["diagnostic_preview_step"] = int(diag_step)
 
     image_preview = preview_subsample(image_rgb, diag_step)
     seed_preview = preview_subsample(seed_labels, diag_step)
-    raw_preview = preview_subsample(raw_labels, diag_step)
+    grown_preview = preview_subsample(grown_labels, diag_step)
+    raw_medsam_preview = preview_subsample(raw_medsam_labels, diag_step)
+    medsam_preview = preview_subsample(medsam_labels, diag_step)
     refined_preview = preview_subsample(refined_labels, diag_step)
     protected_preview = preview_subsample(protected_core, diag_step)
     editable_preview = preview_subsample(editable_band, diag_step)
+    tissue_preview = preview_subsample(tissue_support, diag_step)
     prob_preview = preview_subsample(probability_map, diag_step) if probability_map is not None else None
 
     raw_vs_final_change = to_uint8_rgb(image_preview)
-    raw_only = (raw_preview > 0) & ~(refined_preview > 0)
-    final_only = (refined_preview > 0) & ~(raw_preview > 0)
-    relabeled = (raw_preview != refined_preview) & (raw_preview > 0) & (refined_preview > 0)
+    raw_only = (grown_preview > 0) & ~(refined_preview > 0)
+    final_only = (refined_preview > 0) & ~(grown_preview > 0)
+    relabeled = (medsam_preview != refined_preview) & (medsam_preview > 0) & (refined_preview > 0)
     raw_vs_final_change[raw_only] = ((0.65 * raw_vs_final_change[raw_only]) + 0.35 * np.array([255, 0, 0])).astype(np.uint8)
     raw_vs_final_change[final_only] = ((0.65 * raw_vs_final_change[final_only]) + 0.35 * np.array([0, 255, 255])).astype(np.uint8)
     raw_vs_final_change[relabeled] = ((0.55 * raw_vs_final_change[relabeled]) + 0.45 * np.array([255, 255, 0])).astype(np.uint8)
@@ -1020,11 +1280,17 @@ def main() -> None:
     save_png(outdir / f"{prefix}_medsam_seed_labels.png", overlay_labels(image_preview, seed_preview))
     save_png(outdir / f"{prefix}_medsam_protected_core.png", overlay_mask(image_preview, protected_preview, (255, 200, 0)))
     save_png(outdir / f"{prefix}_medsam_editable_band.png", overlay_mask(image_preview, editable_preview, (180, 0, 255)))
-    save_png(outdir / f"{prefix}_medsam_raw_labels.png", overlay_labels(image_preview, raw_preview))
+    save_png(outdir / f"{prefix}_medsam_tissue_support.png", overlay_mask(image_preview, tissue_preview, (0, 180, 80)))
+    grandqc_exclusion_preview = grandqc_empty_exclusion_map(
+        image_preview, tissue_preview, grown_before_support_preview, refined_preview,
+    )
+    save_png(outdir / f"{prefix}_medsam_grandqc_empty_exclusion.png", grandqc_exclusion_preview)
+    save_png(outdir / f"{prefix}_medsam_raw_labels.png", overlay_labels(image_preview, raw_medsam_preview))
+    save_png(outdir / f"{prefix}_medsam_cleaned_labels.png", overlay_labels(image_preview, medsam_preview))
     save_png(outdir / f"{prefix}_medsam_refined_labels.png", overlay_labels(image_preview, refined_preview))
     if prob_preview is not None:
         save_png(outdir / f"{prefix}_medsam_probability_heatmap.png", heatmap(prob_preview))
-    save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_preview, raw_preview > 0, refined_preview > 0))
+    save_png(outdir / f"{prefix}_medsam_boundary_compare.png", boundary_compare(image_preview, grown_preview > 0, refined_preview > 0))
 
     panel_path = outdir / f"{prefix}_medsam_raw_vs_final_panel.png"
     make_panel(
@@ -1033,8 +1299,11 @@ def main() -> None:
             ("Step-15 labels", overlay_labels(image_preview, seed_preview)),
             ("Protected core", overlay_mask(image_preview, protected_preview, (255, 200, 0))),
             ("Editable band", overlay_mask(image_preview, editable_preview, (180, 0, 255))),
-            ("Immediately after MedSAM", overlay_labels(image_preview, raw_preview)),
-            ("After refinements", overlay_labels(image_preview, refined_preview)),
+            ("GrandQC tissue and ROI support", overlay_mask(image_preview, tissue_preview, (0, 180, 80))),
+            ("GrandQC empty: blue; removed labels: red; leakage: magenta", grandqc_exclusion_preview),
+            ("Raw MedSAM predictions", overlay_labels(image_preview, raw_medsam_preview)),
+            ("After MedSAM cleanup", overlay_labels(image_preview, medsam_preview)),
+            ("Image-guided final", overlay_labels(image_preview, refined_preview)),
             ("What refinements changed", raw_vs_final_change),
         ],
         panel_path,
@@ -1043,7 +1312,7 @@ def main() -> None:
 
     if int(args.medsam_qc_crop_size) > 0:
         y0, y1, x0, x1 = choose_random_tissue_crop(
-            raw_preview=raw_preview,
+            raw_preview=medsam_preview,
             refined_preview=refined_preview,
             step=diag_step,
             full_shape=seed_labels.shape,
@@ -1051,7 +1320,7 @@ def main() -> None:
             seed=int(args.medsam_qc_random_seed),
         )
         image_crop = np.asarray(image_rgb[y0:y1, x0:x1, ...]) if image_rgb.ndim == 3 else np.asarray(image_rgb[y0:y1, x0:x1])
-        raw_crop = np.asarray(raw_labels[y0:y1, x0:x1])
+        raw_crop = np.asarray(medsam_labels[y0:y1, x0:x1])
         refined_crop = np.asarray(refined_labels[y0:y1, x0:x1])
         summary["random_fullres_qc"] = save_fullres_qc_crop(
             image_crop=image_crop,

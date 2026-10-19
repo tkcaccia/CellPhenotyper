@@ -8,8 +8,13 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hardware_runtime import auto_batch_from_free_vram
+from model_provenance import checkpoint_record, package_version
 
 
 PANNUKE_TYPE_MAP = {
@@ -32,24 +37,15 @@ def source_mpp(shift_path: Path, fallback: float) -> float:
 
 
 def auto_batch_size(requested: int, gpu: int) -> int:
-    if requested > 0:
-        return max(2, min(48, requested))
-    try:
-        output = subprocess.check_output(
-            ["nvidia-smi", "-i", str(gpu), "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            text=True,
-        )
-        memory_mib = int(output.strip().splitlines()[0])
-    except Exception:
-        return 2
-    if memory_mib >= 70 * 1024:
-        return 32
-    if memory_mib >= 40 * 1024:
-        return 16
-    if memory_mib >= 22 * 1024:
-        return 8
     # CellViT++ 1.0.9 enforces a minimum batch size of two.
-    return 2
+    return auto_batch_from_free_vram(
+        requested,
+        gpu,
+        tiers=((68 * 1024, 32), (38 * 1024, 16), (20 * 1024, 8)),
+        fallback=2,
+        minimum=2,
+        maximum=48,
+    )
 
 
 def resolve_runtime_paths(image: str, shift: str, outdir: str) -> tuple[Path, Path, Path]:
@@ -167,6 +163,7 @@ def main() -> None:
     parser.add_argument("--ray-worker-cpus", type=int, default=0)
     parser.add_argument("--default-mpp", type=float, default=0.0)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--clean-tissue-mask", default="")
     args = parser.parse_args()
 
     image, shift, outdir = resolve_runtime_paths(args.image, args.shift, args.outdir)
@@ -175,7 +172,8 @@ def main() -> None:
     if not executable or not Path(executable).exists():
         raise FileNotFoundError(f"CellViT++ executable not found: {args.executable}")
     cache_dir = Path(os.environ.get("CELLVIT_CACHE", str(Path.home() / ".cache" / "cellvit")))
-    require_readable_file(required_model_path(cache_dir, args.model), f"CellViT++ {args.model} checkpoint")
+    model_path = required_model_path(cache_dir, args.model)
+    require_readable_file(model_path, f"CellViT++ {args.model} checkpoint")
     prepared = outdir / "cellvit_input.tif"
     make_pyramid(image, prepared)
     mpp = source_mpp(shift, args.default_mpp)
@@ -198,12 +196,31 @@ def main() -> None:
         candidates = sorted(raw_dir.rglob("cells.json"))
         if not candidates:
             raise RuntimeError(f"CellViT++ produced no cells.json under {raw_dir}")
+        cellvit_version = package_version("cellvit")
         metadata = {
             "model": args.model, "taxonomy": args.taxonomy, "source_mpp": mpp,
             "batch_size": batch_size, "ray_workers": ray_workers,
             "ray_worker_cpus": ray_worker_cpus,
+            "model_provenance": {
+                "source_repository": "https://github.com/TIO-IKIM/CellViT-plus-plus",
+                "requested_revision": cellvit_version,
+                "resolved_revision": (
+                    f"package:cellvit=={cellvit_version}"
+                    if cellvit_version else None
+                ),
+                "cache_path": str(cache_dir.resolve()),
+                "checkpoints": [checkpoint_record(model_path, logical_name=args.model)],
+            },
         }
-        normalize_output(candidates[0], outdir / "cellvit_cells.json", args.taxonomy, metadata)
+        normalized_path = outdir / "cellvit_cells.json"
+        normalize_output(candidates[0], normalized_path, args.taxonomy, metadata)
+        if args.clean_tissue_mask:
+            from grandqc_mask import filter_cell_payload
+            payload, filter_summary = filter_cell_payload(
+                json.loads(normalized_path.read_text()), args.clean_tissue_mask, shift,
+            )
+            normalized_path.write_text(json.dumps(payload))
+            metadata["grandqc_filter"] = filter_summary
         (outdir / "cellvit_metadata.json").write_text(json.dumps(metadata, indent=2))
         prepared.unlink(missing_ok=True)
     finally:

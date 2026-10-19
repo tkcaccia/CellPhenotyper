@@ -1,0 +1,256 @@
+flowchart TB
+    subgraph " "
+    v0["Channel.fromList"]
+    end
+    v5(["PREPARE_INPUT_OMETIFF"])
+    subgraph " "
+    v6[" "]
+    v7[" "]
+    v13[" "]
+    v14[" "]
+    v15[" "]
+    v28[" "]
+    v47[" "]
+    v51[" "]
+    v57[" "]
+    v58[" "]
+    v59[" "]
+    v60[" "]
+    v61[" "]
+    v62[" "]
+    v67[" "]
+    v72[" "]
+    v79[" "]
+    v80[" "]
+    v81[" "]
+    v82[" "]
+    v87[" "]
+    v88[" "]
+    v89[" "]
+    v99[" "]
+    v100[" "]
+    v101[" "]
+    v117[" "]
+    v128[" "]
+    v129[" "]
+    v144["grid_preview"]
+    v172[" "]
+    v174[" "]
+    v175[" "]
+    v198[" "]
+    v199["kodama_dir"]
+    v208[" "]
+    v209[" "]
+    v210[" "]
+    v223[" "]
+    v224[" "]
+    v241[" "]
+    v250[" "]
+    v251[" "]
+    v252[" "]
+    v253[" "]
+    v254[" "]
+    v270["selected_sections"]
+    v278[" "]
+    v279[" "]
+    v281[" "]
+    v282["predictions"]
+    end
+    v12(["RUN_GRANDQC_ARTIFACT_ANALYSIS"])
+    v20(["PREPARE_ROI_GEOJSON"])
+    v27(["PREPARE_STARDIST_AUTO_ROI"])
+    v46(["PREPARE_ANALYSIS_CROP"])
+    v50(["CROP_GRANDQC_CLEAN_MASK"])
+    v56(["RUN_STARDIST_ROI_SEGMENTATION"])
+    v66(["RUN_HOVERNET_MONUSAC"])
+    v71(["RUN_CELLVITPP"])
+    v78(["BUILD_CELL_CONSENSUS"])
+    v86(["DETECT_TMA_SPOTS"])
+    v98(["ROI_GEOJSON_TO_MASK"])
+    v109(["MAP_CELLS_TO_ROI_POLYGONS"])
+    v116(["EXPAND_LABELS_TO_CYTOPLASM_PRIMARY"])
+    v126(["RUN_GIGATIME_ON_CROP"])
+    v127(["EXPORT_GIGATIME_OMETIFF"])
+    subgraph "PREPARE_UNI2_SPATIAL_GRID [PREPARE_UNI2_SPATIAL_GRID]"
+    v143(["BUILD_UNI2_SPATIAL_GRID"])
+    v140(( ))
+    end
+    v160(["EXTRACT_UNI2_EMBEDDINGS_SHARED"])
+    v171(["RUN_KODAMA_ANALYSIS"])
+    v173(["RUN_GIGATIME_KODAMA"])
+    subgraph "RUN_AUXILIARY_CELL_UNI2 [RUN_AUXILIARY_CELL_UNI2]"
+    v185(["EXTRACT_UNI2_CELL_AUXILIARY"])
+    v197(["RUN_KODAMA_CELL_AUXILIARY"])
+    v176(( ))
+    v181(( ))
+    end
+    v207(["RUN_RCODE_CLUSTERING"])
+    subgraph "BUILD_CLUSTER_MASK_OUTPUT [BUILD_CLUSTER_MASK_OUTPUT]"
+    v222(["GRID_CLUSTERS_TO_MASK"])
+    v215(( ))
+    end
+    v240(["GROW_TO_TISSUE"])
+    subgraph "POST_GROW_SPATIAL_OUTPUTS [POST_GROW_SPATIAL_OUTPUTS]"
+    v249(["REFINE_GROWN_TISSUE_MEDSAM"])
+    v255(["MASK_TO_GEOJSON"])
+    v242(( ))
+    end
+    subgraph "POST_CLUSTER_PATHOFM [POST_CLUSTER_PATHOFM]"
+    v269(["SELECT_NEOPLASTIC_SECTION"])
+    v277(["EXTRACT_TITAN_SECTION_EMBEDDING"])
+    v280(["RUN_PATHOFMPRED"])
+    v264(( ))
+    v273(( ))
+    end
+    v1(( ))
+    v2(( ))
+    v48(( ))
+    v52(( ))
+    v63(( ))
+    v68(( ))
+    v73(( ))
+    v83(( ))
+    v106(( ))
+    v114(( ))
+    v118(( ))
+    v156(( ))
+    v204(( ))
+    v231(( ))
+    v0 --> v1
+    v0 --> v2
+    v1 --> v5
+    v5 --> v12
+    v5 --> v7
+    v5 --> v6
+    v5 --> v2
+    v12 --> v15
+    v12 --> v14
+    v12 --> v13
+    v12 --> v48
+    v2 --> v20
+    v20 --> v2
+    v20 --> v106
+    v2 --> v27
+    v27 --> v28
+    v27 --> v2
+    v2 --> v46
+    v46 --> v47
+    v46 --> v2
+    v46 --> v48
+    v46 --> v52
+    v46 --> v63
+    v46 --> v68
+    v46 --> v73
+    v46 --> v83
+    v46 --> v106
+    v46 --> v114
+    v46 --> v118
+    v46 --> v140
+    v46 --> v156
+    v46 --> v181
+    v46 --> v215
+    v46 --> v231
+    v46 --> v264
+    v48 --> v50
+    v50 --> v51
+    v50 --> v52
+    v50 --> v63
+    v50 --> v68
+    v50 --> v140
+    v50 --> v156
+    v50 --> v231
+    v52 --> v56
+    v56 --> v62
+    v56 --> v61
+    v56 --> v60
+    v56 --> v59
+    v56 --> v58
+    v56 --> v57
+    v56 --> v73
+    v63 --> v66
+    v66 --> v67
+    v66 --> v73
+    v68 --> v71
+    v71 --> v72
+    v71 --> v73
+    v73 --> v78
+    v78 --> v82
+    v78 --> v81
+    v78 --> v80
+    v78 --> v79
+    v78 --> v83
+    v78 --> v114
+    v78 --> v118
+    v78 --> v181
+    v78 --> v264
+    v83 --> v86
+    v86 --> v89
+    v86 --> v88
+    v86 --> v87
+    v86 --> v106
+    v2 --> v98
+    v98 --> v101
+    v98 --> v100
+    v98 --> v99
+    v106 --> v109
+    v109 --> v176
+    v114 --> v116
+    v116 --> v117
+    v116 --> v118
+    v118 --> v126
+    v126 --> v127
+    v126 --> v173
+    v127 --> v129
+    v127 --> v128
+    v140 --> v143
+    v143 --> v144
+    v143 --> v2
+    v143 --> v156
+    v143 --> v204
+    v143 --> v215
+    v156 --> v160
+    v160 --> v2
+    v2 --> v171
+    v171 --> v172
+    v171 --> v204
+    v173 --> v175
+    v173 --> v174
+    v181 --> v185
+    v185 --> v176
+    v176 --> v197
+    v197 --> v199
+    v197 --> v198
+    v204 --> v207
+    v207 --> v210
+    v207 --> v209
+    v207 --> v208
+    v207 --> v215
+    v207 --> v242
+    v215 --> v222
+    v222 --> v224
+    v222 --> v223
+    v222 --> v231
+    v222 --> v242
+    v231 --> v240
+    v240 --> v241
+    v240 --> v242
+    v242 --> v249
+    v249 --> v255
+    v249 --> v254
+    v249 --> v253
+    v249 --> v252
+    v249 --> v251
+    v249 --> v250
+    v255 --> v264
+    v264 --> v269
+    v269 --> v270
+    v269 --> v273
+    v273 --> v277
+    v277 --> v280
+    v277 --> v279
+    v277 --> v278
+    v280 --> v282
+    v280 --> v281
+    v2 --> v176
+    v2 --> v181
+    v231 --> v242

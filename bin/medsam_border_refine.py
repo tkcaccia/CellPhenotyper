@@ -550,6 +550,7 @@ def run_medsam_border_refine(
     baseline_tissue_mask: np.ndarray,
     config: MedSAMConfig,
     baseline_label_map: np.ndarray | None = None,
+    allowed_support_mask: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray | None, float, Dict[str, object], Dict[str, np.ndarray]]:
     start = time.perf_counter()
     seed_labels = np.asarray(seed_labels)
@@ -566,6 +567,21 @@ def run_medsam_border_refine(
     baseline = np.asarray(baseline_tissue_mask).astype(bool)
     if baseline.shape != seed_binary.shape:
         raise ValueError(f"Baseline mask and seed mask shape mismatch: {baseline.shape} vs {seed_binary.shape}")
+    if allowed_support_mask is None:
+        allowed_support = np.ones(seed_binary.shape, dtype=bool)
+    else:
+        allowed_support = np.asarray(allowed_support_mask).astype(bool)
+        if allowed_support.shape != seed_binary.shape:
+            raise ValueError(
+                f"Allowed-support mask and seed mask shape mismatch: {allowed_support.shape} vs {seed_binary.shape}"
+            )
+    excluded_seed_pixels = int(np.count_nonzero(seed_binary & ~allowed_support))
+    excluded_baseline_pixels = int(np.count_nonzero(baseline & ~allowed_support))
+    if excluded_seed_pixels:
+        seed_labels = seed_labels.copy()
+        seed_labels[~allowed_support] = 0
+        seed_binary = seed_labels > 0
+    baseline &= allowed_support
 
     if baseline_label_map is not None:
         baseline_labels = np.asarray(baseline_label_map).astype(label_dtype, copy=False)
@@ -586,7 +602,9 @@ def run_medsam_border_refine(
     best_score = np.full(baseline.shape, -np.inf, dtype=score_dtype)
     best_score[baseline] = 0.25
     probability_map = np.zeros(baseline.shape, dtype=score_dtype) if config.save_debug else None
-    background_mask = _obvious_background_mask(image)
+    # GrandQC empty/background pixels are hard negatives throughout refinement,
+    # not merely a final output clip.
+    background_mask = _obvious_background_mask(image) | ~allowed_support
     region_meta: List[Dict[str, object]] = []
 
     protected_core = np.zeros(baseline.shape, dtype=bool)
@@ -612,6 +630,7 @@ def run_medsam_border_refine(
         label_core = _build_protected_core(label_support, label_seed, int(config.core_erosion_radius))
         label_outer = _binary_dilate(label_support, int(config.outer_dilation_radius))
         label_outer |= label_support
+        label_outer &= allowed_support
         label_band = label_outer & ~label_core
 
         protected_core |= label_core
@@ -702,11 +721,13 @@ def run_medsam_border_refine(
         _log(f"cluster {lid}: done total_sec={time.perf_counter() - label_start:.1f}")
 
     raw_medsam_labels = final_labels.copy()
+    raw_medsam_labels[~allowed_support] = 0
 
     final_mask = _conservative_cleanup(final_labels > 0, baseline, seed_binary, protected_core, editable_band, outer_envelope, background_mask, config)
     final_labels[~final_mask] = 0
     final_labels[seed_binary] = seed_labels[seed_binary]
     final_labels[protected_core_labels > 0] = protected_core_labels[protected_core_labels > 0]
+    final_labels[~allowed_support] = 0
 
     strict_min_area = max(int(config.min_object_size) + 2000, int(round(int(config.min_object_size) * 1.35)))
     final_labels = _apply_white_background_exclusion(final_labels, background_mask, seed_labels, protected_core_labels)
@@ -721,6 +742,7 @@ def run_medsam_border_refine(
     final_mask = _prune_thin_structures(final_mask, seed_binary, protected_core, max(3, int(config.smooth_radius) + 2))
     final_mask[np.asarray(background_mask).astype(bool) & ~seed_binary & ~protected_core] = False
     final_mask = ndi.binary_fill_holes(final_mask)
+    final_mask &= allowed_support
     final_mask |= seed_binary
     final_mask |= protected_core
     final_labels[~final_mask] = 0
@@ -738,8 +760,14 @@ def run_medsam_border_refine(
     final_labels = _apply_white_background_exclusion(final_labels, background_mask, seed_labels, protected_core_labels)
     final_labels[seed_binary] = seed_labels[seed_binary]
     final_labels[protected_core_labels > 0] = protected_core_labels[protected_core_labels > 0]
+    final_labels[~allowed_support] = 0
 
     final_mask = final_labels > 0
+    final_outside_support_pixels = int(np.count_nonzero(final_mask & ~allowed_support))
+    if final_outside_support_pixels:
+        raise RuntimeError(
+            f"MedSAM support contract violated: {final_outside_support_pixels} final pixels lie outside allowed support"
+        )
     runtime = time.perf_counter() - start
     meta: Dict[str, object] = {
         "device": config.device,
@@ -751,6 +779,11 @@ def run_medsam_border_refine(
         "final_pixels": int(final_mask.sum()),
         "protected_core_pixels": int(protected_core.sum()),
         "editable_band_pixels": int(editable_band.sum()),
+        "allowed_support_pixels": int(allowed_support.sum()),
+        "allowed_empty_pixels": int((~allowed_support).sum()),
+        "allowed_support_excluded_seed_pixels": int(excluded_seed_pixels),
+        "allowed_support_excluded_baseline_pixels": int(excluded_baseline_pixels),
+        "final_outside_allowed_support_pixels": int(final_outside_support_pixels),
         "runtime_sec": float(runtime),
         "regions": region_meta,
     }
@@ -765,6 +798,7 @@ def run_medsam_border_refine(
         artifacts["baseline_labels"] = baseline_labels.astype(label_dtype, copy=False)
         artifacts["protected_core_labels"] = protected_core_labels.astype(label_dtype, copy=False)
         artifacts["outer_envelope"] = outer_envelope.astype(np.uint8)
+        artifacts["allowed_support_mask"] = allowed_support.astype(np.uint8)
         artifacts["final_mask"] = final_mask.astype(np.uint8)
         artifacts["probability_map"] = probability_map.astype(np.float16, copy=False) if probability_map is not None else np.zeros((1,), dtype=np.float16)
     prob_out = probability_map.astype(np.float16, copy=False) if probability_map is not None else None

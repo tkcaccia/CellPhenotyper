@@ -8,7 +8,30 @@ Do not rebuild `.sif` on every test run.
 
 For frequent runtime issues and fixes, see [Troubleshooting](TROUBLESHOOTING.md).
 
-## Easy example from repository data
+## Current Virchow2 → Bora tissue route
+
+Use a measured-resolution RGB WSI, preferably OME-TIFF, with its tissue ROI if available. CellPhenotyper keeps the prepared crop's physical-resolution sidecar and checks it against the Virchow2 grid before Bora starts. The complete coarse mask comes from unsupervised KODAMA tile clusters; the separate uncertainty map does not delete those raw tile labels. The classifier is a previously trained Bora Neighbor-context fastPLS `.npz` model, with class names from its training annotations. No expert annotation of the test WSI is passed to Bora.
+
+The current source retains `uni2` and `medsam_refine` as **stage-name compatibility aliases**. In grid mode they execute Virchow2 feature extraction and Bora refinement respectively. `cluster_geojson` is written by the same Bora process. Set `uni2_sampling_mode=grid`, `uni2_encoder=virchow2`, `uni2_target_mpp=0.5`, `kodama_embedding_mode=tile`, and disable all inner-square/fused modes. Each top-left-anchored tile is physically 112 µm wide and has no overlap.
+
+Provide these paths in `pipeline_paramers.yml` or on the command line:
+
+```bash
+nextflow run main.nf --folder_input /path/to/WSI-folder \
+  --virchow2_checkpoint /path/to/pinned/Virchow2/3158645804b69e3f3bc4439d4116edddf0840a72 \
+  --bora_classifier_model /path/to/neighbor-context.npz \
+  --bora_source /path/to/Bora \
+  --uni2_sampling_mode grid --uni2_encoder virchow2 \
+  --uni2_target_mpp 0.5 --end_point cluster_geojson
+```
+
+The Python environment used by the two GPU stages must have PyTorch, `timm`, `safetensors`, `pyvips`, and the installed `bora-segmentation==0.2.1` package **including its compiled native fastPLS extension**. Staging an unbuilt Bora source tree is not a substitute for that installation. The pipeline checks the pinned checkpoint revision and SHA-256 and stops if the runtime or geometry contract is missing. The currently published CellPhenotyper GPU container has not yet been rebuilt with this Bora wheel; use a verified local runtime for a real WSI execution.
+
+Output is `15_cluster_geojson/<sample>/bora_<sample>_<variant>/mask.ome.tif` plus `mask.geojson`, `PIPELINE_COMPLETE.json`, and window/checkpoint audits. The GeoJSON contains Bora's predicted tissue classes; islands and enclosed holes strictly below 20 native pixels are removed or filled by the final vector pass.
+
+At the right or bottom WSI edge, a non-overlapping grid tile can be only a few pixels wide. Such a partial tile may acquire a cluster ID but cannot supply Bora's required 90-pixel observation. The bridge assigns that edge-only ID to its nearest observed neighboring group, records the reassignment in the window audit, and fails if any unsupported group occurs away from the partial outer edge. No tiles overlap to hide this case.
+
+## Earlier repository examples
 
 Use the input files already present in this repo:
 
@@ -35,7 +58,9 @@ Prepare runtime:
 docker pull ghcr.io/tkcaccia/cellphenotyper:2.2-amd64
 ```
 
-Create UNI-2 token file (required for full pipeline):
+Earlier UNI-2 examples below describe a superseded route and are retained only for historical comparison. They are not valid settings for the current Virchow2 → Bora tissue pipeline.
+
+Create UNI-2 token file (historical route only):
 
 ```bash
 printf 'HF_UNI2="%s"\n' "<your_hf_token>" > tokens.env
@@ -136,7 +161,7 @@ Use `start_point` and `end_point` in `pipeline_paramers.yml` to select the execu
 Allowed stages:
 `convert`, `grandqc`, `stardist`, `cell_consensus`, `tma`, `tissue_mask`, `cell_assignment`, `cytoplasm`, `gigatime`, `marker_quantification`, `uni2`, `kodama`, `clustering`, `cluster_mask`, `grow_tissue`, `medsam_refine`, `cluster_geojson`, `neoplastic_section`, `titan`, `pathofmpred`.
 
-Restarting with `--start_point medsam_refine` reads the published StarDist crop/shift from stage 3 and the clustering, cluster-mask, and grown-mask artifacts from stages 11-13, then reruns MedSAM. Restarting with `--start_point cluster_geojson` reads the published stage 14 refined mask and does not rerun MedSAM.
+On the current Virchow2 grid route, `--start_point medsam_refine` reruns the Bora bridge from published coarse masks, crop, resolution and grid metadata. `cluster_geojson` is emitted by the same Bora process. The MedSAM restart description below applies only to archived cell-centred runs.
 
 Example:
 

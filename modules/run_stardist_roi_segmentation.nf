@@ -5,12 +5,12 @@ process RUN_STARDIST_ROI_SEGMENTATION {
 
     publishDir "${params.outdir_base}/03_stardist/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.stardist_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.stardist_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.stardist_memory_gb as int))} GB" }
     time { params.stardist_time as String }
 
     input:
-    tuple val(sample_id), path(ome_tif), path(roi_geojson)
+    tuple val(sample_id), path(shared_crop_tif), path(roi_crop_geojson), path(source_shift_json), path(clean_tissue_mask)
 
     output:
     tuple val(sample_id), path("stardist_out/crop_roi.tif"), emit: crop_roi
@@ -35,7 +35,8 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def allow_huge_flag = resolvedAllowHugeTif ? '--allow-huge-tif' : ''
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
-    def memoryBudgetGb = Math.max(2, Math.min(params.max_memory_gb as int, params.stardist_memory_gb as int))
+    def codeFingerprint = PipelineHelpers.codeFingerprint([stardist_script, "${projectDir}/bin/grandqc_mask.py"])
+    def memoryBudgetGb = Math.max(2, Math.min(params._executor_max_memory_gb as int, params.stardist_memory_gb as int))
     def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
     def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
     def stardistAutoHardware = (params.hardware_auto as boolean) && (params.stardist_auto_hardware as boolean) && resolvedComputeDevice == 'gpu'
@@ -66,6 +67,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     }
     """
     set -euo pipefail
+    echo "[INFO] StarDist wrapper code fingerprint: ${codeFingerprint}"
 
     export OMP_NUM_THREADS=1
     export MKL_NUM_THREADS=1
@@ -257,9 +259,11 @@ PY
     fi
 
     python "${stardist_script}" \\
-      --in "${ome_tif}" \\
-      --roi "${roi_geojson}" \\
+      --in "${shared_crop_tif}" \\
+      --roi "${roi_crop_geojson}" \\
       --outdir stardist_out \\
+      --source-shift "${source_shift_json}" \\
+      --clean-tissue-mask "${clean_tissue_mask}" \\
       --model "${params.stardist_model}" \\
       --prob ${params.stardist_prob} \\
       --nms ${params.stardist_nms} \\
@@ -296,6 +300,7 @@ PY
     touch stardist_out/objects.csv
     touch stardist_out/roi_all_crop.geojson
     touch stardist_out/shift.json
+    printf '{"pipeline_model_provenance":{"used_model":false}}\n' > stardist_out/stardist_details.json
     if [[ "${stubWriteFullLabels}" == "true" ]]; then
       if [[ "${stubFullFormat}" == "zarr" ]]; then
         mkdir -p stardist_out/labels_full.zarr

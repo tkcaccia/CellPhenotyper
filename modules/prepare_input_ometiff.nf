@@ -4,8 +4,8 @@ process PREPARE_INPUT_OMETIFF {
 
     publishDir "${params.outdir_base}/01_input/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.convert_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.convert_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.convert_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.convert_memory_gb as int))} GB" }
     time { params.convert_time as String }
 
     input:
@@ -28,8 +28,18 @@ process PREPARE_INPUT_OMETIFF {
     def generic_converter_script = "${projectDir}/bin/convert_image_to_tiff.py"
     def resolution_validator_script = "${projectDir}/${params.input_resolution_validator_script}"
     def resolution_strict_flag = params.input_resolution_strict ? '--strict' : ''
+    def resolution_hash_flag = params.input_hash_enable ? '' : '--skip-file-hash'
+    def converted_rgb_requirement = params.input_require_rgb ? '--require-rgb' : ''
+    def converted_pyramid_requirement = params.input_require_pyramid ? '--require-pyramid' : ''
+    def codeFingerprint = PipelineHelpers.codeFingerprint([
+      resolution_validator_script,
+      generic_converter_script,
+      btf_converter_script,
+    ])
     """
     set -euo pipefail
+
+    echo "[INFO] Input conversion code fingerprint: ${codeFingerprint}"
 
     export OMP_NUM_THREADS=${task.cpus}
     export MKL_NUM_THREADS=1
@@ -66,7 +76,9 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
@@ -114,7 +126,11 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
+        ${converted_rgb_requirement} \
+        ${converted_pyramid_requirement} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "study_id": "",
+  "study_phase": "exploratory",
+  "analysis_intent": "exploratory",
+  "intended_use": "Research-use exploratory multimodal characterization of H&E whole-slide images",
+  "primary_endpoint": {
+    "name": "",
+    "statistical_unit": "patient",
+    "metric": "",
+    "direction": "",
+    "acceptance_threshold": null
+  },
+  "cohorts": {
+    "development_subjects": 0,
+    "tuning_subjects": 0,
+    "test_subjects": 0,
+    "external_test_subjects": 0,
+    "external_sites": 0,
+    "split_unit": "patient"
+  },
+  "reference_standard": {
+    "status": "not_available",
+    "definition": "",
+    "rationale": "",
+    "annotator_count": 0,
+    "annotator_expertise": "",
+    "blinded": false,
+    "interrater_assessed": false
+  },
+  "prespecification": {
+    "locked_before_testing": false,
+    "protocol_uri": ""
+  }
+}

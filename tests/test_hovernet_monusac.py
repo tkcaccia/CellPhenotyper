@@ -16,6 +16,10 @@ SPEC.loader.exec_module(hovernet)
 
 
 class MonusacTypeInfoTest(unittest.TestCase):
+    def test_model_scope_is_explicitly_non_exhaustive(self):
+        self.assertFalse(hovernet.MONUSAC_MODEL_SCOPE["exhaustive_nuclei_detector"])
+        self.assertIn("fibroblasts", hovernet.MONUSAC_MODEL_SCOPE["known_omissions"][0])
+
     def test_type_ids_match_checkpoint_taxonomy(self):
         self.assertEqual(
             [hovernet.MONUSAC_TYPE_INFO[str(value)][0] for value in range(1, 5)],
@@ -42,6 +46,23 @@ class MonusacTypeInfoTest(unittest.TestCase):
         self.assertTrue(all(path.is_absolute() for path in paths))
         self.assertEqual(paths[0], (Path(directory) / "crop.tif").resolve())
         self.assertEqual(paths[-1], (Path(directory) / "output").resolve())
+
+    def test_shared_mask_disables_the_upstream_automatic_mask(self):
+        mask_dir = Path("/tmp/hovernet-mask")
+        self.assertEqual(
+            hovernet.inference_mask_args(mask_dir),
+            [f"--input_mask_dir={mask_dir}", "--save_mask", "--save_thumb"],
+        )
+        self.assertEqual(hovernet.inference_mask_args(None), [])
+
+    def test_checkpoint_hash_is_reproducible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "model.tar"
+            checkpoint.write_bytes(b"checkpoint")
+            self.assertEqual(
+                hovernet.file_sha256(checkpoint),
+                "47320987f9a49d5b00119b960f247a956773f57543982b8bfcb6da5bb3afd9ef",
+            )
 
     def test_cache_resume_patches_only_an_isolated_runtime_copy(self):
         allocation = '''        self.wsi_pred_map = np.lib.format.open_memmap(
