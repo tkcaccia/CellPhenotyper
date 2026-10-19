@@ -14,6 +14,7 @@ nextflow run main.nf
 - [How to run](TUTORIAL.md)
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
+- [Export cached experiments for wsiTools](docs/EXPERIMENT_PROJECTS.md)
 - [Pipeline step differences vs upstream tools](UPSTREAM_DIFFS.md)
 - [Release](RELEASE.md)
 - [Linux update playbook](LINUX_UPDATE.md)

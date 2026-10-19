@@ -93,6 +93,14 @@ These are TCGA-derived research estimates. They are not externally validated cli
 
 ## Execution Reports
 
+Execution reporting attempts to export `experiment.cellphenotyper.json` from
+existing compatible Virchow2 caches. `experiment_export_status.json` records
+availability or validation errors, and `final_report.md` links an available
+index for **Open Project** in a compatible wsiTools Desktop version. This export
+does not run inference or add a Virchow2 route to the pipeline. Existing UNI-2
+outputs remain ordinary reports; use an explicit asset specification to register
+compatible externally generated features. See the [cached experiment guide](docs/EXPERIMENT_PROJECTS.md).
+
 Important files under `00_execution/` include:
 
 - `trace.tsv`
@@ -104,5 +112,7 @@ Important files under `00_execution/` include:
 - `project_outputs.json`
 - `final_report.md`
 - `final_report.json`
+- `experiment_export_status.json`
+- `experiment.cellphenotyper.json` when compatible caches pass validation
 
 The project output tables list the absolute or resolved address, stage, size, modification time, and unique `output_id` for every relevant published output. The final report includes elapsed time per Nextflow process.

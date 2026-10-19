@@ -11,6 +11,8 @@ import re
 import shutil
 from pathlib import Path
 
+from export_experiment import try_export_run
+
 
 STAGE_DEFS = [
     {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif", ".source_resolution.json", ".converted_resolution.json"]},
@@ -311,6 +313,7 @@ def main() -> int:
         args.end_point,
     )
 
+    experiment_status = try_export_run(outdir, name=args.run_name)
     stages = stage_summary(outdir)
     trace_rows = summarize_trace(trace_source)
     trace_history = []
@@ -357,6 +360,7 @@ def main() -> int:
         "success": report_success,
         "output_root": str(outdir),
         "stage_window": {"start": report_start, "end": report_end},
+        "interactive_experiment": experiment_status,
         "input_context": {
             "image_input": str(Path(args.image_input).resolve()) if args.image_input else None,
             "roi_geojson": str(Path(args.roi_geojson).resolve()) if args.roi_geojson else None,
@@ -387,6 +391,13 @@ def main() -> int:
         f"- Output root: `{outdir}`",
         f"- Project outputs JSON: `{project_json_path}`",
         f"- Project outputs TSV: `{project_tsv_path}`",
+        f"- Interactive experiment export: `{experiment_status['status']}` ([details](experiment_export_status.json))",
+        "",
+        "## Interactive Experiment",
+        "",
+        ("[Experiment project file](experiment.cellphenotyper.json): choose Open Project in a compatible wsiTools Desktop version."
+         if experiment_status["status"] == "available" else
+         f"Interactive export unavailable: {experiment_status.get('error', 'No complete compatible cached features.')}. No inference was started."),
         "",
         "## Stage Outputs",
         "",
@@ -434,6 +445,7 @@ def main() -> int:
                 "run_name": report_run_name,
                 "success": report_success,
                 "stage_window": {"start": report_start, "end": report_end},
+                "interactive_experiment": experiment_status,
                 "timing_trace": str(trace_source),
                 "output_root": str(outdir),
                 "stages": [
@@ -464,6 +476,7 @@ def main() -> int:
     print(f"Project outputs TSV: {project_tsv_path}")
     print(f"Final report: {report_md_path}")
     print(f"Final report JSON: {final_report_json_path}")
+    print(f"Interactive experiment export: {experiment_status['status']} (see experiment_export_status.json)")
     return 0
 
 

@@ -1,0 +1,37 @@
+{
+  "name": "My tissue study",
+  "settings": {},
+  "provenance": {"description": "Replace the example paths with existing calibrated image and feature caches; this file starts no inference."},
+  "tissues": [
+    {
+      "tissue_id": "sample-a",
+      "name": "Sample A",
+      "specimen_id": "specimen-a",
+      "image": {"path": "study/sample-a/image.ome.tif", "mpp_x": 0.5, "mpp_y": 0.5},
+      "artifacts": [
+        {"role": "tissue_annotations", "path": "study/sample-a/annotations.geojson"}
+      ],
+      "feature_sets": [
+        {
+          "feature_set_id": "virchow2-pooled",
+          "kind": "virchow2-pooled",
+          "observation_unit": "tile",
+          "path": "study/sample-a/virchow2_embeddings_shard0000.csv.gz",
+          "format": "csv.gz",
+          "feature_columns_prefix": "feat_",
+          "id_column": "cell_id",
+          "x_column": "cx",
+          "y_column": "cy",
+          "coordinate_frame": "image",
+          "encoder": {
+            "name": "Virchow2",
+            "revision": "3158645804b69e3f3bc4439d4116edddf0840a72",
+            "checkpoint_sha256": "8d6cea947eb2418c3b0dff48cfb9b238e47744ab0dfca21b2b0637b140769b4b"
+          },
+          "preprocessing": {"feature_definition": "CLS+mean_patch", "model_tile_px": 224, "model_mpp": 0.5, "input_normalization": "ImageNet RGB", "edge_padding": "white"},
+          "grid": {"tile_width_px": 224, "tile_height_px": 224, "spacing_x_px": 224, "spacing_y_px": 224, "origin_x_px": 0, "origin_y_px": 0}
+        }
+      ]
+    }
+  ]
+}
