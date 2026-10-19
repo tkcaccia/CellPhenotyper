@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import tifffile
 import zarr
+from scipy.ndimage import gaussian_filter
 
 
 BIN = Path(__file__).parents[1] / "bin"
@@ -18,6 +19,22 @@ SPEC.loader.exec_module(qc)
 
 
 class NuclearQCTest(unittest.TestCase):
+    def test_diffuse_dapi_fails_despite_high_overlap_auc(self):
+        yy, xx = np.mgrid[:256, :256]
+        nuclei = np.zeros((256, 256), dtype=np.uint8)
+        for cy in range(20, 256, 32):
+            for cx in range(20, 256, 32):
+                nuclei[(yy - cy) ** 2 + (xx - cx) ** 2 < 7 ** 2] = 1
+        dapi = gaussian_filter(nuclei.astype(np.float32), sigma=11)
+        dapi = (dapi - dapi.min()) / (dapi.max() - dapi.min())
+        scorer = qc.NuclearAlignmentScore(nuclei.shape)
+        scorer.add(dapi, nuclei, 0, 0)
+        report = scorer.report()
+        self.assertGreater(report["auc"], 0.90)
+        self.assertGreater(report["prevalence_matched_dice"], 0.70)
+        self.assertLess(report["nuclear_boundary_contrast"], 0.05)
+        self.assertEqual(report["alignment_status"], "fail")
+
     def test_dark_image_border_fails_even_when_nuclei_are_detected(self):
         yy, xx = np.mgrid[:256, :256]
         nuclei = np.zeros((256, 256), dtype=np.uint16)
