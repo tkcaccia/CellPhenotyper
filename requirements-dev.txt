@@ -2,8 +2,9 @@ pytest==8.4.2
 numpy==2.2.6
 pandas==2.3.3
 scipy==1.15.3
+scikit-image==0.25.2
 Pillow==11.3.0
-tifffile==2025.6.11
+tifffile==2025.5.10
 zarr==2.18.7
 PyYAML==6.0.2
 jsonschema==4.21.1
