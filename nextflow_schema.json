@@ -187,6 +187,10 @@
         "gigatime_seam_qc_mode": {"type": "string", "enum": ["off", "warn", "fail"], "default": "fail"},
         "gigatime_seam_qc_max_p95_excess": {"type": "number", "minimum": 0, "default": 0.1},
         "gigatime_seam_qc_min_affected_fraction": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
+        "gigatime_nuclear_qc_mode": {"type": "string", "enum": ["warn", "fail"], "default": "fail"},
+        "gigatime_nuclear_qc_min_auc": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.7},
+        "gigatime_nuclear_qc_min_dice": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.35},
+        "gigatime_nuclear_qc_min_edge_ratio": {"type": "number", "minimum": 0, "default": 0.65},
         "marker_quantification_enable": {"type": "boolean", "default": true},
         "gigatime_kodama_enable": {"type": "boolean", "default": true}
       }

@@ -241,7 +241,7 @@ class LazyImageReader:
         self.close()
 
     def read_block(self, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
-        if self.channels == 1:
+        if self.arr.ndim == 2:
             block = np.asarray(self.arr[y0:y1, x0:x1])[None, ...]
         elif self.axes == "CYX":
             block = np.asarray(self.arr[:, y0:y1, x0:x1])

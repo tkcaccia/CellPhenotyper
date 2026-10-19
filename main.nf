@@ -16,6 +16,7 @@ include { RUN_CELLVITPP } from './modules/run_cellvitpp'
 include { BUILD_CELL_CONSENSUS } from './modules/build_cell_consensus'
 include { DETECT_TMA_SPOTS } from './modules/detect_tma_spots'
 include { RUN_GIGATIME_ON_CROP } from './modules/run_gigatime_on_crop'
+include { RUN_GIGATIME_NUCLEAR_QC } from './modules/run_gigatime_nuclear_qc'
 include { EXPORT_GIGATIME_OMETIFF } from './modules/export_gigatime_ometiff'
 include { ROI_GEOJSON_TO_MASK } from './modules/roi_geojson_to_mask'
 include { MAP_CELLS_TO_ROI_POLYGONS } from './modules/map_cells_to_roi_polygons'
@@ -1020,8 +1021,16 @@ if (run_gigatime) {
     .join(cyto_mask_for_quant_ch)
     .join(tissue_mask_ch)
   RUN_GIGATIME_ON_CROP(gigatime_input_ch)
-  gigatime_image_ch = requireStageOutput('gigatime', RUN_GIGATIME_ON_CROP.out.gigatime_dir)
+  def nuclear_qc_input_ch = RUN_GIGATIME_ON_CROP.out.gigatime_dir
+    .join(nuclei_mask_for_quant_ch)
+  RUN_GIGATIME_NUCLEAR_QC(nuclear_qc_input_ch)
+  def nuclear_qc_passed_ch = requireStageOutput('gigatime_nuclear_qc', RUN_GIGATIME_NUCLEAR_QC.out.report)
+  gigatime_image_ch = requireStageOutput('gigatime', RUN_GIGATIME_ON_CROP.out.gigatime_dir
+    .join(nuclear_qc_passed_ch)
+    .map { sample_id, gigatime_dir, qc_report -> tuple(sample_id, gigatime_dir) })
   gigatime_quant_dir_ch = RUN_GIGATIME_ON_CROP.out.quant_dir
+    .join(nuclear_qc_passed_ch)
+    .map { sample_id, quant_dir, qc_report -> tuple(sample_id, quant_dir) }
   if (run_marker_quantification) {
     marker_quant_output_ch = requireStageOutput('marker_quantification', gigatime_quant_dir_ch)
   }

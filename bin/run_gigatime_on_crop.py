@@ -1736,7 +1736,11 @@ def run_region_inference(
                 counts[:, y:y + patch_size, x:x + patch_size] += blend_window
             cursor += len(batch_positions)
 
-    np.maximum(counts, 1.0, out=counts)
+    # The raised-cosine window has deliberately small positive edge weights.
+    # Clamping their sum to 1 darkens the outer pixels and block corners even
+    # when the model predicts a spatially constant marker score.
+    if np.any(counts <= 0.0):
+        raise RuntimeError("GigaTIME tiling left pixels without predictions")
     return accum, counts
 
 
@@ -2740,7 +2744,8 @@ def run_inference(
                 accum[:, y:y + patch_size, x:x + patch_size] += weighted
                 counts[:, y:y + patch_size, x:x + patch_size] += blend_window
 
-    np.maximum(counts, 1.0, out=counts)
+    if np.any(counts <= 0.0):
+        raise RuntimeError("GigaTIME tiling left pixels without predictions")
     if disk_backed:
         accum.flush()
         counts.flush()

@@ -247,6 +247,10 @@ The `convert` stage validates physical pixel size before doing expensive convers
 | `gigatime_seam_qc_mode` | `fail` | `off`, `warn`, or `fail` action for systematic discontinuities at block boundaries. |
 | `gigatime_seam_qc_max_p95_excess` | `0.10` | Maximum allowed excess of the boundary 95th-percentile absolute gradient over neighboring within-block gradients on the 0-1 probability scale. |
 | `gigatime_seam_qc_min_affected_fraction` | `0.05` | Minimum sampled boundary fraction required to trigger the seam gate. |
+| `gigatime_nuclear_qc_mode` | `fail` | `fail` blocks downstream marker use when virtual DAPI and StarDist nuclei disagree; `warn` reports without gating. |
+| `gigatime_nuclear_qc_min_auc` | `0.70` | Minimum DAPI-versus-nearby-extranuclear AUC on the native inference grid. |
+| `gigatime_nuclear_qc_min_dice` | `0.35` | Minimum prevalence-matched DAPI/nucleus Dice. |
+| `gigatime_nuclear_qc_min_edge_ratio` | `0.65` | Minimum outer-8-µm versus interior nuclear DAPI mean ratio when enough edge nuclei exist. |
 | `gigatime_strict_target_mpp` | `true` | Enforce the requested GigaTIME physical scale from image metadata with exact floating-point resampling. This includes upsampling when the source MPP is coarser than the model target; GigaTIME fails if MPP cannot be resolved and does not coarsen the image to satisfy the output-size budget. |
 | `gigatime_max_output_gib` | `8.0` | Maximum estimated uncompressed persisted GigaTIME image size before automatic extra downsampling is applied when strict target MPP is disabled. |
 | `gigatime_output_format` | `zarr` | Persist the GigaTIME virtual-marker score image as chunked `gigatime_probs.zarr` by default. The filename is retained for compatibility; scores are not calibrated probabilities. When `ome_tiff` is requested, the saved `gigatime_probs.ome.tif` is pyramidal by default for QuPath/WSI viewing. |

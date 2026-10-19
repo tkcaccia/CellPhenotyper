@@ -49,18 +49,37 @@ class GigaTIMERuntimeTest(unittest.TestCase):
                     device=tensor.device,
                 )
 
-        image = np.full((4, 4, 3), 127, dtype=np.uint8)
+        image = np.full((8, 8, 3), 127, dtype=np.uint8)
         accum, counts = gigatime.run_region_inference(
             image_rgb=image,
-            positions=[(0, 0), (0, 2), (2, 0), (2, 2)],
+            positions=[(0, 0), (0, 4), (4, 0), (4, 4)],
             model=ZeroModel(),
             device=torch.device("cpu"),
-            patch_size=2,
+            patch_size=4,
             batch_size=4,
         )
-        self.assertEqual(accum.shape, (len(gigatime.CHANNEL_NAMES), 4, 4))
-        self.assertTrue(np.allclose(accum, 0.5, atol=1e-6))
-        self.assertTrue(np.all(counts >= 1.0))
+        self.assertEqual(accum.shape, (len(gigatime.CHANNEL_NAMES), 8, 8))
+        self.assertTrue(np.allclose(accum / counts, 0.5, atol=1e-6))
+        self.assertTrue(np.all(counts > 0.0))
+        self.assertLess(float(counts[0, 0, 0]), 1.0)
+
+    def test_dense_inference_has_no_blend_shadow_at_image_edges(self):
+        class ConstantModel(torch.nn.Module):
+            def forward(self, tensor):
+                return torch.zeros(
+                    (tensor.shape[0], len(gigatime.CHANNEL_NAMES), tensor.shape[2], tensor.shape[3]),
+                    dtype=tensor.dtype, device=tensor.device,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            image = np.full((13, 11, 3), 127, dtype=np.uint8)
+            accum, weights, shape = gigatime.run_inference(
+                image, ConstantModel(), torch.device("cpu"), patch_size=8,
+                stride=4, batch_size=4, disk_backed=False, scratch_dir=Path(directory),
+            )
+        self.assertEqual(shape, (13, 11))
+        self.assertTrue(np.allclose((accum / weights)[:, :13, :11], 0.5, atol=1e-6))
+        self.assertLess(float(weights[0, 0, 0]), 1.0)
 
     def test_background_mask_cleanup_is_warning_free_and_preserves_thresholds(self):
         mask = np.zeros((9, 9), dtype=bool)
@@ -169,8 +188,8 @@ class GigaTIMERuntimeTest(unittest.TestCase):
         )
         self.assertEqual(gigatime._RUNTIME_BATCH_CAP, 1)
         self.assertEqual(gigatime._RUNTIME_OOM_REDUCTIONS, 2)
-        self.assertTrue(np.allclose(accum, 0.5, atol=1e-6))
-        self.assertTrue(np.all(counts >= 1.0))
+        self.assertTrue(np.allclose(accum / counts, 0.5, atol=1e-6))
+        self.assertTrue(np.all(counts > 0.0))
 
 
 if __name__ == "__main__":
