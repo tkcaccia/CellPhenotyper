@@ -18,7 +18,10 @@ process PREPARE_ANALYSIS_CROP {
 
     script:
     def scriptPath = "${projectDir}/${params.prepare_crop_script}"
-    def codeFingerprint = PipelineHelpers.codeFingerprint([scriptPath])
+    def codeFingerprint = PipelineHelpers.codeFingerprint([
+      scriptPath,
+      "${projectDir}/bin/validate_input_resolution.py",
+    ])
     """
     set -euo pipefail
     echo "[INFO] Shared analysis crop code fingerprint: ${codeFingerprint}"

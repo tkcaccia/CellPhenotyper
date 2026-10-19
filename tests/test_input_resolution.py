@@ -78,6 +78,15 @@ def test_ome_physical_size_units_are_normalized_to_micrometres():
     assert abs(mpp_y - 0.25) < 1.0e-12
 
 
+def test_unknown_physical_size_unit_is_not_assumed_to_be_micrometres():
+    mpp_x, mpp_y, _ = MODULE._parse_description(
+        '<Pixels PhysicalSizeX="0.25" PhysicalSizeXUnit="unknown" '
+        'PhysicalSizeY="0.25" PhysicalSizeYUnit="unknown"/>'
+    )
+    assert mpp_x is None
+    assert mpp_y is None
+
+
 def test_rejects_coarse_native_resolution(tmp_path):
     image = tmp_path / "coarse.tif"
     write_tiff(image, 0.5473)

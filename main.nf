@@ -417,6 +417,17 @@ def run_stardist = should_run_stage('stardist')
 def run_cell_consensus = should_run_stage('cell_consensus') && cell_consensus_enabled
 def run_tma = should_run_stage('tma') && tma_enabled
 def run_gigatime = should_run_stage('gigatime') && gigatime_enabled
+if (run_gigatime) {
+  def markerStoreFormat = (params.gigatime_output_format ?: '').toString().trim().toLowerCase()
+  if (markerStoreFormat == 'none') {
+    error "GigaTIME nuclear QC requires a persisted native marker store; --gigatime_output_format none is incompatible with this pipeline."
+  }
+  def storedChannels = (params.gigatime_output_channels ?: '').toString().split(',')
+    .collect { it.trim().toLowerCase() }.findAll { it }
+  if (storedChannels && !storedChannels.contains('dapi')) {
+    error "GigaTIME nuclear QC requires DAPI in --gigatime_output_channels."
+  }
+}
 def run_tissue_mask = should_run_stage('tissue_mask')
 def run_cell_assignment = should_run_stage('cell_assignment')
 def run_cytoplasm = should_run_stage('cytoplasm')

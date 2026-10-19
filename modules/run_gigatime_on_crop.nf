@@ -20,7 +20,7 @@ process RUN_GIGATIME_ON_CROP {
     script:
     def gigatime_script = "${projectDir}/${params.gigatime_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py", "${projectDir}/bin/gigatime_seam_qc.py"].each {
+    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py", "${projectDir}/bin/gigatime_seam_qc.py", "${projectDir}/bin/validate_input_resolution.py"].each {
       codeDigest.update(new File(it).bytes)
     }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()

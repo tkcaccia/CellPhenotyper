@@ -6,7 +6,6 @@ import gc
 import json
 import math
 import os
-import re
 from pathlib import Path
 from typing import Iterable
 
@@ -173,28 +172,13 @@ def normalize_to_uint8_rgb(arr: np.ndarray) -> np.ndarray:
     else:
         raise ValueError(f"Unsupported crop image shape: {arr.shape}")
 
-    if arr.dtype == np.uint8:
-        return arr
-
-    arr = arr.astype(np.float32, copy=False)
-    out = np.zeros(arr.shape, dtype=np.uint8)
-    for ch in range(arr.shape[-1]):
-        plane = arr[..., ch]
-        finite = np.isfinite(plane)
-        if not finite.any():
-            continue
-        vals = plane[finite]
-        lo = float(np.percentile(vals, 1.0))
-        hi = float(np.percentile(vals, 99.0))
-        if not math.isfinite(lo) or not math.isfinite(hi) or hi <= lo:
-            lo = float(vals.min())
-            hi = float(vals.max())
-        if hi <= lo:
-            scaled = np.zeros_like(plane, dtype=np.float32)
-        else:
-            scaled = np.clip((plane - lo) / (hi - lo), 0.0, 1.0)
-        out[..., ch] = np.round(scaled * 255.0).astype(np.uint8)
-    return out
+    if arr.dtype != np.uint8:
+        raise ValueError(
+            "GigaTIME requires an 8-bit RGB input. Convert higher-bit-depth images "
+            "with one fixed, documented whole-image intensity mapping before inference; "
+            "per-block percentile conversion would change stain colors across the slide."
+        )
+    return arr
 
 
 def _safe_float(value) -> float | None:
@@ -212,61 +196,21 @@ def _safe_float(value) -> float | None:
 
 
 def _read_mpp_from_tiff(path: str) -> float | None:
-    unit_to_um = {
-        2: 25_400.0,  # inch
-        3: 10_000.0,  # centimeter
-    }
+    from validate_input_resolution import read_resolution
+
     try:
-        with tifffile.TiffFile(path) as tf:
-            page = tf.pages[0]
-            tags = page.tags
-
-            desc = None
-            try:
-                desc = tags["ImageDescription"].value
-            except Exception:
-                desc = None
-            if isinstance(desc, str):
-                vals = []
-                for pattern in (
-                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
-                    r'PhysicalSizeY="([0-9]+(?:\.[0-9]+)?)"',
-                    r"MPP\s*=\s*([0-9]+(?:\.[0-9]+)?)",
-                ):
-                    m = re.search(pattern, desc)
-                    if m:
-                        vals.append(float(m.group(1)))
-                if vals:
-                    return float(sum(vals) / len(vals))
-
-            unit = None
-            try:
-                unit = int(tags["ResolutionUnit"].value)
-            except Exception:
-                unit = None
-
-            if unit in unit_to_um:
-                xres = None
-                yres = None
-                try:
-                    xres = _safe_float(tags["XResolution"].value)
-                except Exception:
-                    xres = None
-                try:
-                    yres = _safe_float(tags["YResolution"].value)
-                except Exception:
-                    yres = None
-
-                vals = []
-                if xres and xres > 0:
-                    vals.append(unit_to_um[unit] / xres)
-                if yres and yres > 0:
-                    vals.append(unit_to_um[unit] / yres)
-                if vals:
-                    return float(sum(vals) / len(vals))
+        info = read_resolution(Path(path))
     except Exception:
         return None
-    return None
+    mpp_x = float(info.mpp_x)
+    mpp_y = float(info.mpp_y if info.mpp_y is not None else info.mpp_x)
+    mean_mpp = (mpp_x + mpp_y) / 2.0
+    anisotropy = abs(mpp_x - mpp_y) / mean_mpp
+    if anisotropy > 0.05:
+        raise ValueError(
+            f"GigaTIME requires near-isotropic source pixels; X/Y MPP differ by {anisotropy:.2%}."
+        )
+    return mean_mpp
 
 
 def _read_mpp_from_shift(shift_path: Path) -> float | None:
@@ -442,6 +386,13 @@ def inspect_crop_image(
         if page < 0 or page >= len(tf.pages):
             raise ValueError(f"--page {page} out of range for {path} ({len(tf.pages)} pages)")
         page_shape = tuple(int(v) for v in tf.pages[page].shape)
+        page_dtype = np.dtype(tf.pages[page].dtype)
+
+    if page_dtype != np.dtype("uint8"):
+        raise ValueError(
+            f"GigaTIME input must be 8-bit RGB, observed {page_dtype}. "
+            "Convert once with a fixed, documented whole-image intensity mapping."
+        )
 
     if len(page_shape) == 2:
         orig_h, orig_w = page_shape

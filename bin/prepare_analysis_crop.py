@@ -152,8 +152,8 @@ def tissue_roi_bbox(
 
 
 def read_shape_and_mpp(path: Path) -> tuple[int, int, float | None]:
-    import re
     import tifffile
+    from validate_input_resolution import read_resolution
 
     with tifffile.TiffFile(str(path)) as tif:
         series = tif.series[0]
@@ -161,14 +161,21 @@ def read_shape_and_mpp(path: Path) -> tuple[int, int, float | None]:
         shape = tuple(map(int, series.shape))
         height = shape[axes.index("Y")]
         width = shape[axes.index("X")]
-        description = getattr(tif, "ome_metadata", None)
-        if not description:
-            try:
-                description = tif.pages[0].tags["ImageDescription"].value
-            except Exception:
-                description = ""
-        match = re.search(r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"', str(description))
-        mpp = float(match.group(1)) if match else None
+    try:
+        info = read_resolution(path)
+    except RuntimeError:
+        return height, width, None
+    if (height, width) != (info.height_px, info.width_px):
+        raise ValueError("Crop source dimensions disagree with physical-resolution metadata")
+    mpp_x = float(info.mpp_x)
+    mpp_y = float(info.mpp_y if info.mpp_y is not None else info.mpp_x)
+    mpp = (mpp_x + mpp_y) / 2.0
+    anisotropy = abs(mpp_x - mpp_y) / mpp
+    if anisotropy > 0.05:
+        raise ValueError(
+            f"Crop source X/Y pixel sizes differ by {anisotropy:.2%}; "
+            "a scalar MPP would corrupt physical calibration."
+        )
     return height, width, mpp
 
 

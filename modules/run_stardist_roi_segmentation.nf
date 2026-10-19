@@ -35,7 +35,7 @@ process RUN_STARDIST_ROI_SEGMENTATION {
     def allow_huge_flag = resolvedAllowHugeTif ? '--allow-huge-tif' : ''
     def precomputed_flag = params.stardist_precomputed_labels_full ? "--precomputed-labels-full \"${params.stardist_precomputed_labels_full}\"" : ''
     def stardist_script = "${projectDir}/${params.stardist_script}"
-    def codeFingerprint = PipelineHelpers.codeFingerprint([stardist_script, "${projectDir}/bin/grandqc_mask.py"])
+    def codeFingerprint = PipelineHelpers.codeFingerprint([stardist_script, "${projectDir}/bin/grandqc_mask.py", "${projectDir}/bin/validate_input_resolution.py"])
     def memoryBudgetGb = Math.max(2, Math.min(params._executor_max_memory_gb as int, params.stardist_memory_gb as int))
     def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
     def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()

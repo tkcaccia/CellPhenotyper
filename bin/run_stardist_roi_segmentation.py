@@ -33,7 +33,6 @@ import math
 import io
 import contextlib
 import os
-import re
 import subprocess
 import shutil
 import sys
@@ -48,68 +47,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hardware_runtime import query_gpu_memory_mib
 
 
-def _safe_float(value) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (tuple, list)) and len(value) == 2:
-        num, den = value
-        try:
-            den = float(den)
-            if den == 0.0:
-                return None
-            return float(num) / den
-        except Exception:
-            return None
-    try:
-        return float(value)
-    except Exception:
-        return None
-
-
 def read_mpp_from_tiff(path: Path) -> float | None:
-    unit_to_um = {
-        2: 25_400.0,  # inch
-        3: 10_000.0,  # centimeter
-    }
-    try:
-        with tifffile.TiffFile(str(path)) as tf:
-            page = tf.pages[0]
-            desc = None
-            try:
-                desc = page.tags["ImageDescription"].value
-            except Exception:
-                desc = getattr(tf, "ome_metadata", None)
-            if isinstance(desc, str):
-                vals = []
-                for pattern in (
-                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
-                    r'PhysicalSizeY="([0-9]+(?:\.[0-9]+)?)"',
-                    r"MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
-                    r"aperio.MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
-                ):
-                    vals.extend(float(m.group(1)) for m in re.finditer(pattern, desc))
-                if vals:
-                    return float(sum(vals) / len(vals))
+    from validate_input_resolution import read_resolution
 
-            unit = None
-            try:
-                unit = int(page.tags["ResolutionUnit"].value)
-            except Exception:
-                unit = None
-            if unit in unit_to_um:
-                vals = []
-                for tag_name in ("XResolution", "YResolution"):
-                    try:
-                        res = _safe_float(page.tags[tag_name].value)
-                    except Exception:
-                        res = None
-                    if res and res > 0:
-                        vals.append(unit_to_um[unit] / res)
-                if vals:
-                    return float(sum(vals) / len(vals))
+    try:
+        info = read_resolution(path)
     except Exception:
         return None
-    return None
+    mpp_x = float(info.mpp_x)
+    mpp_y = float(info.mpp_y if info.mpp_y is not None else info.mpp_x)
+    mean_mpp = (mpp_x + mpp_y) / 2.0
+    anisotropy = abs(mpp_x - mpp_y) / mean_mpp
+    if anisotropy > 0.05:
+        raise ValueError(
+            f"StarDist input X/Y pixel sizes differ by {anisotropy:.2%}; "
+            "a scalar MPP would corrupt downstream physical calibration."
+        )
+    return mean_mpp
 
 def write_full_labels_tif(full_out: Path, labels_crop: np.ndarray, x0: int, y0: int, full_w: int, full_h: int) -> None:
     """Write a full-resolution label image (BigTIFF) without allocating the full array in RAM."""

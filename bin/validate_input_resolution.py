@@ -81,13 +81,20 @@ def _physical_size_to_microns(value: float | None, unit: str | None) -> float | 
     if value is None or not unit:
         return value
     normalized = unit.strip().lower().replace("μ", "µ")
-    if normalized in {"µm", "um", "micrometer", "micrometre"}:
+    if normalized in {"µm", "um", "micrometer", "micrometre", "micron"}:
         return value
     if normalized in {"nm", "nanometer", "nanometre"}:
         return value / 1000.0
     if normalized in {"mm", "millimeter", "millimetre"}:
         return value * 1000.0
-    return value
+    if normalized in {"cm", "centimeter", "centimetre"}:
+        return value * 10_000.0
+    if normalized in {"m", "meter", "metre"}:
+        return value * 1_000_000.0
+    if normalized in {"pm", "picometer", "picometre"}:
+        return value / 1_000_000.0
+    # An unknown unit cannot safely be interpreted as micrometres.
+    return None
 
 
 def _resolution_unit_microns(value: Any) -> float | None:
