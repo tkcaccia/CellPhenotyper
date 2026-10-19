@@ -200,6 +200,128 @@ and reopen. Missing pairs, changed images/objects, inconsistent mappings,
 duplicate/unknown IDs, nonfinite values and incompatible units fail with an
 explicit error before the index is published.
 
+## Register existing GigaTIME marker images and cell scores
+
+Existing GigaTIME outputs can be opened as virtual-marker image layers with
+per-cell score information. Use an explicit `--spec` for this route. It works
+with `feature_sets: []`; no Virchow2 cache, encoder execution, Nextflow run or
+GPU is required. Automatic `--run` discovery remains the existing Virchow2
+route and does not guess legacy GigaTIME image/table/mask pairings.
+
+Label these layers **GigaTIME virtual markers** and retain the declaration
+`score_semantics="uncalibrated_virtual_marker_score"`. The compatibility name
+`gigatime_probs.*` does not establish probability calibration. Cell tables
+retain their native finite nonnegative exported values, including uint8-scale
+values above one and sums above the per-pixel range. Export and reopen never
+rescale these values, interpret them as measured protein abundance or infer
+positive/negative thresholds. Display contrast operates separately from cell
+table values.
+
+Three artifact roles describe the existing files:
+
+| Role | Explicit contract |
+|---|---|
+| `gigatime_marker_image` | `format="ome-tiff"`, `channels: [{marker,page}]`, native H&E edge `extent: {x,y,width,height}`, and fixed `score_semantics` |
+| `cell_segmentation_mask` | `format="tiff"` or `"ome-tiff"`, `mask_name`, `segmentation_unit="cell"` or `"nucleus"`, and native `width,height` |
+| `gigatime_cell_scores` | CSV/CSV.GZ with explicit `id_column`, `x_column`, `y_column`, `marker_columns: [{marker,column}]`, `row_count`, `mask_name`, `mask_artifact_id`, `source_artifact_id` pointing to the marker image, `source_coordinate_convention`, `source_to_image_affine`, and fixed `score_semantics` |
+
+Every artifact has its normal stable `artifact_id`, relative `path`, SHA-256,
+the tissue's `frame_id`, and the exact H&E `image_sha256`. Hashes identify the
+present files. Registering existing outputs asserts their association; it
+cannot retroactively prove which historical image or label mask generated the
+table. The validator checks integer single-plane mask headers and representable
+label IDs, without scanning every mask pixel to establish label membership or
+cell lineage. A grid/tissue-cluster mask cannot be relabeled as cell segmentation.
+
+Channel `page` values are zero-based TIFF page indices, and their marker names
+must match the OME channel names exactly. Integer marker pages use their storage
+range for display by default; an optional positive channel `display_max` sets
+an explicit display range. Floating-point marker pages require `display_max`.
+This display setting leaves the CSV untouched. Register only the score columns
+whose markers are explicitly included in the linked image. Other source CSV
+columns remain in the original file; no mean/sum/max column is chosen implicitly.
+
+The current mask contract requires a single-plane integer mask on the full
+native H&E grid, with the same width and height. Mask dimensions and score
+`row_count` may be omitted in an input specification: export fills them from
+the TIFF header and streamed CSV, rejecting supplied values that disagree.
+They are mandatory in the published index. Cell IDs are unique positive decimal
+label strings within a table; tissues may reuse local labels. A present CSV
+`mask_name` column must match the declared linked mask on every row.
+
+Current producer CSVs use zero-based **pixel indices** for `centroid_x_px` and
+`centroid_y_px` in the GigaTIME inference raster. For a marker raster of width
+`W` and height `H` placed in the H&E extent `(x0,y0,Ew,Eh)`, explicitly declare
+`source_coordinate_convention="zero-based-pixel-index"` and the affine:
+
+```text
+[[Ew/W, 0, x0 + 0.5*Ew/W],
+ [0, Eh/H, y0 + 0.5*Eh/H],
+ [0, 0, 1]]
+```
+
+This places observation centres correctly in the native H&E frame. A table
+already containing native H&E pixel centres declares
+`source_coordinate_convention="native-image-pixel-centres"` and the identity
+affine. The validator rejects a missing half-pixel shift, an inconsistent
+scale/extent or a transformed centroid outside its linked image. Arbitrary
+rotated marker placement is outside this extent-based contract. Area and
+bounding-box columns retain their source-grid meaning; the XY transform does
+not convert those measurements automatically.
+
+For example, this input specification registers an existing 32×24 marker raster
+and its raw centroid table against a 64×48 calibrated H&E image. Replace paths,
+names, dimensions, calibration and `HE_SHA256` with verified values for your data:
+
+```json
+{
+  "name": "My GigaTIME review",
+  "tissues": [{
+    "tissue_id": "sample-a", "name": "Sample A",
+    "image": {"path": "sample-a/he.png", "mpp_x": 0.5, "mpp_y": 0.5,
+              "frame_id": "sample-a:image"},
+    "feature_sets": [],
+    "artifacts": [
+      {"artifact_id": "gigatime:markers", "role": "gigatime_marker_image",
+       "format": "ome-tiff", "path": "sample-a/gigatime_probs.ome.tif",
+       "frame_id": "sample-a:image", "image_sha256": "HE_SHA256",
+       "score_semantics": "uncalibrated_virtual_marker_score",
+       "channels": [{"marker": "CD3", "page": 0}, {"marker": "CD8", "page": 1}],
+       "extent": {"x": 0, "y": 0, "width": 64, "height": 48}},
+      {"artifact_id": "segmentation:nuclei", "role": "cell_segmentation_mask",
+       "format": "tiff", "path": "sample-a/labels.tif", "mask_name": "nuclei",
+       "segmentation_unit": "nucleus", "frame_id": "sample-a:image",
+       "image_sha256": "HE_SHA256"},
+      {"artifact_id": "gigatime:nuclei", "role": "gigatime_cell_scores",
+       "format": "csv", "path": "sample-a/sample-a_nuclei_gigatime_quantification.csv",
+       "frame_id": "sample-a:image", "image_sha256": "HE_SHA256",
+       "id_column": "label_id", "x_column": "centroid_x_px", "y_column": "centroid_y_px",
+       "marker_columns": [{"marker": "CD3", "column": "CD3__mean"},
+                          {"marker": "CD8", "column": "CD8__mean"}],
+       "mask_name": "nuclei", "mask_artifact_id": "segmentation:nuclei",
+       "source_artifact_id": "gigatime:markers",
+       "source_coordinate_convention": "zero-based-pixel-index",
+       "source_to_image_affine": [[2,0,1],[0,2,1],[0,0,1]],
+       "score_semantics": "uncalibrated_virtual_marker_score",
+       "value_encoding": "native_export_values"}
+    ]
+  }]
+}
+```
+
+Then register and check the existing assets:
+
+```bash
+python bin/export_experiment.py --spec /path/to/gigatime-spec.json \
+  --output /path/to/project/experiment.cellphenotyper.json
+python bin/export_experiment.py --validate /path/to/project/experiment.cellphenotyper.json
+```
+
+No source file is rewritten. Move the containing image/mask/table/index tree
+together, then choose **Open Project** in a compatible wsiTools version.
+Python streams full score tables for validation; the viewer applies explicit
+display bounds and reports oversized tables without silently sampling them.
+
 ## CPU-only synthetic integration demo
 
 ```bash
