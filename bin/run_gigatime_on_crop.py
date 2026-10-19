@@ -66,6 +66,7 @@ CHANNEL_NAMES = [
 ]
 
 CHANNEL_INDEX_BY_NAME = {name: idx for idx, name in enumerate(CHANNEL_NAMES)}
+DEFAULT_GIGATIME_REVISION = "a6556030bdb8071857559e12b921620aa1bbac5b"
 
 GIGATIME_VALUE_SEMANTICS = {
     "value_type": "uncalibrated_virtual_marker_score",
@@ -1850,10 +1851,12 @@ def resolve_device(requested: str) -> torch.device:
 
 def load_model(
     repo_id: str, token: str | None, device: torch.device, offline: bool,
+    revision: str = DEFAULT_GIGATIME_REVISION,
 ) -> tuple[GigaTIMEModel, dict]:
     from huggingface_hub import snapshot_download
 
-    local_dir = snapshot_download(repo_id=repo_id, token=token, local_files_only=offline)
+    local_dir = snapshot_download(repo_id=repo_id, revision=revision,
+                                  token=token, local_files_only=offline)
     weights_path = Path(local_dir) / "model.pth"
     if not weights_path.exists():
         raise FileNotFoundError(f"GigaTIME weights not found: {weights_path}")
@@ -1863,7 +1866,7 @@ def load_model(
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    provenance = hf_model_provenance(repo_id, local_dir, requested_revision="main")
+    provenance = hf_model_provenance(repo_id, local_dir, requested_revision=revision)
     provenance["checkpoints"] = [checkpoint_record(weights_path, logical_name="GigaTIME")]
     return model, provenance
 
@@ -2835,6 +2838,8 @@ def parse_args():
                     help="Optional StarDist shift.json used to recover the calibrated source image MPP.")
     ap.add_argument("--outdir", required=True, help="Output directory")
     ap.add_argument("--repo-id", default="prov-gigatime/GigaTIME", help="Hugging Face repo ID")
+    ap.add_argument("--repo-revision", default=DEFAULT_GIGATIME_REVISION,
+                    help="Pinned GigaTIME CNN checkpoint revision; avoids selecting a metadata-only cache snapshot")
     ap.add_argument("--page", type=int, default=0, help="TIFF page to read")
     ap.add_argument("--patch-size", type=int, default=256, help="Inference patch size (default from model card: 256)")
     ap.add_argument("--stride", type=int, default=128, help="Sliding-window stride")
@@ -3078,7 +3083,8 @@ def main():
             flush=True,
         )
 
-    model, model_provenance = load_model(args.repo_id, token=token, device=device, offline=offline)
+    model, model_provenance = load_model(args.repo_id, token=token, device=device,
+                                         offline=offline, revision=args.repo_revision)
     image_meta["model_provenance"] = model_provenance
     target_shape = tuple(int(v) for v in image_meta["inference_shape_yx"])
     quantifiers = build_quantifiers(
