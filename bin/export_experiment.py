@@ -18,6 +18,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 
 SCHEMA = "cellphenotyper-experiment"
@@ -27,6 +28,10 @@ FEATURE_WIDTHS = {"virchow2-pooled": ("tile", 2560), "virchow2-spatial": ("token
 COORDINATE_CONVENTION = "pixel-edge-origin_centres-in-native-pixels"
 NON_PREDICTORS = {"label", "class", "class_id", "cluster", "sample_id", "tissue_id", "specimen_id",
                   "patient_id", "split", "observation_type", "area_px"}
+SPATIAL_ROLES = {"spatial_transcriptomics_object": "rds", "spatial_review_bundle": "json"}
+SPATIAL_BUNDLE_SCHEMA = "cellphenotyper-spatial-review-bundle"
+SPATIAL_MAX_BYTES = 16 * 1024 * 1024
+SPATIAL_MAX_OBSERVATIONS = 10000
 
 
 class ExperimentError(ValueError):
@@ -97,7 +102,7 @@ def _asset(record, root, destination, label):
     actual = sha256(path)
     if record.get("sha256") is not None and _digest(record["sha256"], f"{label}.sha256") != actual:
         raise ExperimentError(f"{label} SHA-256 mismatch: {path}")
-    if path == destination:
+    if path == destination or (destination.exists() and os.path.samefile(path, destination)):
         raise ExperimentError(f"Output would overwrite a source asset: {path}")
     record.update(path=Path(os.path.relpath(path, destination.parent)).as_posix(), sha256=actual)
     return record, path
@@ -205,6 +210,244 @@ def _register_definition(definitions, feature, image):
     definitions[fid] = signature
 
 
+def _namespace_id(experiment_id, tissue_id, dataset_id, original_id):
+    """Match wsiTools' existing R URLencode(reserved=TRUE) namespace exactly."""
+    # R's default repeated=FALSE leaves a component containing any %HH intact.
+    def encode(value):
+        return value if re.search(r"%[a-fA-F0-9]{2}", value) else quote(value, safe="~._-")
+    return "::".join(encode(value) for value in (experiment_id, tissue_id, dataset_id, original_id))
+
+
+def _spatial_fields(record, required, optional, label):
+    record = _mapping(record, label)
+    unknown = set(record) - set(required) - set(optional)
+    missing = set(required) - set(record)
+    if unknown or missing:
+        raise ExperimentError(f"{label} has unknown or missing contract fields: {', '.join(sorted(unknown | missing))}")
+    return record
+
+
+def _no_bundle_paths(value, label="spatial review bundle"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key.lower() in {"path", "paths"} or key.lower().endswith(("_path", "_paths")):
+                raise ExperimentError(f"{label} must reference assets by artifact ID, not internal paths")
+            _no_bundle_paths(child, label)
+    elif isinstance(value, list):
+        for child in value:
+            _no_bundle_paths(child, label)
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ExperimentError(f"{label} contains a nonfinite JSON value")
+
+
+def _read_spatial_bundle(path, expected_sha256):
+    """Read bounded metadata only; the original RDS is never deserialized."""
+    def constant(value):
+        raise ExperimentError(f"Spatial review bundle contains nonfinite JSON value: {value}")
+
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ExperimentError(f"Spatial review bundle contains duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        if path.stat().st_size > SPATIAL_MAX_BYTES:
+            raise ExperimentError("Spatial review bundle exceeds the 16 MiB metadata limit")
+        with path.open("rb") as stream:
+            content = stream.read(SPATIAL_MAX_BYTES + 1)
+        if len(content) > SPATIAL_MAX_BYTES:
+            raise ExperimentError("Spatial review bundle exceeds the 16 MiB metadata limit")
+        if hashlib.sha256(content).hexdigest() != expected_sha256:
+            raise ExperimentError("Spatial review bundle SHA-256 changed while reading")
+        result = _mapping(json.loads(content.decode("utf-8"), parse_constant=constant,
+                                     object_pairs_hook=object_pairs), "spatial review bundle")
+        _no_bundle_paths(result)
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        if isinstance(exc, ExperimentError):
+            raise
+        raise ExperimentError(f"Cannot read spatial review bundle {path}: {exc}") from exc
+    return result
+
+
+def _spatial_mapping(mapping, image):
+    mapping = _spatial_fields(mapping, ("confirmed", "same_section", "image_sha256", "frame_id",
+                                       "coordinate_space", "affine"), (), "spatial coordinate_mapping")
+    if mapping.get("confirmed") is not True or mapping.get("same_section") is not True:
+        raise ExperimentError("Spatial coordinate_mapping requires confirmed=true and same_section=true")
+    if (mapping.get("frame_id") != image["frame_id"] or
+            _digest(mapping.get("image_sha256"), "mapping.image_sha256") != _digest(image["sha256"], "image.sha256")):
+        raise ExperimentError("Spatial coordinate_mapping image hash/frame differs from its tissue")
+    space = mapping.get("coordinate_space")
+    if not isinstance(space, str) or space not in {"native_pixels", "level0_slide_pixels", "source_pixels"}:
+        raise ExperimentError("Spatial coordinate_mapping has unknown coordinate_space; no mapping is inferred")
+    affine = _array(mapping.get("affine"), "coordinate_mapping.affine")
+    if len(affine) != 3 or any(not isinstance(row, list) or len(row) != 3 for row in affine):
+        raise ExperimentError("Spatial coordinate_mapping requires a finite invertible 3x3 affine")
+    for row in affine:
+        for value in row:
+            _number(value, "coordinate_mapping.affine value")
+    if any(abs(value - expected) > 1e-10 for value, expected in zip(affine[2], (0, 0, 1))):
+        raise ExperimentError("Spatial affine final row must be [0,0,1]")
+    determinant = affine[0][0] * affine[1][1] - affine[0][1] * affine[1][0]
+    if not math.isfinite(determinant) or abs(determinant) < 1e-12:
+        raise ExperimentError("Spatial coordinate_mapping affine must be invertible")
+    if space != "source_pixels" and any(abs(affine[i][j] - int(i == j)) > 1e-10
+                                        for i in range(3) for j in range(3)):
+        raise ExperimentError("A nonidentity spatial affine must declare coordinate_space=source_pixels")
+
+
+def _spatial_footprint(row):
+    footprint = row.get("footprint")
+    width, height = row.get("footprint_width_px"), row.get("footprint_height_px")
+    if footprint is not None:
+        footprint = _mapping(footprint, "observation.footprint")
+        x0, y0, x1, y1 = [_number(footprint.get(key), f"footprint.{key}") for key in ("x0", "y0", "x1", "y1")]
+        if (not math.isfinite(x1 - x0) or not math.isfinite(y1 - y0) or x1 <= x0 or y1 <= y0
+                or not (x0 <= row["x"] <= x1 and y0 <= row["y"] <= y1)):
+            raise ExperimentError("Spatial footprint must have positive area and contain its observation centre")
+        for value, expected in ((width, x1 - x0), (height, y1 - y0)):
+            if value is not None and abs(_number(value, "footprint dimension", positive=True) - expected) > 1e-7:
+                raise ExperimentError("Spatial footprint dimensions disagree with its edge rectangle")
+    elif width is not None or height is not None:
+        _number(width, "footprint_width_px", positive=True)
+        _number(height, "footprint_height_px", positive=True)
+
+
+def _validate_spatial_bundle(bundle, source, artifact, tissue, experiment_id):
+    image = tissue["image"]
+    dataset = artifact["dataset_id"]
+    _spatial_fields(bundle, ("schema", "schema_version", "experiment_id", "tissue_id", "dataset_id",
+                            "observation_unit", "frame_id", "image_sha256", "source_artifact_id",
+                            "source_object_sha256", "coordinate_mapping", "observations", "reductions"), (),
+                    "spatial review bundle")
+    if (bundle.get("schema") != SPATIAL_BUNDLE_SCHEMA or type(bundle.get("schema_version")) is not int
+            or bundle["schema_version"] != 1):
+        raise ExperimentError(f"Expected {SPATIAL_BUNDLE_SCHEMA} schema_version=1")
+    expected = dict(experiment_id=experiment_id, tissue_id=tissue["tissue_id"], dataset_id=dataset,
+                    observation_unit=artifact["observation_unit"], frame_id=image["frame_id"],
+                    source_artifact_id=source["artifact_id"])
+    if any(bundle.get(key) != value for key, value in expected.items()):
+        raise ExperimentError("Spatial review bundle experiment/tissue/dataset/unit/frame/source linkage differs from its artifacts")
+    for key, expected_digest in (("image_sha256", image["sha256"]), ("source_object_sha256", source["sha256"])):
+        if _digest(bundle.get(key), f"bundle.{key}") != _digest(expected_digest, key):
+            raise ExperimentError(f"Spatial review bundle {key} differs from its linked asset")
+    _spatial_mapping(bundle.get("coordinate_mapping"), image)
+    observations = _array(bundle.get("observations"), "bundle.observations")
+    if len(observations) != artifact["row_count"] or not 1 <= len(observations) <= SPATIAL_MAX_OBSERVATIONS:
+        raise ExperimentError("Spatial review bundle row_count must match 1..10000 observations")
+    ids, originals = set(), set()
+    for row in observations:
+        _spatial_fields(row, ("id", "original_id", "dataset_id", "tissue_id", "frame_id", "observation_unit",
+                              "x", "y", "cluster_values"),
+                        ("footprint", "footprint_width_px", "footprint_height_px"), "spatial observation")
+        original = _text(row.get("original_id"), "observation.original_id")
+        identifier = _text(row.get("id"), "observation.id")
+        canonical = _namespace_id(experiment_id, tissue["tissue_id"], dataset, original)
+        if identifier != canonical or identifier in ids or original in originals:
+            raise ExperimentError("Spatial observation IDs must be unique canonical IDs with stable original_id values")
+        ids.add(identifier)
+        originals.add(original)
+        for key in ("dataset_id", "tissue_id", "frame_id", "observation_unit"):
+            if row.get(key) != expected[key]:
+                raise ExperimentError(f"Spatial observation {key} differs from its declared dataset")
+        x, y = _number(row.get("x"), "observation.x"), _number(row.get("y"), "observation.y")
+        if not (0 <= x < image["width"] and 0 <= y < image["height"]):
+            raise ExperimentError("Spatial observation centre lies outside its declared image frame")
+        clusters = row.get("cluster_values")
+        if clusters == []:  # jsonlite serializes an empty named R list as [].
+            clusters = {}
+        _mapping(clusters, "observation.cluster_values")
+        for key, value in clusters.items():
+            _text(key, "cluster metadata field")
+            if value is not None and (not isinstance(value, (str, int, float, bool)) or
+                                      isinstance(value, (int, float)) and not math.isfinite(value)):
+                raise ExperimentError("Spatial cluster values must be scalar categorical metadata or null")
+        _spatial_footprint(row)
+    reductions = _array(bundle.get("reductions"), "bundle.reductions")
+    reduction_ids = set()
+    prefix = _namespace_id(experiment_id, tissue["tissue_id"], dataset, "")
+    for reduction in reductions:
+        _spatial_fields(reduction, ("id", "observation_unit", "dataset_id", "frame_id", "points"),
+                        ("label",), "spatial reduction")
+        identifier = _text(reduction.get("id"), "reduction.id")
+        if (not identifier.startswith(prefix) or identifier == prefix or identifier in reduction_ids or
+                _namespace_id(experiment_id, tissue["tissue_id"], dataset, identifier[len(prefix):]) != identifier):
+            raise ExperimentError("Spatial reduction IDs must be unique canonical dataset IDs")
+        reduction_ids.add(identifier)
+        if reduction.get("label") is not None:
+            _text(reduction["label"], "reduction.label")
+        for key in ("dataset_id", "frame_id", "observation_unit"):
+            if reduction.get(key) != expected[key]:
+                raise ExperimentError(f"Spatial reduction {key} differs from its dataset")
+        points = _array(reduction.get("points"), "reduction.points")
+        point_ids = set()
+        for point in points:
+            _spatial_fields(point, ("id", "x", "y"), (), "spatial reduction point")
+            point_id = _text(point.get("id"), "reduction point.id")
+            if point_id not in ids or point_id in point_ids:
+                raise ExperimentError("Spatial reduction points require unique known canonical IDs")
+            point_ids.add(point_id)
+            _number(point.get("x"), "reduction point.x")
+            _number(point.get("y"), "reduction point.y")
+        if point_ids != ids:
+            raise ExperimentError("Spatial reduction IDs must exactly match dataset observations; row order is irrelevant")
+    return ids
+
+
+def _validate_spatial_artifacts(payload, root):
+    all_ids = set()
+    for tissue in payload["tissues"]:
+        artifacts = tissue["artifacts"]
+        spatial = [artifact for artifact in artifacts if artifact.get("role") in SPATIAL_ROLES]
+        if not spatial:
+            continue
+        review_datasets = {artifact.get("dataset_id") for artifact in artifacts
+                           if artifact.get("role") == "review_observations" and isinstance(artifact.get("dataset_id"), str)}
+        datasets = {}
+        for artifact in spatial:
+            role = artifact["role"]
+            dataset = _identifier(artifact.get("dataset_id"), "spatial artifact.dataset_id")
+            kind = "object" if role == "spatial_transcriptomics_object" else "review"
+            if artifact.get("artifact_id") != f"spatial:{dataset}:{kind}":
+                raise ExperimentError("Spatial artifact_id must be spatial:<dataset>:object or spatial:<dataset>:review")
+            if artifact.get("format") != SPATIAL_ROLES[role]:
+                raise ExperimentError(f"Spatial {role} requires format={SPATIAL_ROLES[role]}")
+            if Path(artifact["path"]).suffix.lower() != "." + SPATIAL_ROLES[role]:
+                raise ExperimentError("Spatial artifact format must match its RDS/JSON filename")
+            if not isinstance(artifact.get("observation_unit"), str) or artifact["observation_unit"] not in {"spot", "cell"}:
+                raise ExperimentError("Spatial object observation_unit must be spot or cell, never tile/token")
+            count = artifact.get("row_count")
+            if type(count) is not int or not 1 <= count <= SPATIAL_MAX_OBSERVATIONS:
+                raise ExperimentError("Spatial artifact row_count must be an integer in 1..10000")
+            if (artifact.get("frame_id") != tissue["image"]["frame_id"] or
+                    _digest(artifact.get("image_sha256"), "spatial image_sha256") != _digest(tissue["image"]["sha256"], "image.sha256")):
+                raise ExperimentError("Spatial artifact image hash/frame differs from its tissue")
+            pair = datasets.setdefault(dataset, {})
+            if kind in pair or dataset in review_datasets:
+                raise ExperimentError("Spatial dataset_id collides with another spatial object or review_observations dataset")
+            pair[kind] = artifact
+        for dataset, pair in datasets.items():
+            if set(pair) != {"object", "review"}:
+                raise ExperimentError(f"Spatial dataset {dataset} needs both object and review bundle artifacts")
+            source, artifact = pair["object"], pair["review"]
+            if (source.get("review_bundle_artifact_id") != artifact["artifact_id"] or
+                    artifact.get("source_artifact_id") != source["artifact_id"]):
+                raise ExperimentError("Spatial object/review artifacts require bidirectional artifact linkage")
+            if (source["row_count"] != artifact["row_count"] or source["observation_unit"] != artifact["observation_unit"] or
+                    _digest(artifact.get("source_object_sha256"), "source_object_sha256") != _digest(source["sha256"], "source.sha256")):
+                raise ExperimentError("Spatial object/review row_count, unit or source hash differ")
+            _verify_asset(source, root, "spatial source object")
+            path = _verify_asset(artifact, root, "spatial review bundle")
+            bundle = _read_spatial_bundle(path, _digest(artifact["sha256"], "bundle.sha256"))
+            ids = _validate_spatial_bundle(bundle, source, artifact, tissue, payload["experiment_id"])
+            if all_ids.intersection(ids):
+                raise ExperimentError("Canonical spatial observation IDs collide across datasets")
+            all_ids.update(ids)
+
+
 def validate_experiment(path: Path) -> dict:
     """Verify schema, local assets, hashes, identity and every cached CSV row."""
     path = Path(path).absolute()
@@ -266,6 +509,7 @@ def validate_experiment(path: Path) -> dict:
             feature_path = _verify_asset(feature, path.parent, f"{label}.feature {fid}")
             _validate_features(feature, feature_path, image, f"{label}.feature {fid}")
             _register_definition(definitions, feature, image)
+    _validate_spatial_artifacts(payload, path.parent)
     return payload
 
 
@@ -383,6 +627,7 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
                 raise ExperimentError(f"Duplicate artifact_id: {aid}")
             aids.add(aid)
             _text(artifact.get("role"), "artifact.role")
+    _validate_spatial_artifacts(payload, output.parent)
     atomic_json(output, payload)
     return payload
 

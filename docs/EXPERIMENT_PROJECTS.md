@@ -120,6 +120,86 @@ set even if the model hash agrees. Do not pool incompatible feature definitions
 across tissues. Labels, training membership, fitted scaling and RGB recipe scope
 belong in separate state/artifacts, never in the predictor matrix.
 
+## Keep a spatial transcriptomics object in the project
+
+In a compatible wsiTools version, choose **Add to project** after opening a
+trusted local Seurat or compatible spatial RDS file. Select its tissue,
+metadata columns and reductions, and confirm the same-section coordinate
+mapping against the exact H&E image. Saving stores a byte-identical RDS copy
+and a compact JSON review bundle with the project, then adds references to the
+experiment index. The original source file remains untouched. Keep the stored
+RDS, image, bundle and index together. Paths in the index are relative, so moving the
+containing tree preserves the project. Assets outside the tree remain external
+dependencies.
+
+Reopening **Open Project** reconstructs the bounded coordinates, categorical
+metadata and reductions from the JSON bundle. It does not automatically
+deserialize the RDS, run CellPhenotyper, train a model or start Bora. The RDS
+remains the intact original object for an explicit trusted-file action. Python
+validation checks its bytes and SHA-256 only; it cannot certify that its object
+class, expression data or biological annotations are valid. Spots and cells
+keep their own observation units, separate from Virchow2 tiles and tokens.
+
+Before replacing an existing index, wsiTools keeps a local backup. New attachment
+assets must use immutable/versioned filenames and be completely written and
+checked before publishing the index atomically. A failed save retains the old
+index and its referenced assets. Do not edit a bundle already referenced by an
+older index in place. The Python exporter replaces only the index and never
+copies, rewrites or deserializes the original RDS. Export/validation failure
+leaves a previous index unchanged.
+
+Each attached tissue/dataset uses two linked `artifacts` records:
+
+| Role | Required metadata |
+|---|---|
+| `spatial_transcriptomics_object` | `format="rds"`, `artifact_id="spatial:<dataset>:object"`, `dataset_id`, `observation_unit`, `frame_id`, `image_sha256`, `row_count`, `review_bundle_artifact_id` |
+| `spatial_review_bundle` | `format="json"`, `artifact_id="spatial:<dataset>:review"`, the same dataset/unit/frame/image/count fields, `source_artifact_id`, `source_object_sha256` |
+
+Both records also carry their normal relative `path` and full-file `sha256`.
+The object and review records must link to each other, and the bundle's source
+hash must match the object artifact. Dataset IDs use letters, digits, dots,
+colons, underscores and hyphens, beginning with a letter or digit. A tissue
+cannot attach the same dataset twice or reuse its ID for a `review_observations`
+CSV. Other existing artifact roles remain compatible.
+
+The JSON bundle declares
+`schema="cellphenotyper-spatial-review-bundle", schema_version=1`, the
+experiment/tissue/dataset/unit/frame identities, `image_sha256`,
+`source_artifact_id`, `source_object_sha256`, `coordinate_mapping`,
+`observations` and `reductions`. All file locations belong in the index;
+internal paths are forbidden in the bundle. The bundle is limited to 16 MiB
+and 10000 observations. Large objects need an explicitly bounded metadata
+export; validation never samples rows silently.
+
+The mapping must explicitly declare `confirmed=true`, `same_section=true`,
+the exact image hash/frame, a coordinate space (`native_pixels`,
+`level0_slide_pixels` or `source_pixels`) and an invertible finite 3×3 affine
+with final row `[0,0,1]`. Only `source_pixels` may declare a nonidentity affine.
+Bundle observation X/Y values are already normalized to native centres in the
+target image. The mapping records how they were obtained; consumers must not
+apply it a second time. No crop offset, pixel scale, axis swap or cross-section
+registration is guessed.
+
+Every observation has canonical `id`, separate `original_id`, dataset/tissue/
+frame/unit fields, finite in-image `x` and `y`, and categorical `cluster_values`.
+Optional footprint dimensions or native edge rectangles retain their original
+extent, including portions outside the image. Each reduction has a canonical
+`id`, dataset/frame/unit metadata and ID-keyed `points` with finite embedding
+X/Y values. Its ID set must exactly match the dataset observations; shuffled
+rows are valid. Canonical IDs follow wsiTools' existing URL-encoded
+`experiment::tissue::dataset::original` convention, so repeated local barcodes
+across tissues stay distinct. Source cluster labels remain separate from
+subsequent human review labels and decisions.
+
+The current wsiTools **Add to project** workflow registers transcriptomic spots.
+The artifact contract also reserves `cell` as a separate explicit unit for
+compatible consumers; it does not promote spots into cell observations.
+
+The CLI validates the pair, bundle contents and all file hashes on both export
+and reopen. Missing pairs, changed images/objects, inconsistent mappings,
+duplicate/unknown IDs, nonfinite values and incompatible units fail with an
+explicit error before the index is published.
+
 ## CPU-only synthetic integration demo
 
 ```bash
@@ -149,3 +229,7 @@ Add the repository's `bin` folder to the Python module path, then use
 rows and image headers; it does not load full WSI pixels or use GPU libraries.
 Validation errors raise `ExperimentError`. Writes use a temporary file, flush
 and atomic rename so failed export cannot replace a valid previous index.
+
+Original RDS bytes are preserved. If an RDS uses external backing files for its
+assays, those files are not automatically discovered or copied. Retain them for
+subsequent RNA analysis; the checked display bundle opens independently.
