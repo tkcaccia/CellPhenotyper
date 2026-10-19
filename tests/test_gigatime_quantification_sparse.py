@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
 from pathlib import Path
 import sys
 import types
@@ -92,3 +93,34 @@ def test_real_tiff_zarr_singleton_plane_is_read_in_bounded_blocks(tmp_path: Path
         assert (reader.height, reader.width) == (2, 3)
         actual = reader.read_block(1, 2, 2, 4, (4, 6))
         np.testing.assert_array_equal(actual, np.asarray([[1, 1]], dtype=np.uint16))
+
+
+def test_integrated_gigatime_quantifier_uses_compact_cell_ids(tmp_path: Path):
+    zarr = pytest.importorskip("zarr")
+    tifffile = pytest.importorskip("tifffile")
+    source = Path(__file__).resolve().parents[1] / "bin" / "run_gigatime_on_crop.py"
+    tree = ast.parse(source.read_text())
+    wanted = {"LazyMaskReader", "_scan_labels", "TileQuantifier"}
+    nodes = [node for node in tree.body if getattr(node, "name", None) in wanted]
+    namespace = dict(np=np, zarr=zarr, tifffile=tifffile, Path=Path,
+                     csv=__import__("csv"), json=__import__("json"),
+                     GIGATIME_VALUE_SEMANTICS={"value_type": "uncalibrated_virtual_marker_score"})
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
+    mask = np.zeros((4, 4), dtype=np.uint32)
+    mask[0, 0] = 7
+    mask[3, 3] = 100_000_001
+    mask_path = tmp_path / "integrated_mask.tif"
+    tifffile.imwrite(mask_path, mask)
+    quantifier = namespace["TileQuantifier"](mask_name="nuclei", mask_path=str(mask_path),
+                                               target_shape=(4, 4), channel_names=["CD68"],
+                                               block_size=2)
+    try:
+        assert len(quantifier.counts) == 2
+        quantifier.accumulate_tile(0, 4, 0, 4, np.full((1, 4, 4), .5, dtype=np.float32))
+        quantifier.write_outputs(tmp_path / "quantification", "specimen")
+        with (tmp_path / "quantification" / "specimen_nuclei_gigatime_mean_intensity.csv").open() as stream:
+            records = list(__import__("csv").DictReader(stream))
+        assert [int(row["label_id"]) for row in records] == [7, 100_000_001]
+        assert [int(row["area_px"]) for row in records] == [1, 1]
+    finally:
+        quantifier.close()
