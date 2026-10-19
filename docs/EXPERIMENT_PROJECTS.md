@@ -203,10 +203,55 @@ explicit error before the index is published.
 ## Register existing GigaTIME marker images and cell scores
 
 Existing GigaTIME outputs can be opened as virtual-marker image layers with
-per-cell score information. Use an explicit `--spec` for this route. It works
-with `feature_sets: []`; no Virchow2 cache, encoder execution, Nextflow run or
-GPU is required. Automatic `--run` discovery remains the existing Virchow2
-route and does not guess legacy GigaTIME image/table/mask pairings.
+per-cell score information. To add them to an existing verified experiment,
+first inspect the marker names and pages:
+
+```bash
+python bin/register_gigatime.py --inspect-marker-image /path/to/gigatime_probs.ome.tif
+```
+
+Then explicitly select the tissue, channels, placement and score columns.
+This example confirms that the marker raster covers the entire selected H&E
+image and that the CSV contains the producer's raw pixel-index centroids:
+
+```bash
+python bin/register_gigatime.py \
+  --experiment /path/to/project/experiment.cellphenotyper.json \
+  --tissue-id sample-a --marker-image /path/to/gigatime_probs.ome.tif \
+  --channel CD3 0 --channel CD8 1 --full-image \
+  --scores /path/to/sample-a_nuclei_gigatime_quantification.csv \
+  --mask /path/to/labels.tif --mask-name nuclei --segmentation-unit nucleus \
+  --score-column CD3 CD3__mean --score-column CD8 CD8__mean \
+  --source-coordinate-convention zero-based-pixel-index \
+  --output /path/to/project/with-gigatime.cellphenotyper.json
+```
+
+Choose **Open Project** in wsiTools and open the new output index. The helper
+retains every tissue, transcriptomics attachment, feature set and existing
+metadata. It reads calibration, image identity and frame from the verified
+project, calculates hashes and the declared coordinate transform, and writes
+only the new index. Original assets are referenced with rebased relative paths;
+they are not copied or rewritten. Keep those assets available when moving the
+index. Existing output files, directories, aliases and dangling symlinks are
+refused; there is no in-place or overwrite mode. To register another independent
+layer group, choose a different `--artifact-prefix` instead of replacing one.
+
+Use `--extent X Y WIDTH HEIGHT` for a marker raster covering an explicitly known
+crop in native H&E pixel edges. Use `native-image-pixel-centres` only when the
+CSV already contains native H&E centres; the helper then uses identity. It never
+guesses crop offsets or coordinate conventions. Floating marker pages require
+an explicit display range, for example `--display-max CD3 1 --display-max CD8 1`;
+this does not rescale cell scores. For marker-image-only registration, omit all
+score/mask options. The default CSV columns are `label_id`, `centroid_x_px` and
+`centroid_y_px`; use `--id-column`, `--x-column` and `--y-column` for other names.
+
+An explicit `--spec` remains available for building a new project or advanced
+registration below. Both routes work with `feature_sets: []`; no Virchow2
+cache, encoder execution, Nextflow run or GPU is required. Automatic `--run`
+discovery remains the existing Virchow2 route and does not guess legacy
+GigaTIME image/table/mask pairings. Invalid input reports its tissue, artifact
+and file; CSV value errors also report the line and column. Validation and
+export failures do not publish an index or modify the source project.
 
 Label these layers **GigaTIME virtual markers** and retain the declaration
 `score_semantics="uncalibrated_virtual_marker_score"`. The compatibility name
@@ -349,8 +394,10 @@ Add the repository's `bin` folder to the Python module path, then use
 `export_runs(run_roots, output, name=..., overwrite=False)` or
 `validate_experiment(path)` from `export_experiment`. Validation streams feature
 rows and image headers; it does not load full WSI pixels or use GPU libraries.
-Validation errors raise `ExperimentError`. Writes use a temporary file, flush
-and atomic rename so failed export cannot replace a valid previous index.
+Validation errors raise `ExperimentError`. Writes use a temporary file and
+flush before atomic publication. New-output publication refuses concurrent
+existing files; an explicit overwrite uses atomic replacement. Failed export
+cannot replace a valid previous index.
 
 Original RDS bytes are preserved. If an RDS uses external backing files for its
 assays, those files are not automatically discovered or copied. Retain them for

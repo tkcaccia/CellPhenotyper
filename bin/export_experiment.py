@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import contextmanager
 import csv
 import gzip
 import hashlib
@@ -126,7 +127,7 @@ def image_shape(path):
 
 
 def _csv(path):
-    return (gzip.open if path.name.endswith(".gz") else open)(path, "rt", newline="", encoding="utf-8-sig")
+    return (gzip.open if path.name.lower().endswith(".gz") else open)(path, "rt", newline="", encoding="utf-8-sig")
 
 
 def _validate_features(feature, path, image, label):
@@ -136,7 +137,7 @@ def _validate_features(feature, path, image, label):
     unit, width = FEATURE_WIDTHS[kind]
     if feature.get("observation_unit") != unit:
         raise ExperimentError(f"{label}: {kind} requires observation_unit={unit}")
-    expected_format = "csv.gz" if path.name.endswith(".csv.gz") else "csv" if path.suffix == ".csv" else None
+    expected_format = "csv.gz" if path.name.lower().endswith(".csv.gz") else "csv" if path.suffix.lower() == ".csv" else None
     if expected_format is None or feature.get("format") != expected_format:
         raise ExperimentError(f"{label}.format must match an existing .csv or .csv.gz feature table")
     columns = feature.get("feature_columns")
@@ -561,7 +562,7 @@ def _gigatime_scores(artifact, path, source, source_header, mask, mask_header, i
         markers.add(marker); columns.append(column)
     if not columns:
         raise ExperimentError("Declare at least one explicit GigaTIME marker score column")
-    expected_format = "csv.gz" if path.name.endswith(".csv.gz") else "csv" if path.suffix == ".csv" else None
+    expected_format = "csv.gz" if path.name.lower().endswith(".csv.gz") else "csv" if path.suffix.lower() == ".csv" else None
     if artifact.get("format") != expected_format or expected_format is None:
         raise ExperimentError("Cell score format must match its CSV/CSV.GZ filename")
     seen = set()
@@ -570,7 +571,8 @@ def _gigatime_scores(artifact, path, source, source_header, mask, mask_header, i
             reader = csv.DictReader(stream)
             header = reader.fieldnames or []
             if len(set(header)) != len(header) or any(key not in header for key in [*keys, *columns]):
-                raise ExperimentError("Cell score table has missing or duplicate declared columns")
+                missing = [column for column in [*keys, *columns] if column not in header]
+                raise ExperimentError(f"Cell score table has missing or duplicate declared columns; missing: {', '.join(missing) or 'none'}")
             for line, row in enumerate(reader, 2):
                 if None in row or any(row[key] is None for key in [*keys, *columns]):
                     raise ExperimentError(f"Malformed cell score CSV row at line {line}")
@@ -578,24 +580,30 @@ def _gigatime_scores(artifact, path, source, source_header, mask, mask_header, i
                 if not re.fullmatch(r"[1-9][0-9]*", identifier) or identifier in seen or int(identifier) > mask_header["max_label"]:
                     raise ExperimentError(f"Cell label IDs must be unique positive decimal integers representable by their mask dtype (line {line})")
                 seen.add(identifier)
-                x, y = float(row[keys[1]]), float(row[keys[2]])
+                try:
+                    x, y = float(row[keys[1]]), float(row[keys[2]])
+                except ValueError as exc:
+                    raise ExperimentError(f"CSV line {line}, coordinate columns {keys[1]}/{keys[2]} must contain finite numbers") from exc
                 if not math.isfinite(x) or not math.isfinite(y):
-                    raise ExperimentError("Cell source coordinates must be finite")
+                    raise ExperimentError(f"CSV line {line}, coordinate columns {keys[1]}/{keys[2]} must be finite")
                 if artifact["source_coordinate_convention"] == "zero-based-pixel-index" and not (0 <= x < source_header["width"] and 0 <= y < source_header["height"]):
-                    raise ExperimentError("Raw cell centroid lies outside its linked marker raster")
+                    raise ExperimentError(f"CSV line {line}: raw cell centroid lies outside its linked marker raster")
                 tx = affine[0][0] * x + affine[0][1] * y + affine[0][2]
                 ty = affine[1][0] * x + affine[1][1] * y + affine[1][2]
                 if not (0 <= tx < image["width"] and 0 <= ty < image["height"]):
-                    raise ExperimentError("Transformed cell centroid lies outside its native tissue image")
+                    raise ExperimentError(f"CSV line {line}: transformed cell centroid lies outside its native tissue image")
                 extent = source["extent"]
                 if not (extent["x"] <= tx < extent["x"] + extent["width"] and extent["y"] <= ty < extent["y"] + extent["height"]):
-                    raise ExperimentError("Cell centroid lies outside its linked marker image extent")
+                    raise ExperimentError(f"CSV line {line}: cell centroid lies outside its linked marker image extent")
                 for column in columns:
-                    value = float(row[column])
+                    try:
+                        value = float(row[column])
+                    except ValueError as exc:
+                        raise ExperimentError(f"CSV line {line}, column '{column}': expected a finite nonnegative exported score") from exc
                     if not math.isfinite(value) or value < 0:
-                        raise ExperimentError("GigaTIME exported cell scores must be finite and nonnegative; values are not rescaled")
+                        raise ExperimentError(f"CSV line {line}, column '{column}': GigaTIME exported cell scores must be finite and nonnegative; values are not rescaled")
                 if "mask_name" in header and row.get("mask_name") != mask["mask_name"]:
-                    raise ExperimentError("Cell score CSV mask_name contradicts its linked mask")
+                    raise ExperimentError(f"CSV line {line}, column 'mask_name': cell score mask_name contradicts its linked mask")
     except (OSError, EOFError, csv.Error, ValueError) as exc:
         if isinstance(exc, ExperimentError):
             raise
@@ -604,6 +612,14 @@ def _gigatime_scores(artifact, path, source, source_header, mask, mask_header, i
         artifact["row_count"] = len(seen)
     if type(artifact.get("row_count")) is not int or artifact["row_count"] != len(seen):
         raise ExperimentError("GigaTIME cell score row_count disagrees with its table")
+
+
+@contextmanager
+def _gigatime_error_context(tissue, artifact):
+    try:
+        yield
+    except (ExperimentError, OSError, ValueError) as exc:
+        raise ExperimentError(f"Tissue '{tissue['tissue_id']}', artifact '{artifact['artifact_id']}', file '{artifact.get('path', '<missing>')}': {exc}") from exc
 
 
 def _validate_gigatime_artifacts(payload, root, *, fill=False):
@@ -615,42 +631,44 @@ def _validate_gigatime_artifacts(payload, root, *, fill=False):
         image = tissue["image"]
         headers, paths = {}, {}
         for artifact in typed:
-            if (artifact.get("frame_id") != image["frame_id"] or
-                    _digest(artifact.get("image_sha256"), "GigaTIME image_sha256") != _digest(image["sha256"], "image.sha256")):
-                raise ExperimentError("GigaTIME artifact source image SHA-256/frame differs from its tissue")
-            path = _verify_asset(artifact, root, "GigaTIME artifact")
-            paths[artifact["artifact_id"]] = path
-            role = artifact["role"]
-            if role in {"gigatime_marker_image", "cell_segmentation_mask"}:
-                formats = {"ome-tiff"} if role == "gigatime_marker_image" else {"tiff", "ome-tiff"}
-                if not isinstance(artifact.get("format"), str) or artifact["format"] not in formats or path.suffix.lower() not in {".tif", ".tiff"}:
-                    raise ExperimentError("GigaTIME marker images require OME-TIFF; cell masks require TIFF/OME-TIFF")
-                if role == "gigatime_marker_image":
-                    if artifact.get("score_semantics") != GIGATIME_SCORE_SEMANTICS:
-                        raise ExperimentError("Marker image must declare uncalibrated_virtual_marker_score semantics")
-                    _gigatime_extent(artifact, image)
-                else:
-                    _text(artifact.get("mask_name"), "segmentation mask.mask_name")
-                    if artifact.get("segmentation_unit") not in ("cell", "nucleus"):
-                        raise ExperimentError("Segmentation unit must be cell or nucleus; a grid/tissue mask is not cell segmentation")
-                header = _gigatime_tiff(path, artifact, image)
-                headers[artifact["artifact_id"]] = header
-                if role == "cell_segmentation_mask":
-                    for key in ("width", "height"):
-                        if fill and key not in artifact:
-                            artifact[key] = header[key]
-                        if type(artifact.get(key)) is not int or artifact[key] != header[key]:
-                            raise ExperimentError("Declared cell mask dimensions disagree with its TIFF header")
+            with _gigatime_error_context(tissue, artifact):
+                if (artifact.get("frame_id") != image["frame_id"] or
+                        _digest(artifact.get("image_sha256"), "GigaTIME image_sha256") != _digest(image["sha256"], "image.sha256")):
+                    raise ExperimentError("GigaTIME artifact source image SHA-256/frame differs from its tissue")
+                path = _verify_asset(artifact, root, "GigaTIME artifact")
+                paths[artifact["artifact_id"]] = path
+                role = artifact["role"]
+                if role in {"gigatime_marker_image", "cell_segmentation_mask"}:
+                    formats = {"ome-tiff"} if role == "gigatime_marker_image" else {"tiff", "ome-tiff"}
+                    if not isinstance(artifact.get("format"), str) or artifact["format"] not in formats or path.suffix.lower() not in {".tif", ".tiff"}:
+                        raise ExperimentError("GigaTIME marker images require OME-TIFF; cell masks require TIFF/OME-TIFF")
+                    if role == "gigatime_marker_image":
+                        if artifact.get("score_semantics") != GIGATIME_SCORE_SEMANTICS:
+                            raise ExperimentError("Marker image must declare uncalibrated_virtual_marker_score semantics")
+                        _gigatime_extent(artifact, image)
+                    else:
+                        _text(artifact.get("mask_name"), "segmentation mask.mask_name")
+                        if artifact.get("segmentation_unit") not in ("cell", "nucleus"):
+                            raise ExperimentError("Segmentation unit must be cell or nucleus; a grid/tissue mask is not cell segmentation")
+                    header = _gigatime_tiff(path, artifact, image)
+                    headers[artifact["artifact_id"]] = header
+                    if role == "cell_segmentation_mask":
+                        for key in ("width", "height"):
+                            if fill and key not in artifact:
+                                artifact[key] = header[key]
+                            if type(artifact.get(key)) is not int or artifact[key] != header[key]:
+                                raise ExperimentError("Declared cell mask dimensions disagree with its TIFF header")
         for artifact in typed:
             if artifact["role"] != "gigatime_cell_scores":
                 continue
-            source_id = _text(artifact.get("source_artifact_id"), "cell scores.source_artifact_id")
-            mask_id = _text(artifact.get("mask_artifact_id"), "cell scores.mask_artifact_id")
-            if (source_id not in artifacts or artifacts[source_id]["role"] != "gigatime_marker_image" or
-                    mask_id not in artifacts or artifacts[mask_id]["role"] != "cell_segmentation_mask"):
-                raise ExperimentError("Cell scores require explicit marker-image and cell-segmentation-mask artifact links in the same tissue")
-            _gigatime_scores(artifact, paths[artifact["artifact_id"]], artifacts[source_id], headers[source_id],
-                             artifacts[mask_id], headers[mask_id], image, fill)
+            with _gigatime_error_context(tissue, artifact):
+                source_id = _text(artifact.get("source_artifact_id"), "cell scores.source_artifact_id")
+                mask_id = _text(artifact.get("mask_artifact_id"), "cell scores.mask_artifact_id")
+                if (source_id not in artifacts or artifacts[source_id]["role"] != "gigatime_marker_image" or
+                        mask_id not in artifacts or artifacts[mask_id]["role"] != "cell_segmentation_mask"):
+                    raise ExperimentError("Cell scores require explicit marker-image and cell-segmentation-mask artifact links in the same tissue")
+                _gigatime_scores(artifact, paths[artifact["artifact_id"]], artifacts[source_id], headers[source_id],
+                                 artifacts[mask_id], headers[mask_id], image, fill)
 
 
 def validate_experiment(path: Path) -> dict:
@@ -704,7 +722,11 @@ def validate_experiment(path: Path) -> dict:
                 raise ExperimentError(f"Duplicate artifact_id: {aid}")
             artifact_ids.add(aid)
             _text(artifact.get("role"), f"{label}.artifact.role")
-            _verify_asset(artifact, path.parent, f"{label}.artifact {aid}")
+            if artifact["role"] in GIGATIME_ROLES:
+                with _gigatime_error_context(tissue, artifact):
+                    _verify_asset(artifact, path.parent, f"{label}.artifact {aid}")
+            else:
+                _verify_asset(artifact, path.parent, f"{label}.artifact {aid}")
         for feature in features:
             _mapping(feature, f"{label}.feature")
             fid = _identifier(feature.get("feature_set_id"), f"{label}.feature_set_id")
@@ -735,7 +757,7 @@ def _read_json(path):
         raise ExperimentError(f"Cannot read JSON {path}: {exc}") from exc
 
 
-def atomic_json(path: Path, payload: dict):
+def atomic_json(path: Path, payload: dict, *, overwrite=True):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -746,7 +768,12 @@ def atomic_json(path: Path, payload: dict):
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        if overwrite:
+            os.replace(temporary, path)
+        else:
+            # A same-directory hard link publishes a complete new index without
+            # replacing a file created concurrently after the initial check.
+            os.link(temporary, path)
     finally:
         if temporary and temporary.exists():
             temporary.unlink()
@@ -768,6 +795,9 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
     for index, tissue in enumerate(tissues):
         label = f"tissues[{index}]"
         _mapping(tissue, label)
+        supplied_image = _mapping(tissue.get("image"), f"{label}.image")
+        if supplied_image.get("coordinate_convention", COORDINATE_CONVENTION) != COORDINATE_CONVENTION:
+            raise ExperimentError(f"{label}.image.coordinate_convention conflicts with the native image pixel-centre contract; transform coordinates explicitly")
         image, image_path = _asset(tissue.get("image"), base_dir, output, f"{label}.image")
         actual_shape = image_shape(image_path)
         for key, observed in zip(("width", "height"), actual_shape):
@@ -785,7 +815,8 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
         feature_ids = set()
         image.setdefault("frame_id", f"{tid}:image")
         image["coordinate_convention"] = COORDINATE_CONVENTION
-        result = dict(tissue_id=tid, name=name, image=image, artifacts=[], feature_sets=[])
+        result = copy.deepcopy(tissue)
+        result.update(tissue_id=tid, name=name, image=image, artifacts=[], feature_sets=[])
         for key in ("specimen_id", "provenance"):
             if key in tissue:
                 result[key] = tissue[key]
@@ -794,7 +825,12 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
         if "provenance" in result:
             _mapping(result["provenance"], f"{label}.provenance")
         for ai, artifact in enumerate(_array(tissue.get("artifacts", []), f"{label}.artifacts")):
-            item, _ = _asset(artifact, base_dir, output, f"{label}.artifacts[{ai}]")
+            if isinstance(artifact, dict) and artifact.get("role") in GIGATIME_ROLES:
+                context = dict(artifact, artifact_id=artifact.get("artifact_id", f"{tid}:artifact-{ai + 1}"))
+                with _gigatime_error_context(result, context):
+                    item, _ = _asset(artifact, base_dir, output, f"{label}.artifacts[{ai}]")
+            else:
+                item, _ = _asset(artifact, base_dir, output, f"{label}.artifacts[{ai}]")
             item.setdefault("artifact_id", f"{tid}:artifact-{ai + 1}")
             item.setdefault("frame_id", image["frame_id"])
             result["artifacts"].append(item)
@@ -815,7 +851,8 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
             result["feature_sets"].append(item)
         normalized.append(result)
     identity = "\n".join(sorted(f"{t['tissue_id']}:{t['image']['sha256']}" for t in normalized))
-    payload = dict(schema=SCHEMA, schema_version=VERSION,
+    payload = copy.deepcopy(spec)
+    payload.update(schema=SCHEMA, schema_version=VERSION,
                    experiment_id=spec.get("experiment_id", "experiment-" + hashlib.sha256(identity.encode()).hexdigest()[:24]),
                    name=spec.get("name", "CellPhenotyper experiment"),
                    settings=spec.get("settings", {}), provenance=spec.get("provenance", {}), tissues=normalized)
@@ -835,7 +872,7 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
             _text(artifact.get("role"), "artifact.role")
     _validate_spatial_artifacts(payload, output.parent)
     _validate_gigatime_artifacts(payload, output.parent, fill=True)
-    atomic_json(output, payload)
+    atomic_json(output, payload, overwrite=overwrite)
     return payload
 
 
@@ -948,9 +985,9 @@ def try_export_run(run: Path, *, name="CellPhenotyper experiment") -> dict:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Create a wsiTools-ready experiment from existing CellPhenotyper images and cached features. Never starts inference.")
+    parser = argparse.ArgumentParser(description="Create or validate a wsiTools experiment from existing images, marker outputs and feature caches. Never starts inference.")
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--run", action="append", type=Path, help="Existing output root; repeat to combine runs")
+    source.add_argument("--run", action="append", type=Path, help="Existing complete Virchow2 output root; repeat to combine runs")
     source.add_argument("--spec", type=Path, help="Explicit JSON asset specification; paths are relative to this file")
     source.add_argument("--validate", type=Path, help="Verify an existing experiment and every asset/hash/feature row")
     parser.add_argument("--output", type=Path, help="Destination experiment.cellphenotyper.json")
@@ -973,7 +1010,8 @@ def main(argv=None):
         print(f"Ready to open in wsiTools: {args.output}\n{payload['name']} — {len(payload['tissues'])} tissues. Images and feature caches remain external; no inference was started.")
         return 0
     except (ExperimentError, OSError, ValueError) as exc:
-        print(f"Cannot export experiment: {exc}", file=sys.stderr)
+        action = "validate" if args.validate else "export"
+        print(f"Cannot {action} experiment: {exc}", file=sys.stderr)
         return 2
 
 
