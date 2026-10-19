@@ -22,12 +22,14 @@ from quantify_gigatime_intensity import LazyImageReader, LazyMaskReader
 class NuclearAlignmentScore:
     def __init__(self, shape_yx: tuple[int, int], max_samples: int = 500_000):
         self.shape = tuple(int(v) for v in shape_yx)
-        self.stride = max(1, int(math.ceil(math.sqrt(
+        self.stride = min(4, max(1, int(math.ceil(math.sqrt(
             self.shape[0] * self.shape[1] / max(1, max_samples)
-        ))))
+        )))))
         self.pos = np.zeros(256, dtype=np.int64)
         self.neg = np.zeros(256, dtype=np.int64)
         self.edge_sum = self.edge_n = self.core_sum = self.core_n = 0.0
+        self.inner_sum = self.inner_n = self.outer_sum = self.outer_n = 0.0
+        self.sampled_windows = 0
 
     def add(self, dapi: np.ndarray, labels: np.ndarray, y0: int, x0: int) -> None:
         if dapi.shape != labels.shape:
@@ -45,6 +47,7 @@ class NuclearAlignmentScore:
         nucleus = np.asarray(labels > 0)
         if not values.size:
             return
+        self.sampled_windows += 1
         # Only compare nuclei with the nearby extranuclear compartment. Blank
         # slide background would otherwise make a non-nuclear DAPI map look good.
         nearby = binary_dilation(nucleus, iterations=max(1, int(math.ceil(8 / self.stride)))) & ~nucleus
@@ -52,6 +55,15 @@ class NuclearAlignmentScore:
         bins = np.clip(np.floor(values * 255 + 0.5), 0, 255).astype(np.uint8)
         self.pos += np.bincount(bins[nucleus & finite], minlength=256)
         self.neg += np.bincount(bins[nearby & finite], minlength=256)
+
+        # A diffuse bright region can have good pixel AUC while crossing many
+        # nuclei. The narrow inside/outside nuclear shells detect that failure.
+        inside = nucleus & ~binary_erosion(nucleus, iterations=2) & finite
+        outside = binary_dilation(nucleus, iterations=2) & ~nucleus & finite
+        self.inner_sum += float(values[inside].sum())
+        self.inner_n += int(inside.sum())
+        self.outer_sum += float(values[outside].sum())
+        self.outer_n += int(outside.sum())
 
         edge_width = max(8, int(round(8 / 0.25)))  # 8 µm at model resolution
         edge = ((yy[:, None] < edge_width) | (xx[None, :] < edge_width)
@@ -65,16 +77,19 @@ class NuclearAlignmentScore:
         self.core_n += int(core_nuclei.sum())
 
     def report(self, *, min_auc: float = 0.70, min_dice: float = 0.35,
-               min_edge_ratio: float = 0.65) -> dict:
+               min_edge_ratio: float = 0.65,
+               min_boundary_contrast: float = 0.05) -> dict:
         p, n = int(self.pos.sum()), int(self.neg.sum())
         result = {
             "schema_version": 1,
             "scope": "virtual_DAPI_vs_HE_derived_nuclear_mask",
             "sampling_stride_px": self.stride,
+            "sampled_windows": self.sampled_windows,
             "nuclear_pixels": p,
             "nearby_extranuclear_pixels": n,
             "thresholds": {"min_auc": min_auc, "min_prevalence_matched_dice": min_dice,
-                           "min_edge_to_core_nuclear_mean_ratio": min_edge_ratio},
+                           "min_edge_to_core_nuclear_mean_ratio": min_edge_ratio,
+                           "min_nuclear_boundary_contrast": min_boundary_contrast},
             "interpretation_limit": (
                 "Agreement with H&E-derived nuclei does not establish measured DAPI accuracy. "
                 "A poor StarDist mask can also lower this score. Inspect the overlay and mask."
@@ -82,7 +97,8 @@ class NuclearAlignmentScore:
         }
         if p < 500 or n < 500:
             result.update(status="insufficient", alignment_score=None, auc=None,
-                          prevalence_matched_dice=None, edge_to_core_nuclear_mean_ratio=None)
+                          prevalence_matched_dice=None, edge_to_core_nuclear_mean_ratio=None,
+                          nuclear_boundary_contrast=None)
             return result
         below = np.cumsum(self.neg) - self.neg
         auc = float(np.sum(self.pos * (below + 0.5 * self.neg)) / (p * n))
@@ -93,8 +109,12 @@ class NuclearAlignmentScore:
         dice = float(2 * tp / (p + predicted))
         edge_ratio = (float((self.edge_sum / self.edge_n) / (self.core_sum / self.core_n))
                       if self.edge_n >= 100 and self.core_n >= 500 and self.core_sum > 0 else None)
-        alignment_score = float(np.clip(0.7 * (2 * auc - 1) + 0.3 * dice, 0, 1))
-        alignment_pass = auc >= min_auc and dice >= min_dice
+        boundary_contrast = (float(self.inner_sum / self.inner_n - self.outer_sum / self.outer_n)
+                             if self.inner_n >= 50 and self.outer_n >= 50 else None)
+        boundary_skill = float(np.clip(boundary_contrast / 0.20, 0, 1)) if boundary_contrast is not None else 0.0
+        alignment_score = float(np.clip(0.5 * (2 * auc - 1) + 0.25 * dice + 0.25 * boundary_skill, 0, 1))
+        alignment_pass = (auc >= min_auc and dice >= min_dice and
+                          boundary_contrast is not None and boundary_contrast >= min_boundary_contrast)
         border_pass = edge_ratio is None or edge_ratio >= min_edge_ratio
         result.update(
             status="pass" if alignment_pass and border_pass else "fail",
@@ -105,6 +125,9 @@ class NuclearAlignmentScore:
             auc=auc,
             prevalence_matched_dice=dice,
             prevalence_matched_threshold=threshold / 255.0,
+            nuclear_boundary_contrast=boundary_contrast,
+            nuclear_inner_boundary_pixels=int(self.inner_n),
+            nearby_outer_boundary_pixels=int(self.outer_n),
             edge_to_core_nuclear_mean_ratio=edge_ratio,
             edge_nuclear_pixels=int(self.edge_n),
             core_nuclear_pixels=int(self.core_n),
@@ -114,7 +137,8 @@ class NuclearAlignmentScore:
 
 def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int = 1024,
            min_auc: float = 0.70, min_dice: float = 0.35,
-           min_edge_ratio: float = 0.65) -> dict:
+           min_edge_ratio: float = 0.65,
+           min_boundary_contrast: float = 0.05) -> dict:
     with LazyImageReader(image_path) as image, LazyMaskReader(nuclei_path) as nuclei:
         if "DAPI" not in image.channel_names:
             raise ValueError("GigaTIME output must include DAPI for nuclear QC")
@@ -131,9 +155,14 @@ def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int 
         scorer = NuclearAlignmentScore(shape)
         preview_region = None
         preview_nuclei = -1
-        for y0 in range(0, shape[0], block_size):
+        y_starts = list(range(0, shape[0], block_size))
+        x_starts = list(range(0, shape[1], block_size))
+        if len(y_starts) * len(x_starts) > 64:
+            y_starts = [y_starts[i] for i in sorted(set(np.linspace(0, len(y_starts)-1, 8, dtype=int)))]
+            x_starts = [x_starts[i] for i in sorted(set(np.linspace(0, len(x_starts)-1, 8, dtype=int)))]
+        for y0 in y_starts:
             y1 = min(shape[0], y0 + block_size)
-            for x0 in range(0, shape[1], block_size):
+            for x0 in x_starts:
                 x1 = min(shape[1], x0 + block_size)
                 yy = np.arange(y0 + (-y0) % scorer.stride, y1, scorer.stride, dtype=np.int64)
                 xx = np.arange(x0 + (-x0) % scorer.stride, x1, scorer.stride, dtype=np.int64)
@@ -162,7 +191,9 @@ def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int 
                     preview_nuclei = int(np.count_nonzero(labels))
                     preview_region = (y0, y1, x0, x1)
         result = scorer.report(min_auc=min_auc, min_dice=min_dice,
-                               min_edge_ratio=min_edge_ratio)
+                               min_edge_ratio=min_edge_ratio,
+                               min_boundary_contrast=min_boundary_contrast)
+        result["sampled_stratified_windows"] = len(y_starts) * len(x_starts)
         if preview_region is not None:
             y0, y1, x0, x1 = preview_region
             dapi = np.clip(image.read_block(y0, y1, x0, x1)[dapi_index], 0, 1)
@@ -193,11 +224,13 @@ def main() -> None:
     parser.add_argument("--min-auc", type=float, default=0.70)
     parser.add_argument("--min-dice", type=float, default=0.35)
     parser.add_argument("--min-edge-ratio", type=float, default=0.65)
+    parser.add_argument("--min-boundary-contrast", type=float, default=0.05)
     parser.add_argument("--mode", choices=("warn", "fail"), default="fail")
     args = parser.parse_args()
     result = assess(args.image, args.nuclei, args.output, block_size=args.block_size,
                     min_auc=args.min_auc, min_dice=args.min_dice,
-                    min_edge_ratio=args.min_edge_ratio)
+                    min_edge_ratio=args.min_edge_ratio,
+                    min_boundary_contrast=args.min_boundary_contrast)
     print(json.dumps(result, indent=2))
     if args.mode == "fail" and result["status"] != "pass":
         raise SystemExit("GigaTIME nuclear alignment QC did not pass; do not use cell markers")

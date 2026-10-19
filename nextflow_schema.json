@@ -191,6 +191,7 @@
         "gigatime_nuclear_qc_min_auc": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.7},
         "gigatime_nuclear_qc_min_dice": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.35},
         "gigatime_nuclear_qc_min_edge_ratio": {"type": "number", "minimum": 0, "default": 0.65},
+        "gigatime_nuclear_qc_min_boundary_contrast": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
         "marker_quantification_enable": {"type": "boolean", "default": true},
         "gigatime_kodama_enable": {"type": "boolean", "default": true}
       }

@@ -169,10 +169,7 @@ def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
       $KERAS_HOME/models/StarDist2D/<model_name>
     """
     candidates: List[Tuple[str, str]] = []
-    keras_home = (os.environ.get("KERAS_HOME") or "").strip()
-    if not keras_home:
-        return candidates
-
+    keras_home = (os.environ.get("KERAS_HOME") or str(Path.home() / ".keras")).strip()
     root = Path(keras_home) / "models" / "StarDist2D"
     names = [model_name]
     if not model_name.startswith("python_"):
@@ -180,18 +177,17 @@ def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
 
     for name in names:
         model_dir = root / name
-        if model_dir.is_dir():
-            candidates.append((str(root), name))
+        # Some offline caches preserve the release zip and unpack its contents
+        # into a sibling `*_extracted` directory. A directory with only a zip
+        # is not a loadable StarDist model and must not trigger a download.
+        for candidate in (model_dir, model_dir / f"{name}_extracted"):
+            if (candidate / "config.json").is_file() and (candidate / "weights_best.h5").is_file():
+                candidates.append((str(candidate.parent), candidate.name))
     return candidates
 
 
 def stardist_model_dir(model_name: str) -> Optional[Path]:
     candidates = _local_stardist_candidates(model_name)
-    default_root = Path.home() / ".keras" / "models" / "StarDist2D"
-    for name in (model_name, f"python_{model_name}"):
-        candidate = default_root / name
-        if candidate.is_dir() and (str(default_root), name) not in candidates:
-            candidates.append((str(default_root), name))
     for basedir, name in candidates:
         candidate = Path(basedir) / name
         if candidate.is_dir():
@@ -232,6 +228,12 @@ def load_stardist_model_filtered(model_name: str):
             return StarDist2D(None, name=name, basedir=basedir)
         except Exception as exc:
             local_errors.append(f"{basedir}/{name}: {exc}")
+
+    if os.environ.get("STARDIST_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            f"Offline StarDist model {model_name!r} could not be loaded: "
+            + ("; ".join(local_errors) if local_errors else "no complete local checkpoint")
+        )
 
     # Fallback to StarDist pretrained resolver (may download if cache is incomplete).
     buf_out, buf_err = io.StringIO(), io.StringIO()

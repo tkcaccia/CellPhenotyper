@@ -269,6 +269,7 @@ gigatime_nuclear_qc_mode: fail  # fail | warn; independent CPU stage after infer
 gigatime_nuclear_qc_min_auc: 0.70
 gigatime_nuclear_qc_min_dice: 0.35
 gigatime_nuclear_qc_min_edge_ratio: 0.65
+gigatime_nuclear_qc_min_boundary_contrast: 0.05
 gigatime_max_output_gib: 8.0
 gigatime_disk_buffer_threshold_gib: 4.0
 marker_quantification_enable: true

@@ -25,6 +25,7 @@ process RUN_GIGATIME_NUCLEAR_QC {
       --min-auc ${params.gigatime_nuclear_qc_min_auc} \\
       --min-dice ${params.gigatime_nuclear_qc_min_dice} \\
       --min-edge-ratio ${params.gigatime_nuclear_qc_min_edge_ratio} \\
+      --min-boundary-contrast ${params.gigatime_nuclear_qc_min_boundary_contrast} \\
       --mode ${params.gigatime_nuclear_qc_mode}
     """
 }
