@@ -1875,6 +1875,7 @@ def build_quantifiers(
     target_shape: tuple[int, int],
     channel_names: list[str],
     block_size: int,
+    cell_mask_path: str = "",
 ) -> list[TileQuantifier]:
     quantifiers: list[TileQuantifier] = []
     if nuclei_mask_path:
@@ -1891,6 +1892,16 @@ def build_quantifiers(
             TileQuantifier(
                 mask_name="cyto",
                 mask_path=cyto_mask_path,
+                target_shape=target_shape,
+                channel_names=channel_names,
+                block_size=block_size,
+            )
+        )
+    if cell_mask_path:
+        quantifiers.append(
+            TileQuantifier(
+                mask_name="cell",
+                mask_path=cell_mask_path,
                 target_shape=target_shape,
                 channel_names=channel_names,
                 block_size=block_size,
@@ -2872,6 +2883,7 @@ def parse_args():
                     help="Persist per-tile JPEGs in addition to the reconstructed whole-image JPEGs.")
     ap.add_argument("--nuclei-mask", default="", help="Optional nuclei label mask used for on-the-fly quantification.")
     ap.add_argument("--cyto-mask", default="", help="Optional cytoplasm label mask used for on-the-fly quantification.")
+    ap.add_argument("--cell-mask", default="", help="Optional whole-cell label mask used for on-the-fly quantification.")
     ap.add_argument("--quant-dir", default="", help="Optional output directory for integrated marker quantification CSV/JSON files.")
     ap.add_argument("--qc-tissue-mask", default="",
                     help="Optional GrandQC clean-tissue crop mask used only for marker-score tissue/background QC.")
@@ -3005,7 +3017,7 @@ def main():
     image_meta["value_semantics"] = dict(GIGATIME_VALUE_SEMANTICS)
     image_meta["quantification_channels"] = (
         list(CHANNEL_NAMES)
-        if str(args.quant_dir or "").strip() and (str(args.nuclei_mask or "").strip() or str(args.cyto_mask or "").strip())
+        if str(args.quant_dir or "").strip() and (str(args.nuclei_mask or "").strip() or str(args.cyto_mask or "").strip() or str(args.cell_mask or "").strip())
         else []
     )
     image_meta["output_format"] = args.output_format
@@ -3072,6 +3084,7 @@ def main():
     quantifiers = build_quantifiers(
         nuclei_mask_path=str(args.nuclei_mask or ""),
         cyto_mask_path=str(args.cyto_mask or ""),
+        cell_mask_path=str(args.cell_mask or ""),
         target_shape=target_shape,
         channel_names=list(CHANNEL_NAMES),
         block_size=max(512, int(args.block_size)),

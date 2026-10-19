@@ -124,3 +124,21 @@ def test_integrated_gigatime_quantifier_uses_compact_cell_ids(tmp_path: Path):
         assert [int(row["area_px"]) for row in records] == [1, 1]
     finally:
         quantifier.close()
+
+
+def test_integrated_quantifier_keeps_whole_cell_compartment_distinct():
+    source = Path(__file__).resolve().parents[1] / "bin" / "run_gigatime_on_crop.py"
+    tree = ast.parse(source.read_text())
+    node = next(node for node in tree.body if getattr(node, "name", None) == "build_quantifiers")
+
+    class Stub:
+        def __init__(self, **kwargs):
+            self.mask_name = kwargs["mask_name"]
+
+    namespace = {"TileQuantifier": Stub}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
+    result = namespace["build_quantifiers"](
+        nuclei_mask_path="", cyto_mask_path="", cell_mask_path="whole_cell.tif",
+        target_shape=(4, 4), channel_names=["CD68"], block_size=4,
+    )
+    assert [item.mask_name for item in result] == ["cell"]
