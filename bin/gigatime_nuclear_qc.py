@@ -120,6 +120,14 @@ def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int 
             raise ValueError("GigaTIME output must include DAPI for nuclear QC")
         dapi_index = image.channel_names.index("DAPI")
         shape = (image.height, image.width)
+        meta = image.storage_meta
+        if not meta or tuple(meta.get("inference_shape_yx", ())) != shape:
+            raise ValueError("GigaTIME inference-grid metadata are missing or inconsistent")
+        if abs(float(meta.get("effective_mpp", 0.0)) - 0.25) > 1.0e-6:
+            raise ValueError("GigaTIME nuclear QC requires the calibrated 0.25 µm/pixel grid")
+        source_shape = tuple(meta.get("original_shape_yx", ()))
+        if (nuclei.height, nuclei.width) not in (shape, source_shape):
+            raise ValueError("StarDist mask shape does not match the source or inference grid")
         scorer = NuclearAlignmentScore(shape)
         preview_region = None
         preview_nuclei = -1

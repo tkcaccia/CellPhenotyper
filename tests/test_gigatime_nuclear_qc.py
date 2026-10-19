@@ -60,6 +60,9 @@ class NuclearQCTest(unittest.TestCase):
             arr = zarr.open(str(store), mode="w", shape=(1, 96, 96), dtype="uint8")
             arr[0] = np.where(labels > 0, 230, 10).astype(np.uint8)
             (output / "gigatime_channels.json").write_text('["DAPI"]')
+            (output / "gigatime_metadata.json").write_text(
+                '{"original_shape_yx":[96,96],"inference_shape_yx":[96,96],"effective_mpp":0.25}'
+            )
             mask = base / "stardist.tif"
             tifffile.imwrite(mask, labels)
             result = qc.assess(str(output), str(mask), str(base / "qc.json"), block_size=32)
