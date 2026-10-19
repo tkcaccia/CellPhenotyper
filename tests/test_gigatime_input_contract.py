@@ -2,7 +2,9 @@
 
 import importlib.util
 import argparse
+import json
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -96,3 +98,43 @@ def test_auto_parameters_lock_model_geometry_and_preserve_requested_record():
     args.repo_revision = "unverified"
     with pytest.raises(ValueError, match="pinned official CNN"):
         gigatime.apply_auto_parameters(args)
+
+
+def test_cell_quantification_requires_persisted_native_dapi_and_nuclear_mask():
+    pytest.importorskip("torch")
+    gigatime = load("run_gigatime_quant_qc_contract", "run_gigatime_on_crop.py")
+    args = argparse.Namespace(quant_dir="cell_scores", nuclei_mask="stardist.tif",
+                              output_format="none")
+    with pytest.raises(ValueError, match="persisted native DAPI"):
+        gigatime.validate_quantification_qc_contract(args, ["DAPI"])
+    args.output_format = "zarr"
+    with pytest.raises(ValueError, match="persisted native DAPI"):
+        gigatime.validate_quantification_qc_contract(args, ["CK"])
+    args.nuclei_mask = ""
+    with pytest.raises(ValueError, match="independent H&E nuclei mask"):
+        gigatime.validate_quantification_qc_contract(args, ["DAPI"])
+    args.nuclei_mask = "stardist.tif"
+    gigatime.validate_quantification_qc_contract(args, ["DAPI"])
+    args.output_format = "ome_tiff"
+    args.compression = "jpeg"
+    with pytest.raises(ValueError, match="lossless native DAPI"):
+        gigatime.validate_quantification_qc_contract(args, ["DAPI"])
+    args.compression = "deflate"
+    gigatime.validate_quantification_qc_contract(args, ["DAPI"])
+
+
+def test_standalone_quantification_remains_unvalidated_when_nuclear_qc_fails(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    gigatime = load("run_gigatime_quant_qc_gate", "run_gigatime_on_crop.py")
+    summary = tmp_path / "sample_gigatime_integrated_quantification_summary.json"
+    summary.write_text(json.dumps({"technical_qc_passed": False}))
+    module = types.ModuleType("gigatime_nuclear_qc")
+    module.assess = lambda image, nuclei, output: {"status": "fail"}
+    monkeypatch.setitem(sys.modules, "gigatime_nuclear_qc", module)
+    args = argparse.Namespace(outdir=str(tmp_path), nuclei_mask="independent_mask.tif")
+    with pytest.raises(RuntimeError, match="must not be classified"):
+        gigatime.run_quantification_nuclear_qc(args, tmp_path / "image.zarr", "sample", tmp_path)
+    assert json.loads(summary.read_text())["technical_qc_passed"] is False
+    module.assess = lambda image, nuclei, output: {"status": "pass"}
+    gigatime.run_quantification_nuclear_qc(args, tmp_path / "image.zarr", "sample", tmp_path)
+    assert json.loads(summary.read_text())["technical_qc_passed"] is True

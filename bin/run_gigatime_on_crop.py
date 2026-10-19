@@ -1915,6 +1915,8 @@ def finalize_aux_outputs(
                     {
                         "sample_id": sample_id,
                         "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
+                        "technical_qc_passed": False,
+                        "technical_qc_report": None,
                         "summaries": summaries,
                     },
                     indent=2,
@@ -2914,6 +2916,46 @@ def apply_auto_parameters(args: argparse.Namespace) -> dict:
     }
 
 
+def validate_quantification_qc_contract(args: argparse.Namespace,
+                                        output_channel_names: list[str]) -> None:
+    """Do not emit usable per-cell scores without an auditable native DAPI."""
+    if not str(args.quant_dir or "").strip():
+        return
+    if not str(args.nuclei_mask or "").strip():
+        raise ValueError("GigaTIME cell quantification requires an independent H&E nuclei mask for QC")
+    if args.output_format == "none" or "DAPI" not in output_channel_names:
+        raise ValueError(
+            "GigaTIME cell quantification requires a persisted native DAPI channel "
+            "(use --output-format zarr or ome_tiff and include DAPI in --output-channels)"
+        )
+    if args.output_format == "ome_tiff" and str(getattr(args, "compression", "")).lower() == "jpeg":
+        raise ValueError(
+            "GigaTIME cell quantification requires lossless native DAPI for nuclear QC; "
+            "use zarr or losslessly compressed OME-TIFF, not JPEG-compressed OME-TIFF"
+        )
+
+
+def run_quantification_nuclear_qc(args: argparse.Namespace, prediction_path: Path,
+                                  sample_id: str, quant_dir: Path | None) -> None:
+    if quant_dir is None:
+        return
+    from gigatime_nuclear_qc import assess
+
+    report_path = Path(args.outdir) / f"{sample_id}_gigatime_nuclear_qc.json"
+    report = assess(str(prediction_path), str(args.nuclei_mask), str(report_path))
+    summary_path = quant_dir / f"{sample_id}_gigatime_integrated_quantification_summary.json"
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["technical_qc_passed"] = report["status"] == "pass"
+        summary["technical_qc_report"] = str(report_path)
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if report["status"] != "pass":
+        raise RuntimeError(
+            "GigaTIME virtual DAPI failed independent nuclear/shadow QC; "
+            "per-cell marker tables are unvalidated and must not be classified"
+        )
+
+
 def run_output_seam_qc(
     args: argparse.Namespace,
     prediction_path: Path,
@@ -2970,6 +3012,7 @@ def main():
     )
     output_channel_indices, output_channel_names = resolve_output_channels(args.output_channels, default_all=True)
     jpg_channel_indices, jpg_channel_names = resolve_output_channels(args.jpg_markers, default_all=False)
+    validate_quantification_qc_contract(args, output_channel_names)
     sample_id = Path(args.outdir).name.replace("gigatime_", "", 1)
 
     if hasattr(torch, "set_float32_matmul_precision"):
@@ -3206,6 +3249,7 @@ def main():
         )
         if args.output_format != "none":
             run_output_seam_qc(args, out_path, image_meta, output_channel_names)
+        run_quantification_nuclear_qc(args, out_path, sample_id, quant_dir)
         return
 
     disk_backed = float(image_meta["estimated_prediction_gib"]) > float(args.disk_buffer_threshold_gib)
@@ -3253,6 +3297,9 @@ def main():
         Path(args.outdir) / "gigatime_probs.ome.tif",
         image_meta,
         output_channel_names,
+    )
+    run_quantification_nuclear_qc(
+        args, Path(args.outdir) / "gigatime_probs.ome.tif", sample_id, quant_dir
     )
 
 

@@ -27,30 +27,80 @@ running the production code. One passing patch does not establish a cohort
 pass rate, independent-patient accuracy, or biological validity of other
 virtual channels.
 
-The separately calibrated MoNuSAC prostate ROI
-`TCGA-G9-6356-01Z-00-DX1_6` still fails StarDist nuclear QC after the
+The previously calibrated MoNuSAC prostate ROI
+`TCGA-G9-6356-01Z-00-DX1_6` failed StarDist nuclear QC after the
 overlap-denominator correction: nearby-nucleus AUC 0.668 and boundary contrast
-0.016 (70 detected nuclei).
-Macenko and tissue-Reinhard color transfers to five released reference H&E
-patches produced AUC 0.625 and 0.586 on that same ROI; neither passed. The
-public [paired control and failure comparison](https://tkcaccia.github.io/Tambua-Analysis/#dapi-qc)
-shows the native-grid images and exact QC reports. These observations support
-correct operation on the paired control and a failure of transfer to this
-MoNuSAC field. They do **not** identify the precise cause of the transfer
-failure. No stain transfer was enabled in production.
+0.016 (70 detected nuclei). That ROI used one of the red/blue-swapped companion
+TIFFs identified below. Macenko and tissue-Reinhard experiments on that wrong
+input also failed (AUC 0.625 and 0.586); they cannot assess whether stain
+normalization would help the corrected scanner-RGB image. The public
+[paired control and failure comparison](https://tkcaccia.github.io/Tambua-Analysis/#dapi-qc)
+shows those historical images and reports. No stain transfer was enabled in
+production.
+
+### Source scale, color format and compression audit
+
+We compared all **120** MoNuSAC staged H&E inputs with both their source file
+and the scanner SVS image. All scanner headers record 40× acquisition and
+0.19448–0.2527 µm/pixel; staged OME metadata matches those values exactly.
+The pipeline's strict physical resampling then targets 0.25 µm/pixel. All
+scanner SVS images use JPEG2000 compression, which is part of the released
+source and cannot be reversed. The staged OME-TIFFs use lossless Deflate;
+there is no new lossy compression in GigaTIME input preparation.
+
+The decisive format error was **channel order**. For 116 ROIs, the companion
+TIFF is tagged RGB but is an exact red/blue swap of the canonical image
+returned from its matching scanner SVS. The original MoNuSAC preparer used
+those TIFFs as RGB and passed their wrong color order to GigaTIME. The four
+SVS-only ROIs were decoded correctly. Every staged image exactly matched the
+file selected by that preparer, which is why a simple staging/source equality
+check missed the error. The corrected preparer now uses the scanner SVS for
+all cases, checks any companion TIFF against it, records the discovered
+channel order and refuses a difference other than an exact swap. This is a
+technical correction to the input, not a trained color adjustment.
+
+For `TCGA-2Z-A9JG-01Z-00-DX1_4`, the scanner records 40× and
+0.2524 µm/pixel. Its source companion TIFF is 8-bit RGBA with an opaque
+alpha channel; its red and blue channels are exactly reversed relative to the
+scanner SVS. The previous staged RGB image therefore reproduced the wrong
+order. A CPU replay of the pinned model on that input, with corrected overlap
+weighting, gave only **0.508** nearby expert-nucleus AUC, with all nine local
+sectors below the provisional 0.60 threshold. The earlier dark outer border
+was no longer evident, but the image still failed because nuclear signal was
+misplaced.
+
+A second **CPU-only** replay used canonical scanner RGB with the same pinned
+model, 0.25 µm/pixel grid, 20 patch positions and expert mask. Native DAPI
+nearby-nucleus AUC improved from 0.508 to **0.828**. Every one of the nine
+local AUCs rose above 0.785, and the edge/core nuclear mean ratio changed
+from 2.059 to **1.012**. Visual comparison shows nuclei better represented
+and no evident dark outer shadow. This supports the RGB swap as a major
+cause of the observed failure. An exploratory evaluation from the saved 8-bit
+display PNG reports boundary contrast 0.038, below the provisional 0.05 gate;
+it is not a native-store production QC pass. No other virtual channel or
+cell-type accuracy was revalidated by this one-field DAPI replay.
+
+The [all-image channel-order audit](https://tkcaccia.github.io/Tambua-Analysis/assets/dapi-2z-a9jg/input_format_120_audit.json)
+and diagnostic images are published with Tambua-Analysis. The prior 120 marker
+runs lack persisted native DAPI, so their JPEG preview QC is preliminary; 117
+of 120 previews missed the provisional global AUC threshold and 117 had at
+least one failing local sector. All historical marker measurements and the
+cell classifier trained from them are invalidated by this input error. Both
+training and test marker tables must be regenerated from the corrected images
+and pass native nuclear/shadow QC before cell-type accuracy is reported.
 
 The overlap-denominator correction removes one *numerical* darkening mechanism;
 it does not guarantee shadow-free or biologically correct predictions. The
-corrected MoNuSAC image still has visible spatial shading. Its edge-to-core
-ratio of 1.148 is a global statistic over detected nuclei and cannot exclude a
-local dark region. The 120 saved MoNuSAC marker previews, and the earlier ORION
+overlap-corrected but RGB-swapped prostate ROI still had visible spatial
+shading. Its edge-to-core ratio of 1.148 is a global statistic over detected
+nuclei and cannot exclude a local dark region. The 120 saved MoNuSAC marker previews, and the earlier ORION
 gallery, were generated before the correction and still display the old border
 artifact. They have not been regenerated or accepted by the nuclear QC gate.
 On the released paired patch, a bounded CPU test of 128-pixel reflected image
 context worsened outer-24-pixel DAPI-reference AUC from 0.855 to 0.838; it was
 rejected. The [edge comparison](https://tkcaccia.github.io/Tambua-Analysis/assets/dapi-shadow-audit/report.json)
 records the exact method and scores. This test does not determine the cause of
-the MoNuSAC transfer failure.
+the previously observed MoNuSAC failure.
 
 ## Automatic inference settings and spatial shadow gate
 
@@ -83,7 +133,8 @@ for the released paired control and `fail` for the MoNuSAC ROI; its upper-right
 and middle-right regional AUCs were 0.502 and 0.562. The latter had passed the
 old global edge ratio of 1.148. No new GigaTIME inference was required for
 this comparison, and these two cases are a functional control rather than an
-independent validation cohort.
+independent validation cohort. The MoNuSAC result is confounded by its
+red/blue-swapped input and is superseded by the channel-order audit above.
 
 ## Pipeline handoff checked
 
@@ -124,6 +175,12 @@ independent validation cohort.
   changing its behavior invalidates relevant cached crop, StarDist and
   GigaTIME processes. GigaTIME now rejects a configuration with no persisted
   native store or no DAPI channel before launching inference.
+- Standalone integrated cell quantification now requires an independent H&E
+  nuclei mask and a persisted DAPI channel. The direct runner marks its
+  quantification summary `technical_qc_passed=false` until native DAPI passes
+  nuclear/shadow QC; a failure raises an error and prohibits downstream cell
+  typing. JPEG-compressed OME-TIFF cannot serve as this QC store. Zarr uses
+  lossless Zstd, while the public JPEG images are previews only.
 
 These are input-safety fixes, not evidence that virtual DAPI became accurate
 on MoNuSAC. The old 85.2% Tambua cell-typing result used pre-fix virtual
