@@ -131,6 +131,11 @@ generator refuses to overwrite an existing destination.
 
 ## Python API
 
+Use Python 3 with Pillow for PNG/JPEG/WebP headers and tifffile for TIFF headers;
+both header libraries are already listed in `requirements-dev.txt`. No model
+libraries are required for export or validation. The CPU tests use the existing
+pytest, NumPy and tifffile test dependencies.
+
 Add the repository's `bin` folder to the Python module path, then use
 `export_experiment(spec, output, base_dir=..., overwrite=False)`,
 `export_runs(run_roots, output, name=..., overwrite=False)` or

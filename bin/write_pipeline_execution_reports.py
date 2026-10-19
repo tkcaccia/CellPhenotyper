@@ -18,6 +18,8 @@ from specimen_atlas import write_specimen_atlas
 from build_model_inventory import write_inventory as write_model_inventory
 from export_experiment import try_export_run
 
+from export_experiment import try_export_run
+
 
 STAGE_DEFS = [
     {"id": "input", "folder": "01_input", "title": "Input Conversion", "expected": [".ome.tif", ".source_resolution.json", ".converted_resolution.json"]},
@@ -1063,6 +1065,13 @@ def main() -> int:
         f"- Learned-model inventory: `{model_inventory_tsv}`",
         f"- Learned-model release-ready: `{str(bool(model_inventory.get('release_ready'))).lower()}`",
         f"- Interactive experiment: `{experiment_status['status']}`; see `experiment_export_status.json`",
+        f"- Interactive experiment export: `{experiment_status['status']}` ([details](experiment_export_status.json))",
+        "",
+        "## Interactive Experiment",
+        "",
+        ("[Experiment project file](experiment.cellphenotyper.json): choose Open Project in a compatible wsiTools Desktop version."
+         if experiment_status["status"] == "available" else
+         f"Interactive export unavailable: {experiment_status.get('error', 'No complete compatible cached features.')}. No inference was started."),
         "",
         "## Stage Outputs",
         "",
@@ -1204,6 +1213,7 @@ def main() -> int:
     print(f"Specimen atlas JSON: {atlas_json_path}")
     print(f"Uncertainty register JSON: {uncertainty_json_path}")
     print(f"Uncertainty register TSV: {uncertainty_tsv_path}")
+    print(f"Interactive experiment export: {experiment_status['status']} (see experiment_export_status.json)")
     return 0
 
 

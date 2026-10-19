@@ -271,11 +271,32 @@ def test_execution_reports_include_available_experiment_link_and_status(tmp_path
         assert status["status"] == "error"
         assert "completion record" in status["error"]
         assert f'href="{FILENAME}"' not in (execution / "index.html").read_text()
+        assert f"]({FILENAME})" not in (execution / "final_report.md").read_text()
     else:
         assert validate_experiment(execution / FILENAME)["tissues"]
         assert status["status"] == "available"
         assert f'href="{FILENAME}"' in (execution / "index.html").read_text()
+        assert f"]({FILENAME})" in (execution / "final_report.md").read_text()
     assert json.loads((execution / "final_report.json").read_text())["interactive_experiment"] == status
+    assert json.loads((execution / "project_outputs.json").read_text())["interactive_experiment"] == status
+
+
+def test_execution_reports_keep_legacy_run_available_without_new_producer_dependencies(tmp_path):
+    run = tmp_path / "legacy_results"
+    result = subprocess.run([sys.executable, str(ROOT / "bin" / "write_pipeline_execution_reports.py"),
+                             "--outdir", str(run), "--run-name", "Existing UNI-2 output",
+                             "--success", "true", "--start-point", "convert", "--end-point", "uni2"],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    execution = run / "00_execution"
+    status = json.loads((execution / "experiment_export_status.json").read_text())
+    assert status["status"] == "unavailable"
+    assert status["inference_started"] is False
+    report = (execution / "final_report.md").read_text()
+    assert "Interactive export unavailable" in report
+    assert "](experiment_export_status.json)" in report
+    assert f"]({FILENAME})" not in report
+    assert not (execution / FILENAME).exists()
 
 
 def test_failed_auto_export_is_visible_without_replacing_previous_index(tmp_path):

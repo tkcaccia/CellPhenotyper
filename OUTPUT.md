@@ -119,6 +119,14 @@ These are TCGA-derived research estimates. They are not externally validated cli
 
 ## Execution Reports
 
+Execution reporting attempts to export `experiment.cellphenotyper.json` from
+existing compatible Virchow2 caches. `experiment_export_status.json` records
+availability or validation errors, and `final_report.md` links an available
+index for **Open Project** in a compatible wsiTools Desktop version. This export
+does not run inference or add a Virchow2 route to the pipeline. Existing UNI-2
+outputs remain ordinary reports; use an explicit asset specification to register
+compatible externally generated features. See the [cached experiment guide](docs/EXPERIMENT_PROJECTS.md).
+
 Important files under `00_execution/` include:
 
 - `index.html`: review-first landing page with claim ceiling, non-passing QC signals, bounded preview gallery, stage storage and slowest processes.
@@ -138,6 +146,8 @@ Important files under `00_execution/` include:
 - `project_outputs.json`
 - `final_report.md`
 - `final_report.json`
+- `experiment_export_status.json`
+- `experiment.cellphenotyper.json` when compatible caches pass validation
 
 Open `00_execution/index.html` first. It deliberately places failures, review-required signals and the evidence ceiling before attractive result images. Then use `00_execution/specimen_atlas.html` to review one specimen at a time without mixing grid-domain and cell-centred observation units. Both pages load only bounded PNG/JPEG QC assets; pyramidal WSI outputs remain links and are not decoded into browser memory.
 
