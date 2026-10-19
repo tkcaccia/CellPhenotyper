@@ -15,6 +15,35 @@ SPEC.loader.exec_module(grid)
 
 
 class UNI2GridAssignmentTest(unittest.TestCase):
+    def test_spatial_grid_geometry_uses_full_nonoverlapping_virchow2_tiles(self):
+        context, stride = grid.resolve_spatial_grid_geometry(
+            model_tile_size=224,
+            inner_square_size=90,
+            source_mpp=0.08706,
+            target_mpp=0.5,
+        )
+        self.assertEqual(context, 1286)
+        self.assertEqual(stride, context)
+        self.assertEqual(context - stride, 0)
+
+    def test_nonoverlap_lattice_is_top_left_anchored_and_covers_edges(self):
+        for length in (1, 223, 224, 225, 448, 1000):
+            centers, starts, ends = grid.nonoverlap_axis_lattice(length, 224)
+            self.assertEqual(int(starts[0]), 0)
+            self.assertEqual(int(ends[-1]), length)
+            self.assertTrue(np.all(centers < length))
+            np.testing.assert_array_equal(starts[1:], ends[:-1])
+            self.assertTrue(np.all(ends - starts <= 224))
+
+    def test_centered_lattice_cores_are_adjacent_and_cover_axis(self):
+        for length in (1, 89, 90, 91, 180, 205, 1000):
+            centers, starts, ends = grid.centered_axis_lattice(length, 90)
+            self.assertTrue(np.all(centers >= 0))
+            self.assertTrue(np.all(centers < length))
+            self.assertLessEqual(int(starts[0]), 0)
+            self.assertGreaterEqual(int(ends[-1]), length)
+            np.testing.assert_array_equal(starts[1:], ends[:-1])
+
     def test_rounded_centroid_and_grid_assignment_use_same_coordinate(self):
         cx = np.asarray([511.4, 511.6, 1023.6])
         cy = np.asarray([511.6, 511.4, 1023.6])

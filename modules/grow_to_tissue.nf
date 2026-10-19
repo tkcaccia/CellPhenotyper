@@ -4,8 +4,8 @@ process GROW_TO_TISSUE {
 
     publishDir "${params.outdir_base}/13_grown_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.grow_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.grow_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.grow_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.grow_memory_gb as int))} GB" }
     time { params.grow_time as String }
 
     input:
@@ -18,7 +18,7 @@ process GROW_TO_TISSUE {
     script:
     def grow_script = "${projectDir}/${params.grow_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [grow_script, "${projectDir}/bin/ome_tiff_metadata.py"].each { codeDigest.update(new File(it).bytes) }
+    [grow_script, "${projectDir}/bin/tiff_preview.py", "${projectDir}/bin/ome_tiff_metadata.py"].each { codeDigest.update(new File(it).bytes) }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
     def grow_method = 'classic_existing'
     def restrict_flag = (params.grow_restrict_to_seeded_components as boolean) ? '--restrict-to-seeded-components' : ''

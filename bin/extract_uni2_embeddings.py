@@ -41,6 +41,7 @@ import tifffile
 import torchvision.transforms as T
 
 from uni2_grid import assign_rounded_centers_to_grid
+from model_provenance import hf_model_provenance, resolve_hf_snapshot
 
 
 # --------------------------
@@ -943,6 +944,46 @@ def compute_centroids_streaming(mask_reader: LabelReader, block: int = 4096, ver
     return labels.astype(np.int64), cx, cy, area
 
 
+def load_observations_csv(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load exact observation centres for non-cell sampling modes."""
+    available = list(pd.read_csv(path, nrows=0).columns)
+    selected = [column for column in ("label", "x", "y", "area_px") if column in available]
+    frame = pd.read_csv(path, usecols=selected)
+    frame.columns = [str(column).strip().strip('"').strip("'") for column in frame.columns]
+    required = {"label", "x", "y"}
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"Observation CSV is missing columns: {missing}")
+    if frame.empty:
+        raise ValueError("Observation CSV contains no rows")
+
+    labels = pd.to_numeric(frame["label"], errors="raise").to_numpy(dtype=np.int64)
+    cx = pd.to_numeric(frame["x"], errors="raise").to_numpy(dtype=np.float64)
+    cy = pd.to_numeric(frame["y"], errors="raise").to_numpy(dtype=np.float64)
+    area = (
+        pd.to_numeric(frame["area_px"], errors="raise").to_numpy(dtype=np.int64)
+        if "area_px" in frame.columns
+        else np.ones(len(frame), dtype=np.int64)
+    )
+    if np.any(labels <= 0) or len(np.unique(labels)) != len(labels):
+        raise ValueError("Observation labels must be unique positive integers")
+    if not np.all(np.isfinite(cx)) or not np.all(np.isfinite(cy)):
+        raise ValueError("Observation coordinates must be finite")
+    if np.any(area <= 0):
+        raise ValueError("Observation areas must be positive")
+    return labels, cx, cy, area
+
+
+def read_resolution_json_mpp(path: Path) -> Optional[float]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    scalar = payload.get("source_mpp", payload.get("effective_mpp"))
+    x_value = payload.get("source_mpp_x", payload.get("mpp_x", scalar))
+    y_value = payload.get("source_mpp_y", payload.get("mpp_y", scalar))
+    values = [_safe_float(value) for value in (x_value, y_value)]
+    values = [value for value in values if value is not None and value > 0]
+    return float(sum(values) / len(values)) if values else None
+
+
 # --------------------------
 # Folder helpers
 # --------------------------
@@ -1092,6 +1133,11 @@ def parse_args():
 
     p.add_argument("--image", required=True)
     p.add_argument("--mask", required=True)
+    p.add_argument("--objects-csv", default="",
+                   help="Optional observation table with label,x,y; bypasses mask-centroid discovery.")
+    p.add_argument("--resolution-json", default="",
+                   help="Optional sidecar providing source_mpp/source_mpp_x/source_mpp_y.")
+    p.add_argument("--observation-type", default="cell", choices=["cell", "grid"])
     p.add_argument("--outdir", required=True)
     p.add_argument("--paired-inner-square-outdir", default="",
                    help="Optional second output directory for paired inner_square embeddings")
@@ -1196,6 +1242,21 @@ def main():
         encoder=args.encoder, backend=args.backend, pooling=args.pooling, img_size=args.img_size, hf_token=args.hf_token
     )
     print(f"[INFO] encoder={args.encoder} backend={backend_used} pooling={pooling_used} tag={tag}")
+    model_provenance: Dict[str, Any] = {
+        "source_repository": None,
+        "requested_revision": None,
+        "resolved_revision": None,
+        "cache_path": None,
+        "checkpoints": [],
+    }
+    if args.encoder == "uni2-h":
+        repo_id = "MahmoodLab/UNI2-h"
+        _, snapshot = resolve_hf_snapshot(repo_id, "main")
+        model_provenance = hf_model_provenance(
+            repo_id,
+            snapshot or "",
+            requested_revision="main",
+        )
 
     if backend_used == "hf_transformers":
         model, processor = model_obj
@@ -1211,18 +1272,31 @@ def main():
     mask_path = Path(args.mask).expanduser().resolve()
 
     img_reader = RegionReader(img_path, level=args.image_level, force_full_image=args.force_full_image)
-    mask_reader = LabelReader(mask_path)
+    mask_reader = None
+    if not args.objects_csv or args.zero_outside_mask:
+        mask_reader = LabelReader(mask_path)
 
-    H, W = mask_reader.shape
-    print(f"[INFO] mask shape={H}x{W} (backend={mask_reader.backend})")
-    if img_reader.shape is not None:
-        ih, iw = img_reader.shape[0], img_reader.shape[1]
-        print(f"[INFO] image shape={ih}x{iw} (backend={img_reader.backend})")
+    if img_reader.shape is None:
+        raise RuntimeError("Unable to resolve image dimensions")
+    ih, iw = int(img_reader.shape[0]), int(img_reader.shape[1])
+    print(f"[INFO] image shape={ih}x{iw} (backend={img_reader.backend})")
+    if args.objects_csv and not args.zero_outside_mask:
+        H, W = ih, iw
+        print("[INFO] external observations use the full-resolution image coordinate space")
+    else:
+        if mask_reader is None:
+            raise RuntimeError("A readable label mask is required for cell-centred extraction")
+        H, W = mask_reader.shape
+        print(f"[INFO] mask shape={H}x{W} (backend={mask_reader.backend})")
         if (ih != H) or (iw != W):
             print(f"[WARN] image(level={args.image_level}) shape={ih}x{iw} differs from mask={H}x{W}")
             print("[WARN] Ensure mask and selected image level are aligned!")
 
-    detected_source_mpp = infer_source_mpp(str(img_path))
+    detected_source_mpp = (
+        read_resolution_json_mpp(Path(args.resolution_json).resolve())
+        if args.resolution_json
+        else infer_source_mpp(str(img_path))
+    )
     source_mpp = detected_source_mpp if detected_source_mpp and detected_source_mpp > 0 else float(args.default_source_mpp)
     extraction_tile_size, effective_mpp = resolve_extraction_tile_size(
         model_tile_size=int(args.tile_size),
@@ -1251,8 +1325,15 @@ def main():
         p_hi=float(args.scale_phi),
     )
 
-    # Pass 1: centroids/area streaming
-    labels, cx, cy, area = compute_centroids_streaming(mask_reader, block=args.mask_block, verbose=True)
+    # Pass 1: discover cell centroids or load exact grid observation centres.
+    if args.objects_csv:
+        labels, cx, cy, area = load_observations_csv(Path(args.objects_csv).resolve())
+        if np.any(cx < 0) or np.any(cx >= W) or np.any(cy < 0) or np.any(cy >= H):
+            raise ValueError("Observation coordinates fall outside the aligned image/mask extent")
+    else:
+        if mask_reader is None:
+            raise RuntimeError("Label-mask centroid discovery requires a mask reader")
+        labels, cx, cy, area = compute_centroids_streaming(mask_reader, block=args.mask_block, verbose=True)
     if args.min_area > 0:
         keep = area >= args.min_area
         labels, cx, cy, area = labels[keep], cx[keep], cy[keep], area[keep]
@@ -1260,7 +1341,7 @@ def main():
         n_keep = min(int(args.max_cells), labels.shape[0])
         labels, cx, cy, area = labels[:n_keep], cx[:n_keep], cy[:n_keep], area[:n_keep]
     N = labels.shape[0]
-    print(f"[INFO] cells after filter: {N}")
+    print(f"[INFO] {args.observation_type} observations after filter: {N}")
 
     # Assign and process cells from the same rounded integer centroid. Mixing a
     # floating-point grid assignment with a rounded extraction center can move a
@@ -1326,6 +1407,8 @@ def main():
             return None
         if str(marker.get("paired_inner_square_mode", "")) != paired_mode:
             return None
+        if str(marker.get("observation_type", "cell")) != str(args.observation_type):
+            return None
         expected_rows = int(marker.get("index_end", -1)) - int(marker.get("index_start", -1))
         if expected_rows < 0 or int(marker.get("rows_written", -1)) != expected_rows:
             return None
@@ -1365,6 +1448,7 @@ def main():
             "encoder": str(args.encoder),
             "tag": str(tag),
             "paired_inner_square_mode": str(paired_mode),
+            "observation_type": str(args.observation_type),
             "completed_at_unix": time.time(),
         }
         grid_marker_path(state["tile_out"]).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
@@ -1509,6 +1593,8 @@ def main():
                 secondary_img_tile = None
 
                 if args.zero_outside_mask:
+                    if mask_reader is None:
+                        raise RuntimeError("--zero-outside-mask requires a mask reader")
                     m_tile = mask_reader.read(x0, y0, extraction_tile_size, extraction_tile_size).astype(np.int64, copy=False)
                     keep_label = (m_tile == lab)
                     keep_square = build_inner_square_mask(
@@ -1586,7 +1672,7 @@ def main():
                 tile_path = ""
                 if args.save_tiles and tile_tiles is not None:
                     sub = cell_subfolder(tile_tiles, lab, per_dir=int(args.bucket_size))
-                    tile_name = f"cell_{lab:08d}_x{x}_y{y}.{args.tiles_format}"
+                    tile_name = f"{args.observation_type}_{lab:08d}_x{x}_y{y}.{args.tiles_format}"
                     outp = sub / tile_name
                     tile_path = str(outp)
                     if args.tiles_format == "png":
@@ -1596,6 +1682,7 @@ def main():
 
                 meta = {
                     "cell_id": lab,
+                    "observation_type": str(args.observation_type),
                     "cx": x,
                     "cy": y,
                     "area_px": a,
@@ -1670,10 +1757,13 @@ def main():
             "embedding_mode": str(mode_name),
             "paired_inner_square_mode": str(paired_mode),
             "expected_cells": int(N),
+            "expected_observations": int(N),
+            "observation_type": str(args.observation_type),
             "rows_written": int(total_written),
             "missing_cells": 0,
             "completed_grids": int(completed_grids),
             "completed_at_unix": time.time(),
+            "model_provenance": model_provenance,
         }
         (root / f".{tag}_embedding_complete.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n"

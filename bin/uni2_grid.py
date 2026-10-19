@@ -8,6 +8,62 @@ import math
 import numpy as np
 
 
+def resolve_spatial_grid_geometry(
+    *,
+    model_tile_size: int,
+    inner_square_size: int,
+    source_mpp: float,
+    target_mpp: float,
+) -> tuple[int, int]:
+    """Return one calibrated source footprint and the identical grid stride.
+
+    The former inner-square argument is retained only for callers that still
+    pass it. It cannot influence the tissue grid: every Virchow2 input tile
+    covers its own non-overlapping coarse-mask cell.
+    """
+    if model_tile_size <= 0:
+        raise ValueError("Model tile size must be positive")
+    if source_mpp <= 0 or target_mpp <= 0:
+        raise ValueError("Source and target MPP must be positive")
+
+    extraction_tile_size = max(1, int(round(model_tile_size * target_mpp / source_mpp)))
+    return extraction_tile_size, extraction_tile_size
+
+
+def nonoverlap_axis_lattice(length: int, tile_size: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Top-left-anchored half-open cells; only the last visible cell is partial."""
+    if length <= 0 or tile_size <= 0:
+        raise ValueError("Axis length and tile size must be positive")
+    starts = np.arange(0, length, tile_size, dtype=np.int64)
+    ends = np.minimum(starts + tile_size, length)
+    centres = np.minimum(starts + tile_size // 2, length - 1)
+    if starts[0] != 0 or ends[-1] != length or not np.array_equal(starts[1:], ends[:-1]):
+        raise RuntimeError("Non-overlap lattice has a gap or overlap")
+    return centres, starts, ends
+
+
+def centered_axis_lattice(length: int, stride: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build adjacent logical cores with centres kept inside the image."""
+    if length <= 0 or stride <= 0:
+        raise ValueError("Axis length and stride must be positive")
+
+    count = max(1, int(math.ceil(length / stride)))
+    first_center = int(math.ceil((length - (count - 1) * stride) / 2.0))
+    centers = first_center + np.arange(count, dtype=np.int64) * int(stride)
+    if centers[-1] >= length:
+        centers -= int(centers[-1] - (length - 1))
+    if centers[0] < 0:
+        centers -= int(centers[0])
+
+    starts = centers - int(stride // 2)
+    ends = starts + int(stride)
+    if count > 1 and not np.array_equal(starts[1:], ends[:-1]):
+        raise RuntimeError("Grid core construction produced a gap or overlap")
+    if starts[0] > 0 or ends[-1] < length:
+        raise RuntimeError("Grid cores do not cover the complete image axis")
+    return centers, starts, ends
+
+
 def assign_rounded_centers_to_grid(
     cx: np.ndarray,
     cy: np.ndarray,

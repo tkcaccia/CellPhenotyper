@@ -3,8 +3,8 @@ process SELECT_NEOPLASTIC_SECTION {
     label 'compute_medium'
 
     publishDir "${params.outdir_base}/16_neoplastic_section/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.neoplastic_section_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.neoplastic_section_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.neoplastic_section_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(4, params.neoplastic_section_memory_gb as int)))} GB" }
     time { params.neoplastic_section_time as String }
 
     input:

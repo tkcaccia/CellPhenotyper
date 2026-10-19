@@ -2,18 +2,17 @@ process EXTRACT_UNI2_EMBEDDINGS {
     tag "${sample_id}:${embedding_mode}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/09_embeddings/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
     cpus {
-      def requested = Math.max(1, Math.min(params.max_cpus as int, params.uni2_cpus as int))
+      def requested = Math.max(1, Math.min(params._executor_max_cpus as int, params.uni2_cpus as int))
       def compute = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
-      def maxMemGb = params.max_memory_gb as int
+      def maxMemGb = params._executor_max_memory_gb as int
       if (compute != 'gpu' && maxMemGb <= 3) return 1
       return requested
     }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.uni2_memory_gb as int))} GB" }
     time { params.uni2_time as String }
 
     input:
@@ -35,7 +34,7 @@ process EXTRACT_UNI2_EMBEDDINGS {
     def tiles_root_path = "embeddings_${sample_id}_${embedding_mode}/${params.uni2_tiles_root}"
     def resolvedComputeDevice = (params._resolved_compute_device ?: params.compute_device ?: 'cpu').toString().trim().toLowerCase()
     def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
-    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params._executor_max_memory_gb as int)
     def requested_batch = Math.max(1, params.uni2_batch as int)
     def initial_batch = requested_batch
     if (device_value == 'cpu') {
@@ -120,39 +119,52 @@ PY
     UNI2_MAX_AUTO_BATCH="${params.uni2_max_auto_batch}"
     if [[ "${device_value}" == "cuda" && "\$HARDWARE_AUTO" == "true" && "\$UNI2_AUTO_HARDWARE" == "true" ]]; then
       GPU_TOTAL_MIB=0
+      GPU_FREE_MIB=0
+      GPU_USABLE_MIB=0
       if command -v nvidia-smi >/dev/null 2>&1; then
-        GPU_TOTAL_MIB="\$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 | awk '{print int(\$1)}')"
+        GPU_SELECTOR="\${CELLPHENOTYPER_GPU_INDEX:-\${CUDA_VISIBLE_DEVICES%%,*}}"
+        [[ -n "\$GPU_SELECTOR" && "\$GPU_SELECTOR" != "-1" ]] || GPU_SELECTOR=0
+        GPU_MEMORY="\$(nvidia-smi -i "\$GPU_SELECTOR" --query-gpu=memory.free,memory.total --format=csv,noheader,nounits 2>/dev/null | head -n 1 || true)"
+        GPU_FREE_MIB="\$(awk -F, '{gsub(/ /,"",\$1); print int(\$1)}' <<<"\$GPU_MEMORY")"
+        GPU_TOTAL_MIB="\$(awk -F, '{gsub(/ /,"",\$2); print int(\$2)}' <<<"\$GPU_MEMORY")"
+        GPU_FREE_MIB="\${GPU_FREE_MIB:-0}"
+        GPU_TOTAL_MIB="\${GPU_TOTAL_MIB:-0}"
+        GPU_RESERVE_MIB="\$(awk -v total="\$GPU_TOTAL_MIB" 'BEGIN {r=int(total*0.08); if(r<768)r=768; if(r>4096)r=4096; print r}')"
+        GPU_USABLE_MIB="\$(awk -v free="\$GPU_FREE_MIB" -v reserve="\$GPU_RESERVE_MIB" 'BEGIN {v=free-reserve; print (v>0?v:0)}')"
       fi
       AUTO_BATCH=${requested_batch}
       case "\$HARDWARE_PROFILE" in
         aggressive)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=256
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=192
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=128
-          else AUTO_BATCH=96
-          fi
-          ;;
-        conservative)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=128
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=96
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=64
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=256
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=64
           else AUTO_BATCH=32
           fi
           ;;
+        conservative)
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=96
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=64
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=32
+          else AUTO_BATCH=16
+          fi
+          ;;
         *)
-          if [[ "\$GPU_TOTAL_MIB" -ge 48000 ]]; then AUTO_BATCH=192
-          elif [[ "\$GPU_TOTAL_MIB" -ge 24000 ]]; then AUTO_BATCH=128
-          elif [[ "\$GPU_TOTAL_MIB" -ge 16000 ]]; then AUTO_BATCH=96
-          else AUTO_BATCH=64
+          if [[ "\$GPU_USABLE_MIB" -ge 48000 ]]; then AUTO_BATCH=192
+          elif [[ "\$GPU_USABLE_MIB" -ge 24000 ]]; then AUTO_BATCH=128
+          elif [[ "\$GPU_USABLE_MIB" -ge 16000 ]]; then AUTO_BATCH=96
+          elif [[ "\$GPU_USABLE_MIB" -ge 10000 ]]; then AUTO_BATCH=64
+          else AUTO_BATCH=32
           fi
           ;;
       esac
       if [[ ${task_mem_gb} -le 16 && "\$AUTO_BATCH" -gt 64 ]]; then AUTO_BATCH=64; fi
       if [[ ${task_mem_gb} -le 24 && "\$AUTO_BATCH" -gt 128 ]]; then AUTO_BATCH=128; fi
       if [[ "\$AUTO_BATCH" -gt "\$UNI2_MAX_AUTO_BATCH" ]]; then AUTO_BATCH="\$UNI2_MAX_AUTO_BATCH"; fi
-      if [[ "\$AUTO_BATCH" -gt "\$ATTEMPT_BATCH" ]]; then ATTEMPT_BATCH="\$AUTO_BATCH"; fi
+      ATTEMPT_BATCH="\$AUTO_BATCH"
     fi
-    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, requested_batch=${requested_batch}, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
+    echo "[INFO] UNI2 runtime tune: mem_gb=${task_mem_gb}, gpu_free_mib=\${GPU_FREE_MIB:-0}, gpu_usable_mib=\${GPU_USABLE_MIB:-0}, requested_batch=${requested_batch}, start_batch=\$ATTEMPT_BATCH, profile=\${HARDWARE_PROFILE}, torch_threads=${resolved_torch_threads}, rows_per_csv=${resolved_rows_per_csv}"
 
     while true; do
       mkdir -p "\$OUTDIR"
@@ -228,5 +240,6 @@ PY
     """
     mkdir -p "embeddings_${sample_id}_${embedding_mode}"
     touch "embeddings_${sample_id}_${embedding_mode}/embeddings_000000.csv"
+    printf '{"model_provenance":{"used_model":false}}\n' > "embeddings_${sample_id}_${embedding_mode}/.${params.uni2_encoder}_embedding_complete.json"
     """
 }

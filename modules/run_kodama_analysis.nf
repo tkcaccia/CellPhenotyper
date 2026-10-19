@@ -1,12 +1,13 @@
 process RUN_KODAMA_ANALYSIS {
     tag "${sample_id}"
     label 'compute_medium'
+    label 'gpu_capable'
 
     publishDir "${params.outdir_base}/10_kodama/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
     publishDir "${params.outdir_base}/10_kodama/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "*.Rout"
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.r_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.r_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.r_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.r_memory_gb as int))} GB" }
     time { params.r_time as String }
 
     input:
@@ -35,6 +36,17 @@ process RUN_KODAMA_ANALYSIS {
     mkdir -p "\$HOME" "\$XDG_CACHE_HOME/fontconfig" "\$MPLCONFIGDIR"
 
     mkdir -p kodama_output
+
+    python - "${tile_embeddings_dir}/VIRCHOW2_COMPLETE.json" <<'PY'
+import json, sys
+from pathlib import Path
+record = json.loads(Path(sys.argv[1]).read_text())
+if (record.get('encoder') != 'Virchow2' or
+        record.get('tile_overlap_source_px') != 0 or
+        record.get('inner_square_used') is not False or
+        record.get('features_per_tile') != 2560):
+    raise SystemExit('KODAMA requires complete, disjoint Virchow2 tile embeddings')
+PY
 
     "${kodamaRscript}" - <<'RS'
 required_pkgs <- c("KODAMA", "fastEmbedR", "data.table")

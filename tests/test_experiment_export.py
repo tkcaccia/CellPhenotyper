@@ -48,7 +48,7 @@ def cached_tissue(root, name="breast", *, kind="virchow2-pooled", compressed=Tru
 
 
 def run_tree(root, sample="sample", *, offset=(41, 23)):
-    """Construct the supported cached Virchow2 layout without running inference."""
+    """Construct the exact current producer layout without calling its encoder."""
     tissue = cached_tissue(root / "scratch", sample)
     image = root / "03_stardist" / sample / "prepared_crop" / "crop_roi.tif"
     image.parent.mkdir(parents=True)
@@ -270,10 +270,12 @@ def test_execution_reports_include_available_experiment_link_and_status(tmp_path
     if broken:
         assert status["status"] == "error"
         assert "completion record" in status["error"]
+        assert f'href="{FILENAME}"' not in (execution / "index.html").read_text()
         assert f"]({FILENAME})" not in (execution / "final_report.md").read_text()
     else:
         assert validate_experiment(execution / FILENAME)["tissues"]
         assert status["status"] == "available"
+        assert f'href="{FILENAME}"' in (execution / "index.html").read_text()
         assert f"]({FILENAME})" in (execution / "final_report.md").read_text()
     assert json.loads((execution / "final_report.json").read_text())["interactive_experiment"] == status
     assert json.loads((execution / "project_outputs.json").read_text())["interactive_experiment"] == status

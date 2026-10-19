@@ -4,14 +4,13 @@ process RUN_HOVERNET_MONUSAC {
     label 'gpu_capable'
 
     publishDir "${params.outdir_base}/03b_hovernet_monusac/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.hovernet_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.hovernet_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.hovernet_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(4, params.hovernet_memory_gb as int)))} GB" }
     time { params.hovernet_time as String }
     containerOptions { (System.getenv('CELLPHENOTYPER_HOVERNET_CONTAINER_OPTIONS') ?: '').trim() }
-    maxForks 1
 
     input:
-    tuple val(sample_id), path(crop_tif), path(shift_json)
+    tuple val(sample_id), path(crop_tif), path(shift_json), path(clean_tissue_mask)
 
     output:
     tuple val(sample_id), path("hovernet_${sample_id}/hovernet_cells.json"), emit: cells_json
@@ -19,16 +18,20 @@ process RUN_HOVERNET_MONUSAC {
 
     script:
     def scriptPath = "${projectDir}/${params.hovernet_script}"
+    def codeFingerprint = PipelineHelpers.codeFingerprint([scriptPath, "${projectDir}/bin/grandqc_mask.py"])
     def predictionCacheArg = params.hovernet_prediction_cache?.toString()?.trim() ? "--prediction-cache \"${params.hovernet_prediction_cache}\"" : ""
-    def memoryBoundWorkers = Math.max(1, Math.floor(Math.min(params.max_memory_gb as double, params.hovernet_memory_gb as double) / 6.0) as int)
+    def taskMemoryGb = task.memory ? (task.memory.toMega() as double) / 1024.0d : Math.min(params._executor_max_memory_gb as double, params.hovernet_memory_gb as double)
+    def memoryBoundWorkers = Math.max(1, Math.floor(taskMemoryGb / 6.0d) as int)
     def requestedPostprocWorkers = params.hovernet_postproc_workers as int
     def postprocWorkers = requestedPostprocWorkers > 0 ? Math.max(1, Math.min(requestedPostprocWorkers, memoryBoundWorkers)) : Math.min(task.cpus as int, memoryBoundWorkers)
     """
     set -euo pipefail
+    echo "[INFO] HoVer-Net wrapper code fingerprint: ${codeFingerprint}"
     test "${params._resolved_compute_device ?: params.compute_device}" = "gpu" || { echo "HoVer-Net MoNuSAC requires a resolved GPU runtime" >&2; exit 2; }
     export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
     python "${scriptPath}" \
       --image "${crop_tif}" --shift "${shift_json}" --outdir "hovernet_${sample_id}" \
+      --clean-tissue-mask "${clean_tissue_mask}" \
       --repo "${params.hovernet_repo_dir}" --checkpoint "${params.hovernet_monusac_checkpoint}" \
       --target-mpp ${params.hovernet_target_mpp} --default-mpp ${params.hovernet_default_mpp} \
       --gpu ${params.hovernet_gpu} --batch-size ${params.hovernet_batch_size} \
@@ -40,5 +43,6 @@ process RUN_HOVERNET_MONUSAC {
     """
     mkdir -p "hovernet_${sample_id}"
     printf '{"model":"HoVer-Net","checkpoint":"MoNuSAC","cells":[]}' > "hovernet_${sample_id}/hovernet_cells.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "hovernet_${sample_id}/hovernet_metadata.json"
     """
 }

@@ -2,16 +2,15 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     tag "${sample_id}:${cluster_variant}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/14_medsam_refine_tissue/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.medsam_refine_cpus as int)) }
-    memory { "${Math.max(4, Math.min(params.max_memory_gb as int, params.medsam_refine_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.medsam_refine_cpus as int)) }
+    memory { "${Math.max(1, Math.min(params._executor_max_memory_gb as int, Math.max(4, params.medsam_refine_memory_gb as int)))} GB" }
     time { params.medsam_refine_time as String }
 
     input:
-    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif), path(grown_mask_tif), path(kodama_membership_png), path(resolution_json)
+    tuple val(sample_key), val(sample_id), val(cluster_variant), path(image_tif), path(cluster_mask_tif, stageAs: 'seed_cluster_mask.tif'), path(grown_mask_tif, stageAs: 'baseline_grown_mask.ome.tif'), path(tissue_mask_tif), path(kodama_membership_png), path(resolution_json)
 
     output:
     tuple val(sample_key), val(sample_id), val(cluster_variant), path("${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif"), emit: refined_mask
@@ -62,8 +61,10 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     def medsamQcRandomSeed = "--medsam-qc-random-seed ${params.medsam_qc_random_seed}"
     def medsamCorePreservation = (params.medsam_force_core_preservation as boolean) ? '--medsam-force-core-preservation' : '--no-medsam-force-core-preservation'
     def medsamSaveDebug = (params.medsam_save_debug as boolean) ? '--medsam-save-debug' : '--no-medsam-save-debug'
+    def imageGuidedRefine = (params.medsam_image_guided_internal_refine as boolean) ? '--image-guided-internal-refine' : '--no-image-guided-internal-refine'
+    def internalBoundaryRadius = "--internal-boundary-radius ${params.medsam_internal_boundary_radius}"
     def tail_flags = [overwrite_flag, keep_tmp_flag, legacy_flag].findAll { it?.trim() }.join(' ')
-    def memoryBudgetGb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    def memoryBudgetGb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params._executor_max_memory_gb as int)
     def hardwareProfile = (params.hardware_profile ?: 'balanced').toString().trim().toLowerCase()
     def medsamAutoHardware = (params.hardware_auto as boolean) && (params.medsam_refine_auto_hardware as boolean) && resolvedComputeDevice == 'gpu'
     def resolvedMaxWorkers = Math.max(1, Math.min(task.cpus as int, params.medsam_refine_max_workers as int))
@@ -87,6 +88,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       --image "${image_tif}" \
       --seed-mask "${cluster_mask_tif}" \
       --grown-mask "${grown_mask_tif}" \
+      --tissue-mask "${tissue_mask_tif}" \
       --resolution-json "${resolution_json}" \
       --out "${sample_id}_${cluster_variant}_grown_mask_refined.ome.tif" \
       --preview "${sample_id}_${cluster_variant}_grown_refined_qc_preview.png" \
@@ -120,6 +122,8 @@ process REFINE_GROWN_TISSUE_MEDSAM {
       ${medsamQcRandomSeed} \
       ${medsamCorePreservation} \
       ${medsamSaveDebug} \
+      ${imageGuidedRefine} \
+      ${internalBoundaryRadius} \
       ${tail_flags}
 
     cp "${kodama_membership_png}" "${sample_id}_${cluster_variant}_medsam_kodama_membership.png"
@@ -131,7 +135,7 @@ process REFINE_GROWN_TISSUE_MEDSAM {
     touch "${sample_id}_${cluster_variant}_grown_refined_qc_preview.png"
     touch "${sample_id}_${cluster_variant}_medsam_kodama_membership.png"
     touch "${sample_id}_${cluster_variant}_medsam_editable_band.png"
-    touch "${sample_id}_${cluster_variant}_medsam_summary.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "${sample_id}_${cluster_variant}_medsam_summary.json"
     mkdir -p "${sample_id}_${cluster_variant}_medsam_debug"
     """
 }

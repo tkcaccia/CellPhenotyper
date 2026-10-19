@@ -1,28 +1,57 @@
 #!/usr/bin/env python3
 import argparse
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import tifffile as tiff
-from PIL import Image
+from PIL import Image, ImageDraw
+
+from tiff_preview import read_tiled_tiff_preview
 
 DEFAULT_PALETTE = np.array([
-    [230, 25, 75],
-    [60, 180, 75],
-    [255, 225, 25],
-    [0, 130, 200],
-    [245, 130, 48],
-    [145, 30, 180],
-    [70, 240, 240],
-    [240, 50, 230],
-    [210, 245, 60],
-    [250, 190, 190],
-    [0, 128, 128],
-    [230, 190, 255],
-    [170, 110, 40],
-    [255, 250, 200],
-    [128, 0, 0],
-    [170, 255, 195],
+    [0, 114, 178],
+    [230, 159, 0],
+    [0, 158, 115],
+    [204, 121, 167],
+    [213, 94, 0],
+    [86, 180, 233],
+    [240, 228, 66],
+    [0, 0, 0],
+    [51, 34, 136],
+    [136, 204, 238],
+    [68, 170, 153],
+    [17, 119, 51],
+    [153, 153, 51],
+    [221, 204, 119],
+    [204, 102, 119],
+    [136, 34, 85],
 ], dtype=np.uint8)
+
+UNCERTAINTY_STATUS_CODES = {
+    "accepted": 0,
+    "none": 0,
+    "ambiguous_assignment": 1,
+    "seed_instability": 2,
+    "ambiguous_assignment_and_seed_instability": 3,
+    "abstained_ambiguous_assignment": 1,
+    "abstained_seed_instability": 2,
+    "abstained_ambiguous_assignment_and_seed_instability": 3,
+}
+UNCERTAINTY_STATUS_NAMES = {
+    0: "accepted_or_background",
+    1: "abstained_ambiguous_assignment",
+    2: "abstained_seed_instability",
+    3: "abstained_ambiguous_assignment_and_seed_instability",
+    4: "abstained_other",
+}
+UNCERTAINTY_PALETTE = {
+    1: np.array([230, 159, 0], dtype=np.uint8),
+    2: np.array([86, 180, 233], dtype=np.uint8),
+    3: np.array([204, 121, 167], dtype=np.uint8),
+    4: np.array([51, 51, 51], dtype=np.uint8),
+}
 
 
 def read_mask_2d(path: str) -> np.ndarray:
@@ -60,13 +89,14 @@ def smallest_mask_dtype(max_value: int) -> np.dtype:
     return np.dtype(np.uint64)
 
 
-def load_map(csv_path: str) -> pd.DataFrame:
+def load_map(csv_path: str, default_value: int | None = None) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df.columns = [c.strip().strip('"').strip("'") for c in df.columns]
     if "label" not in df.columns or "cluster" not in df.columns:
         raise ValueError('CSV must contain columns: "label","cluster"')
 
-    df = df[["label", "cluster"]].copy()
+    cluster_column = "interpretable_cluster" if "interpretable_cluster" in df.columns else "cluster"
+    df = df[["label", cluster_column]].copy().rename(columns={cluster_column: "cluster"})
     raw_label = df["label"].astype(str).str.strip().str.strip('"').str.strip("'")
     label_num = pd.to_numeric(raw_label, errors="coerce")
     if label_num.isna().any():
@@ -81,15 +111,23 @@ def load_map(csv_path: str) -> pd.DataFrame:
     df["label"] = label_num.astype(np.int64)
 
     cl = pd.to_numeric(df["cluster"], errors="coerce")
-    if cl.isna().any():
+    allow_abstention = cluster_column == "interpretable_cluster"
+    if cl.isna().any() and not allow_abstention:
         bad = df.loc[cl.isna(), "cluster"].head(10).tolist()
         raise ValueError(
             "Cluster column contains non-numeric values (cannot write as numeric mask). "
             f"Examples: {bad}"
         )
+    if allow_abstention:
+        if default_value is None:
+            keep = cl.notna()
+            df = df.loc[keep].copy()
+            cl = cl.loc[keep]
+        else:
+            cl = cl.fillna(int(default_value))
     df["cluster"] = cl.astype(np.int64)
 
-    dup_conflicts = df.groupby("label")["cluster"].nunique()
+    dup_conflicts = df.groupby("label")["cluster"].nunique(dropna=False)
     dup_conflicts = dup_conflicts[dup_conflicts > 1]
     if len(dup_conflicts) > 0:
         bad_ids = dup_conflicts.index[:10].tolist()
@@ -99,6 +137,61 @@ def load_map(csv_path: str) -> pd.DataFrame:
         )
     df = df.drop_duplicates(subset=["label"], keep="first")
     return df
+
+
+def uncertainty_code(status: str) -> int:
+    normalized = str(status).strip()
+    if normalized in UNCERTAINTY_STATUS_CODES:
+        return UNCERTAINTY_STATUS_CODES[normalized]
+    return 0 if normalized == "accepted" else 4
+
+
+def load_uncertainty_map(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    df.columns = [c.strip().strip('"').strip("'") for c in df.columns]
+    if "label" not in df.columns:
+        raise ValueError('CSV must contain column "label"')
+    raw_label = df["label"].astype(str).str.strip().str.strip('"').str.strip("'")
+    label_num = pd.to_numeric(raw_label, errors="coerce")
+    if label_num.isna().any():
+        tail_digits = raw_label.str.extract(r"([0-9]+)$", expand=False)
+        label_num = label_num.fillna(pd.to_numeric(tail_digits, errors="coerce"))
+    if label_num.isna().any():
+        bad = raw_label[label_num.isna()].head(10).tolist()
+        raise ValueError(f"Uncertainty labels cannot be mapped to integer IDs. Examples: {bad}")
+    status = (
+        df["interpretation_status"].fillna("abstained_other").astype(str)
+        if "interpretation_status" in df.columns
+        else pd.Series("accepted", index=df.index, dtype=str)
+    )
+    reason = (
+        df["uncertainty_reason"].fillna("other").astype(str)
+        if "uncertainty_reason" in df.columns
+        else status
+    )
+    if "is_abstained" in df.columns:
+        raw_abstained = df["is_abstained"].astype(str).str.strip().str.lower()
+        is_abstained = raw_abstained.isin({"true", "1", "yes", "y"})
+    elif "interpretable_cluster" in df.columns:
+        is_abstained = pd.to_numeric(df["interpretable_cluster"], errors="coerce").isna()
+    else:
+        is_abstained = status.ne("accepted")
+    codes = reason.map(uncertainty_code).astype(np.uint8)
+    codes.loc[~is_abstained] = 0
+    out = pd.DataFrame(
+        {
+            "label": label_num.astype(np.int64),
+            "uncertainty_code": codes,
+            "interpretation_status": status,
+        }
+    )
+    conflicts = out.groupby("label")["uncertainty_code"].nunique(dropna=False)
+    if (conflicts > 1).any():
+        raise ValueError(
+            "Same label has conflicting interpretation statuses. "
+            f"Examples: {conflicts[conflicts > 1].index[:10].tolist()}"
+        )
+    return out.drop_duplicates(subset=["label"], keep="first")
 
 
 def downsample_nearest(img: np.ndarray, factor: int) -> np.ndarray:
@@ -216,6 +309,12 @@ def read_preview_background(
         except Exception:
             bg = None
 
+        if bg is None:
+            try:
+                bg = read_tiled_tiff_preview(path, f)
+            except Exception as exc:
+                print(f"[WARN] Could not read tiled TIFF preview via Zarr: {exc}", flush=True)
+
     if bg is None:
         if not allow_full_read:
             return None
@@ -236,13 +335,39 @@ def read_preview_background(
     return bg_rgb
 
 
-def colorize_cluster_mask(cluster_mask: np.ndarray, default_value: int) -> np.ndarray:
+def colorize_cluster_mask(
+    cluster_mask: np.ndarray,
+    default_value: int,
+    palette_by_value: dict[int, np.ndarray] | None = None,
+) -> np.ndarray:
     out = np.zeros(cluster_mask.shape + (3,), dtype=np.uint8)
     cluster_ids = np.unique(cluster_mask)
     cluster_ids = cluster_ids[cluster_ids != default_value]
-    for idx, cid in enumerate(cluster_ids):
-        out[cluster_mask == cid] = DEFAULT_PALETTE[idx % len(DEFAULT_PALETTE)]
+    for cid in cluster_ids:
+        value = int(cid)
+        color = (
+            palette_by_value.get(value, np.array([51, 51, 51], dtype=np.uint8))
+            if palette_by_value is not None
+            else DEFAULT_PALETTE[(max(1, value) - 1) % len(DEFAULT_PALETTE)]
+        )
+        out[cluster_mask == cid] = color
     return out
+
+
+def add_preview_legend(image: np.ndarray, legend_items: list[tuple[str, tuple[int, int, int]]]) -> np.ndarray:
+    if not legend_items:
+        return image
+    row_height = 28
+    legend_height = 18 + row_height * len(legend_items)
+    canvas = Image.new("RGB", (image.shape[1], image.shape[0] + legend_height), (250, 250, 250))
+    canvas.paste(Image.fromarray(image), (0, 0))
+    draw = ImageDraw.Draw(canvas)
+    y = image.shape[0] + 10
+    for label, color in legend_items:
+        draw.rectangle((12, y + 3, 28, y + 19), fill=tuple(int(v) for v in color))
+        draw.text((36, y + 2), label, fill=(25, 25, 25))
+        y += row_height
+    return np.asarray(canvas)
 
 
 def write_preview_overlay_png(
@@ -253,6 +378,8 @@ def write_preview_overlay_png(
     default_value: int,
     preview_background_path: str,
     alpha: float,
+    palette_by_value: dict[int, np.ndarray] | None = None,
+    legend_items: list[tuple[str, tuple[int, int, int]]] | None = None,
 ) -> tuple[int, int]:
     bg_shape, bg_dtype, bg_samples = _preview_metadata(preview_background_path)
     bg_pixels = int(np.prod(bg_shape[:2]))
@@ -274,7 +401,11 @@ def write_preview_overlay_png(
     elif bg_small.shape[:2] != mask_small.shape:
         bg_small = downsample_nearest(bg_small, use_factor)
 
-    overlay_rgb = colorize_cluster_mask(mask_small, default_value=default_value)
+    overlay_rgb = colorize_cluster_mask(
+        mask_small,
+        default_value=default_value,
+        palette_by_value=palette_by_value,
+    )
     fg = mask_small != default_value
 
     out = bg_small.astype(np.float32, copy=True)
@@ -282,6 +413,7 @@ def write_preview_overlay_png(
     out[fg] = (1.0 - a) * out[fg] + a * overlay_rgb[fg].astype(np.float32)
     out = np.clip(out, 0, 255).astype(np.uint8)
 
+    out = add_preview_legend(out, legend_items or [])
     Image.fromarray(out).save(out_png)
     return use_factor, est_bytes
 
@@ -293,6 +425,10 @@ def main():
     ap.add_argument("--mask", required=True, help="Input labeled mask TIFF (e.g., labels_cyto.tif)")
     ap.add_argument("--map", required=True, help='CSV mapping with columns "label","cluster"')
     ap.add_argument("--out", required=True, help="Output TIFF cluster mask (pixel values = cluster)")
+    ap.add_argument("--uncertainty-out", default=None,
+                    help="Optional uint8 TIFF where 0 is accepted/background and positive values are abstention reasons.")
+    ap.add_argument("--summary", default=None,
+                    help="Optional JSON summary of accepted and abstained observations.")
     ap.add_argument("--default", type=int, default=0,
                     help="Value for labels not found in CSV (default 0)")
     ap.add_argument("--compress", default="none", choices=["none", "zlib", "lzma"],
@@ -302,6 +438,8 @@ def main():
 
     ap.add_argument("--preview", default=None,
                     help="Optional preview image path (e.g., cluster_mask_preview.png)")
+    ap.add_argument("--uncertainty-preview", default=None,
+                    help="Optional H&E overlay showing categorical abstention reasons.")
     ap.add_argument("--preview-factor", type=int, default=10,
                     help="Downsample factor used only when preview image is larger than threshold.")
     ap.add_argument("--preview-threshold-mb", type=float, default=100.0,
@@ -314,7 +452,8 @@ def main():
     args = ap.parse_args()
 
     labels = open_mask_2d(args.mask)
-    df = load_map(args.map)
+    df = load_map(args.map, default_value=args.default)
+    uncertainty_df = load_uncertainty_map(args.map)
 
     max_lab = int(labels.max())
     if max_lab > 50_000_000:
@@ -352,6 +491,23 @@ def main():
         default_value=args.default,
         block_rows=args.block_rows,
     )
+
+    uncertainty_tif = None
+    uncertainty_stats = None
+    if args.uncertainty_out:
+        uncertainty_lut = np.zeros(max_lab + 1, dtype=np.uint8)
+        uncertainty_labels = uncertainty_df["label"].to_numpy(dtype=np.int64)
+        uncertainty_codes = uncertainty_df["uncertainty_code"].to_numpy(dtype=np.uint8)
+        uncertainty_valid = (uncertainty_labels >= 0) & (uncertainty_labels <= max_lab)
+        uncertainty_lut[uncertainty_labels[uncertainty_valid]] = uncertainty_codes[uncertainty_valid]
+        uncertainty_tif, uncertainty_stats = remap_mask_chunked(
+            labels,
+            uncertainty_lut,
+            args.uncertainty_out,
+            out_dtype=np.dtype(np.uint8),
+            default_value=0,
+            block_rows=args.block_rows,
+        )
 
     present_labels = remap_stats["present_labels"]
     present_labels = present_labels[(present_labels >= 0) & (present_labels <= max_lab)]
@@ -398,6 +554,57 @@ def main():
             preview_factor_used = max(1, int(args.preview_factor))
             preview_estimated_mb = out_tif.nbytes / (1024.0 * 1024.0)
 
+    uncertainty_preview_factor = None
+    if args.uncertainty_preview:
+        if uncertainty_tif is None:
+            raise ValueError("--uncertainty-preview requires --uncertainty-out")
+        if not args.preview_background:
+            raise ValueError("--uncertainty-preview requires --preview-background")
+        uncertainty_preview_factor, _ = write_preview_overlay_png(
+            uncertainty_tif,
+            args.uncertainty_preview,
+            factor_if_large=args.preview_factor,
+            size_threshold_mb=args.preview_threshold_mb,
+            default_value=0,
+            preview_background_path=args.preview_background,
+            alpha=max(float(args.preview_alpha), 0.65),
+            palette_by_value=UNCERTAINTY_PALETTE,
+            legend_items=[
+                (UNCERTAINTY_STATUS_NAMES[code], tuple(color.tolist()))
+                for code, color in sorted(UNCERTAINTY_PALETTE.items())
+            ],
+        )
+
+    status_counts = {
+        UNCERTAINTY_STATUS_NAMES[int(code)]: int(count)
+        for code, count in uncertainty_df["uncertainty_code"].value_counts().sort_index().items()
+    }
+    observations = int(len(uncertainty_df))
+    abstained_observations = int((uncertainty_df["uncertainty_code"] > 0).sum())
+    if args.summary:
+        summary = {
+            "schema_version": 2,
+            "observation_type": "contextual_cell",
+            "observations": observations,
+            "accepted_observations": observations - abstained_observations,
+            "abstained_observations": abstained_observations,
+            "accepted_observation_fraction": float(
+                (observations - abstained_observations) / max(1, observations)
+            ),
+            "uncertainty_status_counts": status_counts,
+            "uncertainty_mask_codes": {
+                str(code): name for code, name in UNCERTAINTY_STATUS_NAMES.items()
+            },
+            "foreground_pixels": int(remap_stats["foreground_px"]),
+            "interpretable_cluster_pixels": int(remap_stats["mapped_px"]),
+            "abstained_pixels": int(
+                uncertainty_stats["mapped_px"] if uncertainty_stats is not None else 0
+            ),
+            "preview_downsample_factor": int(preview_factor_used or 1),
+            "uncertainty_preview_downsample_factor": int(uncertainty_preview_factor or 1),
+        }
+        Path(args.summary).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
     # report
     fg = int(remap_stats["foreground_px"])
     mapped = int(remap_stats["mapped_px"])
@@ -408,6 +615,10 @@ def main():
     )
     print(f"[INFO] expected clusters in mapped labels: {expected_clusters.tolist()}")
     print(f"[INFO] observed clusters in output mask: {observed_clusters.tolist()}")
+    print(
+        f"[INFO] uncertainty observations: accepted={observations - abstained_observations:,} "
+        f"abstained={abstained_observations:,} status_counts={status_counts}"
+    )
     print(f"[INFO] wrote cluster mask: {args.out}")
     if args.preview:
         if args.preview_background:

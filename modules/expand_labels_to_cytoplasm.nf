@@ -4,8 +4,8 @@ process EXPAND_LABELS_TO_CYTOPLASM {
 
     publishDir "${params.outdir_base}/08_cytoplasm/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.expand_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.expand_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.expand_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.expand_memory_gb as int))} GB" }
     time { params.expand_time as String }
 
     input:

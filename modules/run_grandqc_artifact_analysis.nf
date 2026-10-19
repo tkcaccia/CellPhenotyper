@@ -2,12 +2,11 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     tag "${sample_id}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/02_grandqc/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.grandqc_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.grandqc_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.grandqc_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.grandqc_memory_gb as int))} GB" }
     time { params.grandqc_time as String }
 
     input:
@@ -21,6 +20,7 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
 
     script:
     def script_path = "${projectDir}/${params.grandqc_script}"
+    def codeFingerprint = PipelineHelpers.codeFingerprint([script_path])
     def cache_dir = (params.grandqc_cache_dir ?: "${baseDir}/.cache/grandqc").toString()
     def bootstrap_flag = params.grandqc_bootstrap_deps ? '--bootstrap-deps' : ''
     def download_flag = params.grandqc_download_models ? '--download-models' : ''
@@ -33,6 +33,7 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     }
     """
     set -euo pipefail
+    echo "[INFO] GrandQC code fingerprint: ${codeFingerprint}"
 
     export OMP_NUM_THREADS=${task.cpus}
     export MKL_NUM_THREADS=1
@@ -66,6 +67,6 @@ process RUN_GRANDQC_ARTIFACT_ANALYSIS {
     mkdir -p "grandqc_${sample_id}"
     touch "grandqc_${sample_id}/${sample_id}_grandqc_clean_tissue_mask.tif"
     touch "grandqc_${sample_id}/${sample_id}_grandqc_artifact_mask.tif"
-    touch "grandqc_${sample_id}/${sample_id}_grandqc_summary.json"
+    printf '{"model_provenance":{"tissue":{"used_model":false},"artifact":{"used_model":false}}}\n' > "grandqc_${sample_id}/${sample_id}_grandqc_summary.json"
     """
 }
