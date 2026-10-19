@@ -94,6 +94,8 @@ def test_schema_covers_public_scientific_and_qc_contracts() -> None:
         "roi_validation_mode",
         "cell_consensus_fusion_acceptance_policy",
         "gigatime_seam_qc_mode",
+        "gigatime_auto_parameters",
+        "gigatime_nuclear_qc_min_local_auc",
         "uni2_sampling_mode",
         "cluster_stability_runs",
         "cluster_abstain_uncertain",

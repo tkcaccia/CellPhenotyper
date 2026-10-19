@@ -30,7 +30,7 @@ STAGE_DEFS = [
     {"id": "cell_consensus", "folder": "03d_cell_consensus", "title": "Role-Aware Multi-Detector Instance Fusion", "expected": ["labels.tif", "objects.csv", "alignment.csv", "detector_agreement_benchmark.csv", "detector_agreement_benchmark.json", "consensus_cells.geojson", "consensus_summary.json", "consensus_preview.png"]},
     {"id": "tma", "folder": "04_TMA", "title": "TMA Detection and Cell-to-Spot Assignment", "expected": ["_tma_summary.json", "_tma_spots.geojson", "_objects_tma_assigned.csv"]},
     {"id": "tissue_mask", "folder": "04_tissue_mask", "title": "GrandQC Clean-Tissue Mask", "expected": ["_tissue_mask.tif", "_grandqc_crop_mask_summary.json"]},
-    {"id": "gigatime", "folder": "05_gigatime", "title": "GigaTIME Virtual mIF + Marker Quantification", "expected": ["gigatime_probs.ome.tif", "gigatime_probs.zarr", "gigatime_seam_qc.json", "gigatime_seam_qc.png", "gigatime_marker_score_qc.json", "gigatime_marker_score_qc.tsv", "gigatime_marker_score_qc.png", "_gigatime_quantification.csv", "_gigatime_mean_intensity.csv", "_gigatime_intensity_stats.csv", "_gigatime_intensity_summary.json"]},
+    {"id": "gigatime", "folder": "05_gigatime", "title": "GigaTIME Virtual mIF + Marker Quantification", "expected": ["gigatime_probs.ome.tif", "gigatime_probs.zarr", "gigatime_seam_qc.json", "gigatime_seam_qc.png", "_gigatime_nuclear_qc.json", "_gigatime_nuclear_qc.png", "_gigatime_shadow_qc.png", "gigatime_marker_score_qc.json", "gigatime_marker_score_qc.tsv", "gigatime_marker_score_qc.png", "_gigatime_quantification.csv", "_gigatime_mean_intensity.csv", "_gigatime_intensity_stats.csv", "_gigatime_intensity_summary.json"]},
     {"id": "roi", "folder": "06_roi", "title": "ROI GeoJSON and Input ROI Mask", "expected": [".roi.geojson", ".roi_qc.json", "_input_roi_mask.tif", "_input_roi_mask_preview.png", "_input_roi_mask_labels.json"]},
     {"id": "cell_assignment", "folder": "07_cell_assignments", "title": "Cell Assignment", "expected": ["_objects_assigned.csv"]},
     {"id": "cytoplasm", "folder": "08_cytoplasm", "title": "Cytoplasm Expansion", "expected": ["_labels_cyto.tif"]},
@@ -57,7 +57,7 @@ UNCERTAINTY_SPECS = {
     "cell_consensus": ("descriptive_agreement_with_abstention", "broad-detector geometry agreement", "abstain without required broad support", "not_a_probability", "Agreement measures corroboration, not instance accuracy or phenotype certainty."),
     "tma": ("not_quantified", "TMA/non-TMA and core assignment decision", "no confidence-based abstention", "not_calibrated", "Grid regularity and core-detection uncertainty are not yet quantified."),
     "tissue_mask": ("deterministic_transform", "cropped GrandQC support", "hard support mask", "not_applicable", "This inherits GrandQC errors and adds no independent uncertainty estimate."),
-    "gigatime": ("technical_qc_only", "tile-seam continuity and sampled marker-score distributions", "fail or review on technical discontinuity/collapse", "biological_scores_uncalibrated", "Distribution QC does not quantify marker-prediction uncertainty or measured-protein concordance."),
+    "gigatime": ("technical_qc_only", "tile seams, StarDist–DAPI alignment, spatial shadow and marker-score distributions", "fail or review on technical discontinuity/collapse", "biological_scores_uncalibrated", "Technical QC does not establish measured-protein concordance."),
     "roi": ("technical_qc", "geometry validity and image association", "hard fail or explicit legacy warning", "not_applicable", "Valid geometry does not establish that the selected region is biologically representative."),
     "cell_assignment": ("deterministic_transform", "point-in-polygon assignment", "unassigned when outside polygons", "not_applicable", "Upstream coordinate and detector errors are inherited rather than re-estimated."),
     "cytoplasm": ("not_quantified", "morphological label expansion", "no uncertainty-based abstention", "not_calibrated", "Expanded regions are approximations and are not validated cell boundaries."),
@@ -79,7 +79,7 @@ UNCERTAINTY_SIGNAL_KINDS = {
     "input": {"input_image_qc"},
     "grandqc": {"grandqc_artifact_qc"},
     "cell_consensus": {"cell_instance_fusion"},
-    "gigatime": {"gigatime_seam_qc", "gigatime_marker_score_qc"},
+    "gigatime": {"gigatime_seam_qc", "gigatime_nuclear_shadow_qc", "gigatime_marker_score_qc"},
     "roi": {"roi_geometry_qc"},
     "kodama": {"uni2_route_comparison"},
     "clustering": {"clustering_stability", "forced_cluster_count", "cluster_interpretation"},
@@ -393,6 +393,24 @@ def collect_quality_signals(outdir: Path) -> list[dict]:
                 "details": (
                     f"failed_channel_boundaries={payload.get('failed_channel_boundaries', 'NA')}; "
                     f"tests={payload.get('channel_boundary_tests', 'NA')}"
+                ),
+            }
+        )
+    for path in sorted((outdir / "05_gigatime").rglob("*_gigatime_nuclear_qc.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        signals.append(
+            {
+                "kind": "gigatime_nuclear_shadow_qc",
+                "status": str(payload.get("status", "unknown")),
+                "path": str(path.absolute()),
+                "details": (
+                    f"StarDist_DAPI_AUC={payload.get('auc', 'NA')}; "
+                    f"spatial_shadow={payload.get('spatial_shadow_status', 'NA')}; "
+                    f"failed_regions={payload.get('failed_spatial_regions', 'NA')}; "
+                    f"border_shadow={payload.get('border_shadow_status', 'NA')}"
                 ),
             }
         )
@@ -713,6 +731,8 @@ def review_assets(project_records: list[dict], limit: int = 12) -> list[dict]:
         "tma_spots_preview",
         "input_roi_mask_preview",
         "gigatime_seam_qc.png",
+        "gigatime_nuclear_qc.png",
+        "gigatime_shadow_qc.png",
         "gigatime_marker_score_qc.png",
         "uni2_grid_preview",
         "cluster_uncertainty_preview",

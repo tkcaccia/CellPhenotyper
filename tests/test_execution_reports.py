@@ -93,6 +93,8 @@ def test_report_contract_lists_new_consensus_and_medsam_qc_outputs() -> None:
     assert "detector_agreement_benchmark.csv" in consensus["expected"]
     assert "detector_agreement_benchmark.json" in consensus["expected"]
     assert "gigatime_seam_qc.json" in gigatime["expected"]
+    assert "_gigatime_nuclear_qc.json" in gigatime["expected"]
+    assert "_gigatime_shadow_qc.png" in gigatime["expected"]
     assert "gigatime_marker_score_qc.json" in gigatime["expected"]
     assert "_uni2_route_comparison.csv" in kodama["expected"]
     assert "_cluster_stability.csv" in clustering["expected"]
@@ -396,6 +398,16 @@ def test_quality_signal_collection_surfaces_seams_stability_and_route_limits(tmp
             }
         )
     )
+    nuclear_qc = tmp_path / "05_gigatime" / "sample" / "sample_gigatime_nuclear_qc.json"
+    nuclear_qc.write_text(
+        json.dumps(
+            {
+                "status": "fail", "auc": 0.668,
+                "spatial_shadow_status": "fail", "failed_spatial_regions": 2,
+                "border_shadow_status": "pass",
+            }
+        )
+    )
     marker_qc = tmp_path / "05_gigatime" / "sample" / "gigatime_marker_score_qc.json"
     marker_qc.write_text(
         json.dumps(
@@ -471,6 +483,7 @@ def test_quality_signal_collection_surfaces_seams_stability_and_route_limits(tmp
         "validation_readiness",
         "cell_instance_fusion",
         "gigatime_seam_qc",
+        "gigatime_nuclear_shadow_qc",
         "gigatime_marker_score_qc",
         "clustering_stability",
         "forced_cluster_count",
@@ -482,6 +495,7 @@ def test_quality_signal_collection_surfaces_seams_stability_and_route_limits(tmp
         "pass",
         "not_declared",
         "expected_non_exhaustive_scope_imbalance",
+        "fail",
         "fail",
         "review",
         "review",

@@ -28,6 +28,7 @@ process RUN_GIGATIME_ON_CROP {
     def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
+    def auto_parameters_flag = params.gigatime_auto_parameters ? '--auto-parameters' : ''
     def pyramid_flag = params.gigatime_output_pyramid ? '--pyramid' : ''
     def blockwise_flag = params.gigatime_blockwise ? '--blockwise' : ''
     def predictor_flag = params.gigatime_output_predictor ? '--predictor' : ''
@@ -175,6 +176,7 @@ PY
       --page ${params.gigatime_page} \\
       --patch-size ${params.gigatime_patch_size} \\
       --stride ${params.gigatime_stride} \\
+      ${auto_parameters_flag} \\
       --batch-size ${params.gigatime_batch_size} \\
       ${auto_hardware_flag} \\
       --hardware-profile ${resolved_hardware_profile} \\

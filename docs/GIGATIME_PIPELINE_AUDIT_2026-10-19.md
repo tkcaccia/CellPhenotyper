@@ -52,6 +52,39 @@ rejected. The [edge comparison](https://tkcaccia.github.io/Tambua-Analysis/asset
 records the exact method and scores. This test does not determine the cause of
 the MoNuSAC transfer failure.
 
+## Automatic inference settings and spatial shadow gate
+
+The default `gigatime_auto_parameters: true` profile applies only to the pinned
+official CNN revision. It fixes the model's 256-pixel patch, 128-pixel stride,
+0.25 µm/pixel grid and strict physical resampling, enables adaptive memory and
+batch sizing, runs blockwise, and does not skip tissue blocks. Calibrated source
+MPP sets the resampling factor. The report records requested and effective
+scientific settings plus the hardware adaptation. Output channels and storage
+compression remain user-facing choices; native DAPI must be persisted for QC.
+
+The post-inference CPU gate uses the independent H&E StarDist mask on the same
+physical field. Its new 3 × 3 local AUC screen detects sectors with weak
+DAPI-versus-nearby-background contrast that the whole-image edge/core ratio can
+miss. A region needs at least 500 sampled nuclear and 500 nearby-background
+pixels; eligible regions require AUC ≥ 0.60. The threshold was chosen during
+this exploratory diagnostic and needs validation on more registered paired
+images before it can be regarded as a calibrated error rate. Missing local
+coverage is reported as insufficient. The QC emits a 3 × 3 map alongside the
+StarDist/DAPI overlay. A local AUC failure detects lost nuclear contrast; it
+cannot by itself distinguish a shading artifact from an incorrect StarDist mask
+or tissue domain shift. The existing global alignment, boundary
+contrast and edge ratio gates remain. The Nextflow QC process fingerprints its
+source so a resumed run cannot silently reuse an older QC decision. Pipeline
+execution reports now list the nuclear/shadow QC JSON, StarDist overlay and
+spatial QC map as first-class quality evidence.
+
+Read-only reanalysis of saved native outputs gave `spatial_shadow_status=pass`
+for the released paired control and `fail` for the MoNuSAC ROI; its upper-right
+and middle-right regional AUCs were 0.502 and 0.562. The latter had passed the
+old global edge ratio of 1.148. No new GigaTIME inference was required for
+this comparison, and these two cases are a functional control rather than an
+independent validation cohort.
+
 ## Pipeline handoff checked
 
 1. Input-resolution validation requires physical pixel metadata and checks

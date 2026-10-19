@@ -172,6 +172,7 @@
       "type": "object",
       "properties": {
         "gigatime_enable": {"type": "boolean", "default": true},
+        "gigatime_auto_parameters": {"type": "boolean", "default": true},
         "gigatime_target_mpp": {"type": "number", "exclusiveMinimum": 0, "default": 0.25},
         "gigatime_strict_target_mpp": {"type": "boolean", "default": true},
         "gigatime_output_format": {"type": "string", "enum": ["zarr", "ome_tiff", "none"], "default": "zarr"},
@@ -192,6 +193,8 @@
         "gigatime_nuclear_qc_min_dice": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.35},
         "gigatime_nuclear_qc_min_edge_ratio": {"type": "number", "minimum": 0, "default": 0.65},
         "gigatime_nuclear_qc_min_boundary_contrast": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.05},
+        "gigatime_nuclear_qc_min_local_auc": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.60},
+        "gigatime_nuclear_qc_min_local_pixels": {"type": "integer", "minimum": 1, "default": 500},
         "marker_quantification_enable": {"type": "boolean", "default": true},
         "gigatime_kodama_enable": {"type": "boolean", "default": true}
       }

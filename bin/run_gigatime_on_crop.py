@@ -2799,6 +2799,9 @@ def parse_args():
     ap.add_argument("--page", type=int, default=0, help="TIFF page to read")
     ap.add_argument("--patch-size", type=int, default=256, help="Inference patch size (default from model card: 256)")
     ap.add_argument("--stride", type=int, default=128, help="Sliding-window stride")
+    ap.add_argument("--auto-parameters", action="store_true",
+                    help="Use the pinned CNN's 256-pixel, 128-stride, 0.25 µm/pixel contract; "
+                         "derive resampling and compute limits from source metadata and available hardware.")
     ap.add_argument("--batch-size", type=int, default=4, help="Inference batch size")
     ap.add_argument("--auto-hardware", action="store_true",
                     help="Adapt GigaTIME batch/tile/output budget to live system RAM and GPU memory.")
@@ -2883,6 +2886,34 @@ def parse_args():
     return ap.parse_args()
 
 
+def apply_auto_parameters(args: argparse.Namespace) -> dict:
+    """Lock scientific model settings while retaining adaptive compute sizing."""
+    if not args.auto_parameters:
+        return {"enabled": False}
+    if args.repo_id != "prov-gigatime/GigaTIME" or args.repo_revision != DEFAULT_GIGATIME_REVISION:
+        raise ValueError(
+            "Automatic GigaTIME settings are verified only for the pinned official CNN checkpoint"
+        )
+    keys = ("patch_size", "stride", "target_mpp", "strict_target_mpp",
+            "auto_hardware", "blockwise", "skip_background_blocks")
+    requested = {key: getattr(args, key) for key in keys}
+    args.patch_size = 256
+    args.stride = 128
+    args.target_mpp = 0.25
+    args.strict_target_mpp = True
+    args.auto_hardware = True
+    args.blockwise = True
+    # The marker QC and cell quantification need predictions over all tissue.
+    args.skip_background_blocks = False
+    return {
+        "enabled": True,
+        "profile": "pinned_cnn_physical_grid_v1",
+        "requested": requested,
+        "effective": {key: getattr(args, key) for key in keys},
+        "adaptive_components": ["source_mpp_resampling", "memory_and_batch", "block_size", "output_budget"],
+    }
+
+
 def run_output_seam_qc(
     args: argparse.Namespace,
     prediction_path: Path,
@@ -2915,6 +2946,7 @@ def run_output_seam_qc(
 
 def main():
     args = parse_args()
+    auto_parameters = apply_auto_parameters(args)
     if not 0.0 <= float(args.skip_background_min_fraction) <= 1.0:
         raise ValueError("--skip-background-min-fraction must be between 0 and 1")
     if not 0.0 <= float(args.seam_qc_max_p95_excess) <= 1.0:
@@ -2988,6 +3020,7 @@ def main():
     image_meta["blockwise"] = bool(args.blockwise or effective_output_dtype != "float32" or args.output_format == "zarr")
     image_meta["block_size"] = int(args.block_size)
     image_meta["hardware_adaptation"] = hardware_meta
+    image_meta["auto_parameters"] = auto_parameters
     image_meta["predictor"] = bool(effective_predictor)
     image_meta["pyramidal"] = bool(args.pyramid and args.output_format == "ome_tiff")
     if output_scale_max is not None:

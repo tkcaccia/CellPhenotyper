@@ -13,7 +13,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy.ndimage import binary_dilation, binary_erosion
 
 from quantify_gigatime_intensity import LazyImageReader, LazyMaskReader
@@ -27,6 +27,10 @@ class NuclearAlignmentScore:
         )))))
         self.pos = np.zeros(256, dtype=np.int64)
         self.neg = np.zeros(256, dtype=np.int64)
+        # Keep local concordance separate: a dark sector can be hidden by a
+        # bright sector in the whole-image edge/core average.
+        self.spatial_pos = np.zeros((3, 3, 256), dtype=np.int64)
+        self.spatial_neg = np.zeros((3, 3, 256), dtype=np.int64)
         self.edge_sum = self.edge_n = self.core_sum = self.core_n = 0.0
         self.inner_sum = self.inner_n = self.outer_sum = self.outer_n = 0.0
         self.sampled_windows = 0
@@ -55,6 +59,18 @@ class NuclearAlignmentScore:
         bins = np.clip(np.floor(values * 255 + 0.5), 0, 255).astype(np.uint8)
         self.pos += np.bincount(bins[nucleus & finite], minlength=256)
         self.neg += np.bincount(bins[nearby & finite], minlength=256)
+        rows = np.minimum(2, (yy * 3 // self.shape[0]).astype(np.intp))
+        cols = np.minimum(2, (xx * 3 // self.shape[1]).astype(np.intp))
+        for row in np.unique(rows):
+            row_mask = rows[:, None] == row
+            for col in np.unique(cols):
+                region = row_mask & (cols[None, :] == col)
+                self.spatial_pos[row, col] += np.bincount(
+                    bins[region & nucleus & finite], minlength=256
+                )
+                self.spatial_neg[row, col] += np.bincount(
+                    bins[region & nearby & finite], minlength=256
+                )
 
         # A diffuse bright region can have good pixel AUC while crossing many
         # nuclei. The narrow inside/outside nuclear shells detect that failure.
@@ -76,12 +92,20 @@ class NuclearAlignmentScore:
         self.core_sum += float(values[core_nuclei].sum())
         self.core_n += int(core_nuclei.sum())
 
+    @staticmethod
+    def histogram_auc(pos: np.ndarray, neg: np.ndarray) -> float:
+        p, n = int(pos.sum()), int(neg.sum())
+        below = np.cumsum(neg) - neg
+        return float(np.sum(pos * (below + 0.5 * neg)) / (p * n))
+
     def report(self, *, min_auc: float = 0.70, min_dice: float = 0.35,
                min_edge_ratio: float = 0.65,
-               min_boundary_contrast: float = 0.05) -> dict:
+               min_boundary_contrast: float = 0.05,
+               min_local_auc: float = 0.60,
+               min_local_pixels: int = 500) -> dict:
         p, n = int(self.pos.sum()), int(self.neg.sum())
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scope": "virtual_DAPI_vs_HE_derived_nuclear_mask",
             "sampling_stride_px": self.stride,
             "sampled_windows": self.sampled_windows,
@@ -89,7 +113,9 @@ class NuclearAlignmentScore:
             "nearby_extranuclear_pixels": n,
             "thresholds": {"min_auc": min_auc, "min_prevalence_matched_dice": min_dice,
                            "min_edge_to_core_nuclear_mean_ratio": min_edge_ratio,
-                           "min_nuclear_boundary_contrast": min_boundary_contrast},
+                           "min_nuclear_boundary_contrast": min_boundary_contrast,
+                           "min_spatial_nuclear_auc": min_local_auc,
+                           "min_spatial_positive_and_negative_pixels": min_local_pixels},
             "interpretation_limit": (
                 "Agreement with H&E-derived nuclei does not establish measured DAPI accuracy. "
                 "A poor StarDist mask can also lower this score. Inspect the overlay and mask."
@@ -98,10 +124,10 @@ class NuclearAlignmentScore:
         if p < 500 or n < 500:
             result.update(status="insufficient", alignment_score=None, auc=None,
                           prevalence_matched_dice=None, edge_to_core_nuclear_mean_ratio=None,
-                          nuclear_boundary_contrast=None)
+                          nuclear_boundary_contrast=None, spatial_shadow_status="insufficient",
+                          spatial_regions=[])
             return result
-        below = np.cumsum(self.neg) - self.neg
-        auc = float(np.sum(self.pos * (below + 0.5 * self.neg)) / (p * n))
+        auc = self.histogram_auc(self.pos, self.neg)
         selected = np.cumsum((self.pos + self.neg)[::-1])
         threshold = 255 - int(np.searchsorted(selected, p, side="left"))
         tp = int(self.pos[threshold:].sum())
@@ -116,11 +142,36 @@ class NuclearAlignmentScore:
         alignment_pass = (auc >= min_auc and dice >= min_dice and
                           boundary_contrast is not None and boundary_contrast >= min_boundary_contrast)
         border_pass = edge_ratio is None or edge_ratio >= min_edge_ratio
+        spatial_regions = []
+        eligible_local = 0
+        failed_local = 0
+        for row in range(3):
+            for col in range(3):
+                local_pos, local_neg = self.spatial_pos[row, col], self.spatial_neg[row, col]
+                local_p, local_n = int(local_pos.sum()), int(local_neg.sum())
+                eligible = local_p >= min_local_pixels and local_n >= min_local_pixels
+                local_auc = self.histogram_auc(local_pos, local_neg) if eligible else None
+                if eligible:
+                    eligible_local += 1
+                    failed_local += int(local_auc < min_local_auc)
+                spatial_regions.append({
+                    "row": row, "column": col,
+                    "nuclear_pixels": local_p, "nearby_extranuclear_pixels": local_n,
+                    "auc": local_auc,
+                    "status": ("insufficient" if not eligible else
+                               "fail" if local_auc < min_local_auc else "pass"),
+                })
+        spatial_status = ("insufficient" if eligible_local == 0 else
+                          "fail" if failed_local else "pass")
         result.update(
-            status="pass" if alignment_pass and border_pass else "fail",
+            status="pass" if alignment_pass and border_pass and not failed_local else "fail",
             alignment_status="pass" if alignment_pass else "fail",
             border_shadow_status=("insufficient" if edge_ratio is None else
                                   "pass" if border_pass else "fail"),
+            spatial_shadow_status=spatial_status,
+            spatial_regions=spatial_regions,
+            eligible_spatial_regions=eligible_local,
+            failed_spatial_regions=failed_local,
             alignment_score=alignment_score,
             auc=auc,
             prevalence_matched_dice=dice,
@@ -138,7 +189,9 @@ class NuclearAlignmentScore:
 def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int = 1024,
            min_auc: float = 0.70, min_dice: float = 0.35,
            min_edge_ratio: float = 0.65,
-           min_boundary_contrast: float = 0.05) -> dict:
+           min_boundary_contrast: float = 0.05,
+           min_local_auc: float = 0.60,
+           min_local_pixels: int = 500) -> dict:
     with LazyImageReader(image_path) as image, LazyMaskReader(nuclei_path) as nuclei:
         if "DAPI" not in image.channel_names:
             raise ValueError("GigaTIME output must include DAPI for nuclear QC")
@@ -192,8 +245,30 @@ def assess(image_path: str, nuclei_path: str, out_path: str, *, block_size: int 
                     preview_region = (y0, y1, x0, x1)
         result = scorer.report(min_auc=min_auc, min_dice=min_dice,
                                min_edge_ratio=min_edge_ratio,
-                               min_boundary_contrast=min_boundary_contrast)
+                               min_boundary_contrast=min_boundary_contrast,
+                               min_local_auc=min_local_auc,
+                               min_local_pixels=min_local_pixels)
         result["sampled_stratified_windows"] = len(y_starts) * len(x_starts)
+        report_stem = Path(out_path).stem
+        shadow_stem = (report_stem[:-len("_nuclear_qc")] + "_shadow_qc"
+                       if report_stem.endswith("_nuclear_qc")
+                       else report_stem + "_shadow_qc")
+        shadow_preview_path = Path(out_path).with_name(shadow_stem + ".png")
+        shadow_preview_path.parent.mkdir(parents=True, exist_ok=True)
+        shadow_preview = Image.new("RGB", (390, 390), "white")
+        draw = ImageDraw.Draw(shadow_preview)
+        for region in result.get("spatial_regions", []):
+            row, col = region["row"], region["column"]
+            x0, y0 = 15 + col * 120, 15 + row * 120
+            color = {"pass": "#c9e8d4", "fail": "#f4b9b9",
+                     "insufficient": "#e5e8ea"}[region["status"]]
+            draw.rectangle((x0, y0, x0 + 114, y0 + 114), fill=color, outline="#40545c", width=2)
+            label = (f"AUC {region['auc']:.3f}" if region["auc"] is not None
+                     else "Insufficient")
+            draw.text((x0 + 9, y0 + 34), label, fill="#17313c")
+            draw.text((x0 + 9, y0 + 58), f"N={region['nuclear_pixels']}", fill="#17313c")
+        shadow_preview.save(shadow_preview_path)
+        result["shadow_preview"] = shadow_preview_path.name
         if preview_region is not None:
             y0, y1, x0, x1 = preview_region
             dapi = np.clip(image.read_block(y0, y1, x0, x1)[dapi_index], 0, 1)
@@ -225,12 +300,18 @@ def main() -> None:
     parser.add_argument("--min-dice", type=float, default=0.35)
     parser.add_argument("--min-edge-ratio", type=float, default=0.65)
     parser.add_argument("--min-boundary-contrast", type=float, default=0.05)
+    parser.add_argument("--min-local-auc", type=float, default=0.60)
+    parser.add_argument("--min-local-pixels", type=int, default=500)
     parser.add_argument("--mode", choices=("warn", "fail"), default="fail")
     args = parser.parse_args()
+    if not 0.0 <= args.min_local_auc <= 1.0 or args.min_local_pixels < 1:
+        parser.error("spatial shadow thresholds require 0 <= --min-local-auc <= 1 and --min-local-pixels >= 1")
     result = assess(args.image, args.nuclei, args.output, block_size=args.block_size,
                     min_auc=args.min_auc, min_dice=args.min_dice,
                     min_edge_ratio=args.min_edge_ratio,
-                    min_boundary_contrast=args.min_boundary_contrast)
+                    min_boundary_contrast=args.min_boundary_contrast,
+                    min_local_auc=args.min_local_auc,
+                    min_local_pixels=args.min_local_pixels)
     print(json.dumps(result, indent=2))
     if args.mode == "fail" and result["status"] != "pass":
         raise SystemExit("GigaTIME nuclear alignment QC did not pass; do not use cell markers")

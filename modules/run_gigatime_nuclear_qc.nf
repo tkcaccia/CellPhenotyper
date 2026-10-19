@@ -14,11 +14,17 @@ process RUN_GIGATIME_NUCLEAR_QC {
     output:
     tuple val(sample_id), path("${sample_id}_gigatime_nuclear_qc.json"), emit: report
     tuple val(sample_id), path("${sample_id}_gigatime_nuclear_qc.png"), emit: preview
+    tuple val(sample_id), path("${sample_id}_gigatime_shadow_qc.png"), emit: shadow_preview
 
     script:
+    def qcScript = "${projectDir}/bin/gigatime_nuclear_qc.py"
+    def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
+    codeDigest.update(new File(qcScript).bytes)
+    def codeFingerprint = codeDigest.digest().encodeHex().toString()
     """
     set -euo pipefail
-    python "${projectDir}/bin/gigatime_nuclear_qc.py" \\
+    echo "[INFO] GigaTIME nuclear and shadow QC code fingerprint: ${codeFingerprint}"
+    python "${qcScript}" \\
       --image "${gigatime_dir}" \\
       --nuclei "${nuclei_mask_tif}" \\
       --output "${sample_id}_gigatime_nuclear_qc.json" \\
@@ -26,6 +32,8 @@ process RUN_GIGATIME_NUCLEAR_QC {
       --min-dice ${params.gigatime_nuclear_qc_min_dice} \\
       --min-edge-ratio ${params.gigatime_nuclear_qc_min_edge_ratio} \\
       --min-boundary-contrast ${params.gigatime_nuclear_qc_min_boundary_contrast} \\
+      --min-local-auc ${params.gigatime_nuclear_qc_min_local_auc} \\
+      --min-local-pixels ${params.gigatime_nuclear_qc_min_local_pixels} \\
       --mode ${params.gigatime_nuclear_qc_mode}
     """
 }

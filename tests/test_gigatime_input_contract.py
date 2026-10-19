@@ -1,6 +1,7 @@
 """Physical-scale and color-depth safety at the crop-to-GigaTIME handoff."""
 
 import importlib.util
+import argparse
 import sys
 from pathlib import Path
 
@@ -72,3 +73,26 @@ def test_gigatime_rejects_anisotropic_direct_input(tmp_path):
     write_ome(image, mpp_x=250, mpp_y=300)
     with pytest.raises(ValueError, match="near-isotropic"):
         gigatime._read_mpp_from_tiff(str(image))
+
+
+def test_auto_parameters_lock_model_geometry_and_preserve_requested_record():
+    pytest.importorskip("torch")
+    gigatime = load("run_gigatime_auto_contract", "run_gigatime_on_crop.py")
+    args = argparse.Namespace(
+        auto_parameters=True, repo_id="prov-gigatime/GigaTIME",
+        repo_revision=gigatime.DEFAULT_GIGATIME_REVISION,
+        patch_size=512, stride=256, target_mpp=0.5,
+        strict_target_mpp=False, auto_hardware=False,
+        blockwise=False, skip_background_blocks=True,
+    )
+    record = gigatime.apply_auto_parameters(args)
+    assert record["enabled"] is True
+    assert record["requested"]["target_mpp"] == 0.5
+    assert record["effective"] == {
+        "patch_size": 256, "stride": 128, "target_mpp": 0.25,
+        "strict_target_mpp": True, "auto_hardware": True,
+        "blockwise": True, "skip_background_blocks": False,
+    }
+    args.repo_revision = "unverified"
+    with pytest.raises(ValueError, match="pinned official CNN"):
+        gigatime.apply_auto_parameters(args)

@@ -50,6 +50,25 @@ class NuclearQCTest(unittest.TestCase):
         self.assertEqual(report["border_shadow_status"], "fail")
         self.assertEqual(report["status"], "fail")
 
+    def test_local_shadow_fails_when_global_alignment_and_border_pass(self):
+        yy, xx = np.mgrid[:384, :384]
+        nuclei = np.zeros((384, 384), dtype=np.uint8)
+        for cy in range(16, 384, 32):
+            for cx in range(16, 384, 32):
+                nuclei[(yy - cy) ** 2 + (xx - cx) ** 2 < 8 ** 2] = 1
+        dapi = np.where(nuclei > 0, 0.9, 0.05).astype(np.float32)
+        # A single central sector loses nuclear specificity while the other
+        # eight sectors keep the whole-image score high.
+        dapi[128:256, 128:256] = 0.45
+        scorer = qc.NuclearAlignmentScore(nuclei.shape)
+        scorer.add(dapi, nuclei, 0, 0)
+        report = scorer.report()
+        self.assertEqual(report["alignment_status"], "pass")
+        self.assertEqual(report["border_shadow_status"], "pass")
+        self.assertEqual(report["spatial_shadow_status"], "fail")
+        self.assertEqual(report["spatial_regions"][4]["status"], "fail")
+        self.assertEqual(report["status"], "fail")
+
     def test_aligned_and_shifted_nuclei_have_different_scores(self):
         yy, xx = np.mgrid[:128, :128]
         nuclei = np.zeros((128, 128), dtype=np.uint16)
@@ -87,6 +106,7 @@ class NuclearQCTest(unittest.TestCase):
             self.assertGreater(result["alignment_score"], 0.8)
             self.assertTrue((base / "qc.png").exists())
             self.assertEqual(result["preview"], "qc.png")
+            self.assertTrue((base / "qc_shadow_qc.png").exists())
 
 
 if __name__ == "__main__":

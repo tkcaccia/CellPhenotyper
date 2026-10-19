@@ -233,6 +233,7 @@ input_roi_mask_preview_factor: 10
 input_roi_mask_preview_threshold_mb: 100.0
 input_roi_mask_preview_alpha: 0.45
 gigatime_enable: true
+gigatime_auto_parameters: true  # pinned CNN grid and patch geometry; source MPP and hardware resolved at runtime
 gigatime_target_mpp: 0.25
 gigatime_strict_target_mpp: true
 gigatime_output_format: zarr
@@ -270,6 +271,8 @@ gigatime_nuclear_qc_min_auc: 0.70
 gigatime_nuclear_qc_min_dice: 0.35
 gigatime_nuclear_qc_min_edge_ratio: 0.65
 gigatime_nuclear_qc_min_boundary_contrast: 0.05
+gigatime_nuclear_qc_min_local_auc: 0.60
+gigatime_nuclear_qc_min_local_pixels: 500
 gigatime_max_output_gib: 8.0
 gigatime_disk_buffer_threshold_gib: 4.0
 marker_quantification_enable: true

@@ -52,6 +52,12 @@ class ProcessCodeFingerprintTest(unittest.TestCase):
             ],
         )
 
+    def test_gigatime_quality_gate_invalidates_resume_cache(self):
+        self.assert_fingerprint(
+            "modules/run_gigatime_nuclear_qc.nf",
+            ["qcScript", "GigaTIME nuclear and shadow QC code fingerprint"],
+        )
+
     def test_post_cluster_image_writers_track_metadata_helpers(self):
         expectations = {
             "modules/grow_to_tissue.nf": [
