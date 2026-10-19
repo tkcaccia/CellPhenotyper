@@ -12,6 +12,11 @@ is fixed. The persisted native marker store, rather than a JPEG preview, feeds
 the independent StarDist-versus-DAPI QC. In the default `fail` mode, that QC
 must pass before downstream marker use.
 
+The [model author clarified the physical input workflow](https://github.com/prov-gigatime/GigaTIME/issues/4):
+128 µm fields represented by 556 source pixels were resized to 512 pixels,
+then processed as 256-pixel windows. This yields the 0.25 µm/pixel model grid
+used here; it is independent of a scanner's nominal 40× objective label.
+
 One fixed held-out patch from the GigaTIME authors' paired H&E/mIF release was
 run through **the current CellPhenotyper inference and QC code** on Chiamaka.
 The 556-pixel, 128 µm registered field was resampled from 0.230216 to
