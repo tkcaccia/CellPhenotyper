@@ -11,16 +11,26 @@ import tifffile
 import zarr
 
 
+GIGATIME_VALUE_SEMANTICS = {
+    "value_type": "uncalibrated_virtual_marker_score",
+    "bounded_range": [0.0, 1.0],
+    "calibrated_probability": False,
+    "measured_protein_abundance": False,
+    "research_use_only": True,
+}
+
+
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Quantify per-label marker intensities from a GigaTIME multichannel image store."
+        description="Quantify per-label uncalibrated GigaTIME virtual-marker scores."
     )
     ap.add_argument("--image", required=True, help="Input GigaTIME TIFF, Zarr store, or GigaTIME output directory")
     ap.add_argument("--mask", required=True, help="Input labeled mask TIFF")
+    ap.add_argument("--exclude-mask", default="", help="Optional same-ID nuclei mask to subtract from expanded cell labels")
     ap.add_argument("--mask-name", required=True, help="Mask label used in outputs, e.g. nuclei or cyto")
     ap.add_argument("--out-quant-csv", required=True, help="Output wide CSV with mcMicro-like per-object quantification")
-    ap.add_argument("--out-mean-csv", required=True, help="Output CSV with mean intensity per marker")
-    ap.add_argument("--out-stats-csv", required=True, help="Output CSV with area/mean/sum/max per marker")
+    ap.add_argument("--out-mean-csv", required=True, help="Output CSV with mean virtual-marker score")
+    ap.add_argument("--out-stats-csv", required=True, help="Output CSV with area/mean/sum/max virtual-marker scores")
     ap.add_argument("--out-summary-json", required=True, help="Output JSON summary")
     return ap.parse_args()
 
@@ -213,8 +223,11 @@ class LazyImageReader:
                 pass
 
         self.scale_max = None
-        if str(self.storage_meta.get("output_dtype", "")).lower() == "uint16":
-            self.scale_max = float(self.storage_meta.get("storage_scale_max") or 65535.0)
+        storage_scale = self.storage_meta.get("storage_scale_max")
+        if storage_scale is not None:
+            self.scale_max = float(storage_scale)
+        elif np.issubdtype(np.dtype(self.arr.dtype), np.integer):
+            self.scale_max = float(np.iinfo(np.dtype(self.arr.dtype)).max)
 
     def close(self) -> None:
         try:
@@ -229,7 +242,7 @@ class LazyImageReader:
         self.close()
 
     def read_block(self, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
-        if self.channels == 1:
+        if self.arr.ndim == 2:
             block = np.asarray(self.arr[y0:y1, x0:x1])[None, ...]
         elif self.axes == "CYX":
             block = np.asarray(self.arr[:, y0:y1, x0:x1])
@@ -250,18 +263,23 @@ class LazyMaskReader:
         self.tf = tifffile.TiffFile(path)
         self.series = self.tf.series[0]
         arr = zarr.open(self.series.aszarr(), mode="r")
+        self.singleton_axis = None
         if arr.ndim == 3:
             if arr.shape[0] == 1:
-                arr = arr[0]
+                self.singleton_axis = 0
+                shape = arr.shape[1:]
             elif arr.shape[-1] == 1:
-                arr = arr[..., 0]
+                self.singleton_axis = 2
+                shape = arr.shape[:2]
             else:
                 raise ValueError(f"Unsupported mask shape after squeeze: {arr.shape}")
-        if arr.ndim != 2:
+        elif arr.ndim == 2:
+            shape = arr.shape
+        else:
             raise ValueError(f"Unsupported mask shape after squeeze: {arr.shape}")
         self.arr = arr
-        self.height = int(arr.shape[0])
-        self.width = int(arr.shape[1])
+        self.height = int(shape[0])
+        self.width = int(shape[1])
 
     def close(self) -> None:
         try:
@@ -277,37 +295,37 @@ class LazyMaskReader:
 
     def read_block(self, y0: int, y1: int, x0: int, x1: int, target_shape: tuple[int, int]) -> np.ndarray:
         ty, tx = target_shape
-        if (self.height, self.width) == target_shape:
-            out = np.asarray(self.arr[y0:y1, x0:x1])
+        # Map target pixel centres to mask pixels in absolute coordinates. This
+        # gives the same answer regardless of how the image is block-partitioned.
+        y_idx = np.minimum(self.height - 1, np.floor(
+            (np.arange(y0, y1) + .5) * self.height / ty).astype(np.int64))
+        x_idx = np.minimum(self.width - 1, np.floor(
+            (np.arange(x0, x1) + .5) * self.width / tx).astype(np.int64))
+        if self.singleton_axis == 0:
+            out = np.asarray(self.arr.oindex[0, y_idx, x_idx])
+        elif self.singleton_axis == 2:
+            out = np.asarray(self.arr.oindex[y_idx, x_idx, 0])
         else:
-            y_idx = np.minimum(
-                np.round(np.linspace(y0 * self.height / ty, (y1 - 1) * self.height / ty, y1 - y0)).astype(np.int64),
-                self.height - 1,
-            )
-            x_idx = np.minimum(
-                np.round(np.linspace(x0 * self.width / tx, (x1 - 1) * self.width / tx, x1 - x0)).astype(np.int64),
-                self.width - 1,
-            )
             out = np.asarray(self.arr.oindex[y_idx, x_idx])
-        out = np.squeeze(out)
-        if out.ndim != 2:
-            raise ValueError(f"Unsupported mask block shape after squeeze: {out.shape}")
+        if out.shape != (y1 - y0, x1 - x0):
+            raise ValueError(f"Unsupported mask block shape: {out.shape}")
         if not np.issubdtype(out.dtype, np.integer):
-            out = np.rint(out).astype(np.int64, copy=False)
+            raise ValueError("Cell labels must be an integer mask")
+        if np.any(out < 0):
+            raise ValueError("Cell labels must be nonnegative")
         return out
 
 
-def _scan_max_label(mask_reader: LazyMaskReader, target_shape: tuple[int, int], block_size: int) -> int:
+def _scan_labels(mask_reader: LazyMaskReader, target_shape: tuple[int, int], block_size: int) -> np.ndarray:
     ty, tx = target_shape
-    max_label = 0
+    observed: set[int] = set()
     for y0 in range(0, ty, block_size):
         y1 = min(ty, y0 + block_size)
         for x0 in range(0, tx, block_size):
             x1 = min(tx, x0 + block_size)
             block = mask_reader.read_block(y0, y1, x0, x1, target_shape)
-            if block.size:
-                max_label = max(max_label, int(block.max()))
-    return max_label
+            observed.update(int(v) for v in np.unique(block) if v > 0)
+    return np.asarray(sorted(observed), dtype=np.int64)
 
 
 def quantify_blockwise(
@@ -317,21 +335,23 @@ def quantify_blockwise(
     *,
     mask_name: str,
     block_size: int = 1024,
+    exclude_reader: LazyMaskReader | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     target_shape = (image_reader.height, image_reader.width)
-    max_label = _scan_max_label(mask_reader, target_shape, block_size)
-    if max_label <= 0:
+    label_ids = _scan_labels(mask_reader, target_shape, block_size)
+    if not len(label_ids):
         return [], [], []
 
-    counts = np.zeros(max_label + 1, dtype=np.int64)
-    sum_y = np.zeros(max_label + 1, dtype=np.float64)
-    sum_x = np.zeros(max_label + 1, dtype=np.float64)
-    min_y = np.full(max_label + 1, np.iinfo(np.int64).max, dtype=np.int64)
-    min_x = np.full(max_label + 1, np.iinfo(np.int64).max, dtype=np.int64)
-    max_y = np.full(max_label + 1, -1, dtype=np.int64)
-    max_x = np.full(max_label + 1, -1, dtype=np.int64)
-    sums_by_channel = np.zeros((len(channel_names), max_label + 1), dtype=np.float64)
-    max_by_channel = np.full((len(channel_names), max_label + 1), -np.inf, dtype=np.float32)
+    n_labels = len(label_ids)
+    counts = np.zeros(n_labels, dtype=np.int64)
+    sum_y = np.zeros(n_labels, dtype=np.float64)
+    sum_x = np.zeros(n_labels, dtype=np.float64)
+    min_y = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64)
+    min_x = np.full(n_labels, np.iinfo(np.int64).max, dtype=np.int64)
+    max_y = np.full(n_labels, -1, dtype=np.int64)
+    max_x = np.full(n_labels, -1, dtype=np.int64)
+    sums_by_channel = np.zeros((len(channel_names), n_labels), dtype=np.float64)
+    max_by_channel = np.full((len(channel_names), n_labels), -np.inf, dtype=np.float32)
 
     ty, tx = target_shape
     for y0 in range(0, ty, block_size):
@@ -339,56 +359,68 @@ def quantify_blockwise(
         for x0 in range(0, tx, block_size):
             x1 = min(tx, x0 + block_size)
             mask_block = mask_reader.read_block(y0, y1, x0, x1, target_shape)
+            if exclude_reader is not None:
+                excluded = exclude_reader.read_block(y0, y1, x0, x1, target_shape)
+                overlap = (excluded > 0) & (mask_block > 0)
+                if np.any(mask_block[overlap] != excluded[overlap]):
+                    raise ValueError("Nucleus and expanded-cell labels disagree at overlapping pixels")
+                mask_block = mask_block.copy()
+                mask_block[excluded > 0] = 0
             positive = mask_block > 0
             if not np.any(positive):
                 continue
             labels = mask_block[positive].astype(np.int64, copy=False)
-            counts += np.bincount(labels, minlength=max_label + 1)
+            indices = np.searchsorted(label_ids, labels)
+            if np.any(indices == n_labels) or not np.array_equal(label_ids[indices], labels):
+                raise ValueError("Cell mask changed after the label inventory was frozen")
+            counts += np.bincount(indices, minlength=n_labels)
 
             y_local, x_local = np.nonzero(positive)
             abs_y = y_local.astype(np.int64, copy=False) + int(y0)
             abs_x = x_local.astype(np.int64, copy=False) + int(x0)
-            sum_y += np.bincount(labels, weights=abs_y.astype(np.float64, copy=False), minlength=max_label + 1)
-            sum_x += np.bincount(labels, weights=abs_x.astype(np.float64, copy=False), minlength=max_label + 1)
-            np.minimum.at(min_y, labels, abs_y)
-            np.minimum.at(min_x, labels, abs_x)
-            np.maximum.at(max_y, labels, abs_y)
-            np.maximum.at(max_x, labels, abs_x)
+            sum_y += np.bincount(indices, weights=abs_y.astype(np.float64, copy=False), minlength=n_labels)
+            sum_x += np.bincount(indices, weights=abs_x.astype(np.float64, copy=False), minlength=n_labels)
+            np.minimum.at(min_y, indices, abs_y)
+            np.minimum.at(min_x, indices, abs_x)
+            np.maximum.at(max_y, indices, abs_y)
+            np.maximum.at(max_x, indices, abs_x)
 
             image_block = image_reader.read_block(y0, y1, x0, x1)
             for ch in range(image_block.shape[0]):
                 values = image_block[ch][positive].astype(np.float64, copy=False)
-                sums_by_channel[ch] += np.bincount(labels, weights=values, minlength=max_label + 1)
-                np.maximum.at(max_by_channel[ch], labels, values)
-
-    labels_sorted = np.flatnonzero(counts > 0)
-    labels_sorted = labels_sorted[labels_sorted > 0]
-    if labels_sorted.size == 0:
-        return [], [], []
+                if not np.isfinite(values).all() or np.any((values < 0) | (values > 1)):
+                    raise ValueError("GigaTIME virtual-marker scores must be finite in [0, 1]")
+                sums_by_channel[ch] += np.bincount(indices, weights=values, minlength=n_labels)
+                np.maximum.at(max_by_channel[ch], indices, values)
 
     quant_rows: list[dict] = []
     mean_rows: list[dict] = []
     stats_rows: list[dict] = []
-    for label_id in labels_sorted.tolist():
+    for index, label_id in enumerate(label_ids.tolist()):
+        if counts[index] == 0:
+            continue
         base = {
             "label_id": int(label_id),
             "mask_name": mask_name,
-            "area_px": int(counts[label_id]),
-            "centroid_y_px": float(sum_y[label_id] / counts[label_id]),
-            "centroid_x_px": float(sum_x[label_id] / counts[label_id]),
-            "bbox_ymin_px": int(min_y[label_id]),
-            "bbox_xmin_px": int(min_x[label_id]),
-            "bbox_ymax_px": int(max_y[label_id] + 1),
-            "bbox_xmax_px": int(max_x[label_id] + 1),
+            "value_semantics": GIGATIME_VALUE_SEMANTICS["value_type"],
+            "calibrated_probability": False,
+            "measured_protein_abundance": False,
+            "area_px": int(counts[index]),
+            "centroid_y_px": float(sum_y[index] / counts[index]),
+            "centroid_x_px": float(sum_x[index] / counts[index]),
+            "bbox_ymin_px": int(min_y[index]),
+            "bbox_xmin_px": int(min_x[index]),
+            "bbox_ymax_px": int(max_y[index] + 1),
+            "bbox_xmax_px": int(max_x[index] + 1),
         }
         mean_row = dict(base)
         stats_row = dict(base)
         quant_row = dict(base)
         for ch_idx, ch_name in enumerate(channel_names):
             safe_name = ch_name.strip() or "unnamed"
-            mean_val = float(sums_by_channel[ch_idx, label_id] / counts[label_id])
-            sum_val = float(sums_by_channel[ch_idx, label_id])
-            max_val = float(max_by_channel[ch_idx, label_id])
+            mean_val = float(sums_by_channel[ch_idx, index] / counts[index])
+            sum_val = float(sums_by_channel[ch_idx, index])
+            max_val = float(max_by_channel[ch_idx, index])
             mean_row[safe_name] = mean_val
             stats_row[f"{safe_name}__mean"] = mean_val
             stats_row[f"{safe_name}__sum"] = sum_val
@@ -421,7 +453,9 @@ def write_csv(path: str, rows: list[dict]) -> None:
 
 def main():
     args = parse_args()
-    with LazyImageReader(args.image) as image_reader, LazyMaskReader(args.mask) as mask_reader:
+    from contextlib import nullcontext
+    exclusion = LazyMaskReader(args.exclude_mask) if args.exclude_mask else nullcontext(None)
+    with LazyImageReader(args.image) as image_reader, LazyMaskReader(args.mask) as mask_reader, exclusion as exclude_reader:
         image_shape_cyx = [int(image_reader.channels), int(image_reader.height), int(image_reader.width)]
         mask_shape_yx = [int(mask_reader.height), int(mask_reader.width)]
         channel_names = list(image_reader.channel_names)
@@ -430,6 +464,7 @@ def main():
             mask_reader,
             channel_names,
             mask_name=args.mask_name,
+            exclude_reader=exclude_reader,
         )
 
     write_csv(args.out_quant_csv, quant_rows)
@@ -440,10 +475,15 @@ def main():
         "mask_name": args.mask_name,
         "image": str(Path(args.image).resolve()),
         "mask": str(Path(args.mask).resolve()),
+        "exclude_mask": str(Path(args.exclude_mask).resolve()) if args.exclude_mask else None,
         "image_shape_cyx": image_shape_cyx,
         "mask_shape_yx": mask_shape_yx,
         "channel_names": channel_names,
         "objects_quantified": len(quant_rows),
+        "value_semantics": dict(GIGATIME_VALUE_SEMANTICS),
+        "mask_compartment_contract": (
+            "Scores were summarized over pixels assigned to the named segmentation compartment."
+        ),
         "quantification_csv": str(Path(args.out_quant_csv).resolve()),
     }
     Path(args.out_summary_json).write_text(json.dumps(summary, indent=2), encoding="utf-8")
