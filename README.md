@@ -162,6 +162,8 @@ Outputs are written per sample to:
 
 The new `*_gigatime_quantification.csv` file is a wide per-object table in the same spirit as mcMicro-style single-cell quantification outputs: one row per label with area, centroid, bounding box, and per-marker mean/sum/max columns. The mean-intensity CSV remains convenient for lightweight downstream modeling, while the stats CSV preserves the explicit summary fields.
 
+These values are **uncalibrated virtual-marker scores**, not measured protein abundance or calibrated probabilities. The standalone quantifier writes `value_semantics`, `calibrated_probability` and `measured_protein_abundance` in its per-cell tables and records the same contract in its summary. When the mask and GigaTIME raster have different dimensions, label IDs are mapped by native pixel centers to the calibrated model grid, consistently across processing blocks. If a whole-cell mask includes the nucleus, `bin/quantify_gigatime_intensity.py --exclude-mask <same-ID nuclei mask>` can produce a disjoint cytoplasmic compartment; mismatched overlapping label IDs are rejected.
+
 ## Optional dual clustering outputs
 
 After KODAMA, CellPhenotyper produces the `standard` clustering variant by default. Set `--cluster_secondary_variant fine` to add a second branch:
