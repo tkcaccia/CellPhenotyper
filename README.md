@@ -15,6 +15,7 @@ nextflow run main.nf
 - [Parameters](PARAMETERS.md)
 - [Output](OUTPUT.md)
 - [Export cached experiments for wsiTools](docs/EXPERIMENT_PROJECTS.md)
+- [Three-group Virchow2/KODAMA → contextual Bora full-slide continuation](docs/BORA_CONTEXTUAL_THREE_GROUP.md)
 - [Pipeline step differences vs upstream tools](UPSTREAM_DIFFS.md)
 - [Release](RELEASE.md)
 - [Linux update playbook](LINUX_UPDATE.md)

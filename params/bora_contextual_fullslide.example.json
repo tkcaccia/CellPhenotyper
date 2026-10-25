@@ -1,0 +1,37 @@
+{
+  "schema": "cellphenotyper-bora-contextual-fullslide-input-v1",
+  "head_mode": "fit_from_kodama_tiles",
+  "source_frame_id": "REPLACE_WITH_NATIVE_FRAME_ID",
+  "pca_projection_sha256": "REPLACE_WITH_64_HEX_SHA256_OF_FROZEN_PCA_PROJECTION",
+  "native_shape_yx": [0, 0],
+  "native_mpp_xy": [0, 0],
+  "working_shape_yx": [0, 0],
+  "working_mpp_xy": [0.5, 0.5],
+  "analysis": {
+    "context_sigma_tokens": 1.0,
+    "prior_exponent": 0.0,
+    "training_prior": [0.3333333333333333, 0.3333333333333333, 0.3333333333333333],
+    "regularization_c": 0.1,
+    "core_pixels": 2048,
+    "halo_pixels": 96,
+    "boundary_spec": {
+      "format": "bora-local-he-boundary-v1",
+      "uncertainty_margin": 0.30,
+      "maximum_distance_um": 12.0,
+      "he_blur_um": 0.5,
+      "he_edge_sigma": 0.12,
+      "smoothness": 1.5,
+      "iterations": 4
+    }
+  },
+  "inputs": {
+    "pca_field": {"path": "/REPLACE/global_pca32.npy", "sha256": "REPLACE"},
+    "pca_projection": {"path": "/REPLACE/frozen_pca_projection.npz", "sha256": "REPLACE"},
+    "token_support": {"path": "/REPLACE/token_support.npy", "sha256": "REPLACE"},
+    "native_support": {"path": "/REPLACE/native_support.npy", "sha256": "REPLACE"},
+    "native_he": {"path": "/REPLACE/native_he.tif", "sha256": "REPLACE"},
+    "base_project": {"path": "/REPLACE/experiment.cellphenotyper.json", "sha256": "REPLACE"},
+    "kodama_binding": {"path": "/REPLACE/kodama_three_group_binding.json", "sha256": "REPLACE"},
+    "labeled_tiles": {"path": "/REPLACE/kodama_labeled_tiles.csv", "sha256": "REPLACE"}
+  }
+}
