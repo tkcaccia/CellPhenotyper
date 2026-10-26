@@ -1,0 +1,763 @@
+{
+  "schema": "cellvit-model-catalog",
+  "schema_version": 1,
+  "verified_on": "2026-10-20",
+  "runtime_version": "1.0.9",
+  "upstream_inference_revision": "d2143ded642846c6265fcfda9711a0376a894d8e",
+  "upstream_research_revision": "463c5c44bfdebfbe3943597eaa84daf3f5e26a5f",
+  "source_url": "https://zenodo.org/records/15094831",
+  "classifier_archive": {
+    "url": "https://zenodo.org/records/15094831/files/classifier.zip",
+    "size_bytes": 14734051,
+    "md5": "542947684cf3c69d011809c928a05e3c",
+    "sha256": "08a7e788fc7aecef3065252d16bec2e35038dda1ac871bac08e485b4aa5ab479"
+  },
+  "license": {
+    "url": "https://zenodo.org/records/15094831/files/LICENSE",
+    "sha256": "5054045e6acda68e49dff2705552790f6c5b5254cd5383c7869471a10c8826df",
+    "summary": "Mixed: SAM derivatives Apache-2.0; HIPT derivatives and original code carry Commons Clause commercial restrictions; required CellViT and CellViT++ attribution. Review upstream LICENSE before redistribution or commercial use."
+  },
+  "backbones": {
+    "HIPT": {
+      "feature_count": 384,
+      "checkpoint_filename": "CellViT-256-x40-AMP.pth",
+      "checkpoint_md5": "c0a794a5777320ff3a5a0e3be2e74a7c",
+      "runtime_subdir": "vit256"
+    },
+    "SAM": {
+      "feature_count": 1280,
+      "checkpoint_filename": "CellViT-SAM-H-x40-AMP.pth",
+      "checkpoint_md5": "cdbd74fdba46f9552183d142683b8258",
+      "runtime_subdir": "sam-h"
+    }
+  },
+  "models": [
+    {
+      "model_id": "cellvit-hipt-pannuke-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "pannuke",
+      "feature_count": 384,
+      "kind": "native_segmentation_head",
+      "status": "available",
+      "class_names": [
+        "Background",
+        "Neoplastic",
+        "Inflammatory",
+        "Connective",
+        "Dead",
+        "Epithelial"
+      ],
+      "score_semantics": "uncalibrated_pixel_type_vote_fraction"
+    },
+    {
+      "model_id": "cellvit-hipt-consep-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "consep",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/consep.pth",
+      "checkpoint_sha256": "a7cf16fddcfe4ddf242c3b858988198ec35682761a987df87dd37821bdf93dc3",
+      "hidden_dim": 128,
+      "class_names": [
+        "Other",
+        "Inflammatory",
+        "Epithelial",
+        "Spindle-Shaped"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-hipt-lizard-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "lizard",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/lizard.pth",
+      "checkpoint_sha256": "3e860cda329ffb1e64de734d3bfc67e63ed9b03fa1aa99f16da916e84a8e6f52",
+      "hidden_dim": 512,
+      "class_names": [
+        "Neutrophil",
+        "Epithelial",
+        "Lymphocyte",
+        "Plasma",
+        "Eosinophil",
+        "Connective tissue"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-hipt-nucls_main-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "nucls_main",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/nucls_main.pth",
+      "checkpoint_sha256": "f26bf1a67851770083b98cab0f591fd45b4c5d91e01ceabb255f42bb958edb18",
+      "hidden_dim": 128,
+      "class_names": [
+        "Tumor nonMitotic",
+        "Tumor Mitotic",
+        "nonTILnonMQ Stromal",
+        "Macrophage",
+        "Lymphocyte",
+        "Plasma Cell",
+        "Other Nucleus"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-hipt-nucls_super-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "nucls_super",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/nucls_super.pth",
+      "checkpoint_sha256": "2b451be9a43d38ff1a0a2315579eb7ab0e416d8394e5afcb64d42c4755fa6828",
+      "hidden_dim": 256,
+      "class_names": [
+        "Tumor",
+        "nonTIL Stromal",
+        "sTIL",
+        "Other"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-hipt-ocelot-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "ocelot",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/ocelot.pth",
+      "checkpoint_sha256": "2cf44d14138e78ddafcdc01cf79f1fc244b9d00f7261c34d1d30dda15f922510",
+      "hidden_dim": 256,
+      "class_names": [
+        "Other Cell",
+        "Tumor Cell"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-hipt-midog-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "midog",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "unavailable",
+      "reason": "CellViT-Inference 1.0.9 explicitly excludes HIPT MIDOG; no classifier published in the official archive.",
+      "class_names": []
+    },
+    {
+      "model_id": "cellvit-hipt-panoptils-1.0.9",
+      "backbone": "HIPT",
+      "taxonomy": "panoptils",
+      "feature_count": 384,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "vit256/panoptils.pth",
+      "checkpoint_sha256": "f95a4f286955cfd114689f3733ae54c532b4154069e8fd61f1fd35f06e8d38d8",
+      "hidden_dim": 512,
+      "class_names": [
+        "Other Cells",
+        "Epithelial Cells",
+        "Stromal Cells",
+        "TILs"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-pannuke-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "pannuke",
+      "feature_count": 1280,
+      "kind": "native_segmentation_head",
+      "status": "available",
+      "class_names": [
+        "Background",
+        "Neoplastic",
+        "Inflammatory",
+        "Connective",
+        "Dead",
+        "Epithelial"
+      ],
+      "score_semantics": "uncalibrated_pixel_type_vote_fraction"
+    },
+    {
+      "model_id": "cellvit-sam-consep-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "consep",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/consep.pth",
+      "checkpoint_sha256": "23f4770f363389124d201a8c34557b9d4dc5a13360b6193edee4be2b1dbbbdcd",
+      "hidden_dim": 128,
+      "class_names": [
+        "Other",
+        "Inflammatory",
+        "Epithelial",
+        "Spindle-Shaped"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-lizard-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "lizard",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/lizard.pth",
+      "checkpoint_sha256": "3b015d07b12542682dc64827bd4532418cbd2c36a5c76b05d409e7c2febf7812",
+      "hidden_dim": 512,
+      "class_names": [
+        "Neutrophil",
+        "Epithelial",
+        "Lymphocyte",
+        "Plasma",
+        "Eosinophil",
+        "Connective tissue"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-nucls_main-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "nucls_main",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/nucls_main.pth",
+      "checkpoint_sha256": "e13b319fa974f54a18ccb0555cd30897cdfe4b0d8509709e7ac8178d5bae5441",
+      "hidden_dim": 512,
+      "class_names": [
+        "Tumor nonMitotic",
+        "Tumor Mitotic",
+        "nonTILnonMQ Stromal",
+        "Macrophage",
+        "Lymphocyte",
+        "Plasma Cell",
+        "Other Nucleus"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-nucls_super-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "nucls_super",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/nucls_super.pth",
+      "checkpoint_sha256": "7f71243012b60b8389719f45bb881b65bbfa53d757c0346f3f6cfbb5e6ad5fa5",
+      "hidden_dim": 128,
+      "class_names": [
+        "Tumor",
+        "nonTIL Stromal",
+        "sTIL",
+        "Other"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-ocelot-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "ocelot",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/ocelot.pth",
+      "checkpoint_sha256": "22cb3a8a5d989f6f20ec3840dd59b7593fbe98415da889c8af37a97dd6e65208",
+      "hidden_dim": 256,
+      "class_names": [
+        "Other Cell",
+        "Tumor Cell"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-midog-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "midog",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/midog.pth",
+      "checkpoint_sha256": "4699dc750120968511a9b696c985386027edd84109667aeb2de99d62d4c88a94",
+      "hidden_dim": 512,
+      "class_names": [
+        "Mitotic",
+        "Hard-Negative"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    },
+    {
+      "model_id": "cellvit-sam-panoptils-1.0.9",
+      "backbone": "SAM",
+      "taxonomy": "panoptils",
+      "feature_count": 1280,
+      "kind": "mlp",
+      "status": "available",
+      "relative_checkpoint": "sam-h/panoptils.pth",
+      "checkpoint_sha256": "d84e53408ca18ffb7499c3a7ba77152bcdb4b617d002f02915dd5bf475004af1",
+      "hidden_dim": 512,
+      "class_names": [
+        "Other Cells",
+        "Epithelial Cells",
+        "Stromal Cells",
+        "TILs"
+      ],
+      "score_semantics": "uncalibrated_model_probability"
+    }
+  ],
+  "research_variants": [
+    {
+      "backbone": "UNI",
+      "taxonomy": "consep",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "UNI",
+      "taxonomy": "lizard",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "UNI",
+      "taxonomy": "ocelot",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "UNI",
+      "taxonomy": "panoptils",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "Virchow",
+      "taxonomy": "consep",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "Virchow",
+      "taxonomy": "ocelot",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "Virchow2",
+      "taxonomy": "consep",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "Virchow2",
+      "taxonomy": "ocelot",
+      "status": "unavailable",
+      "reason": "Research repository publishes experiment configuration/results, but no corresponding classifier checkpoint in checkpoints/ or the official Zenodo classifier archive; CellViT-Inference 1.0.9 supports HIPT/SAM only. A pooled Virchow2 tissue embedding is not a compatible cell token.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/tree/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers"
+    },
+    {
+      "backbone": "SAM",
+      "research_task": "Lizard/Histomics",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/SAM-H/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "SAM",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/SAM-H/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "SAM",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/SAM-H/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "SAM",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/SAM-H/config.yaml"
+    },
+    {
+      "backbone": "SAM",
+      "research_task": "SegPath/Plasma/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/SAM-H/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "Lizard/Histomics",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/UNI/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/UNI/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Main",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Main/UNI/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/UNI/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Super",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Super/UNI/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/UNI/config.yaml"
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "SegPath/Plasma/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/UNI/config.yaml"
+    },
+    {
+      "backbone": "HIPT",
+      "research_task": "Lizard/Histomics",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/ViT256/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "HIPT",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/ViT256/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "HIPT",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/ViT256/Fold-0/config.yaml"
+    },
+    {
+      "backbone": "HIPT",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/ViT256/config.yaml"
+    },
+    {
+      "backbone": "HIPT",
+      "research_task": "SegPath/Plasma/Breast",
+      "status": "unavailable",
+      "reason": "Research configuration/results only; no corresponding separate classifier artifact published in checkpoints/ or Zenodo classifier.zip. No replacement model is used.",
+      "source_url": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/ViT256/config.yaml"
+    }
+  ],
+  "research_experiment_inventory": [
+    {
+      "backbone": "SAM-H",
+      "research_task": "CoNSeP",
+      "configuration_count": 160,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/CoNSeP/SAM-H/Amount-DA/Amount-1/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "Lizard",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "Lizard/Histomics",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "MIDOG/single-domain/all",
+      "configuration_count": 15,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/MIDOG/single-domain/all/SAM-H/anchor_0/best_hp/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "NuCLS/Clean-Dataset/Main",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Main/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "NuCLS/Clean-Dataset/Super",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Super/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "Ocelot",
+      "configuration_count": 60,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Ocelot/SAM-H/Amount/Aug/10/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "PanopTILs",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/PanopTILs/SAM-H/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/SAM-H/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "SAM-H",
+      "research_task": "SegPath/Plasma/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/SAM-H/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "CoNSeP",
+      "configuration_count": 10,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/CoNSeP/UNI/CV-Aug/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "Lizard",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "Lizard/Histomics",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Main",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Main/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "NuCLS/Clean-Dataset/Super",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Super/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "Ocelot",
+      "configuration_count": 60,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Ocelot/UNI/Amount/Aug/10/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "PanopTILs",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/PanopTILs/UNI/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/UNI/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "UNI",
+      "research_task": "SegPath/Plasma/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/UNI/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "CoNSeP",
+      "configuration_count": 10,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/CoNSeP/ViT256/CV-Aug/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "Lizard",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "Lizard/Histomics",
+      "configuration_count": 3,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Lizard/Histomics/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "NuCLS/Clean-Dataset/Lymphocytes",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Lymphocytes/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "NuCLS/Clean-Dataset/Main",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Main/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "NuCLS/Clean-Dataset/Plasma",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Plasma/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "NuCLS/Clean-Dataset/Super",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/NuCLS/Clean-Dataset/Super/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "Ocelot",
+      "configuration_count": 60,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Ocelot/ViT256/Amount/Aug/10/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "PanopTILs",
+      "configuration_count": 5,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/PanopTILs/ViT256/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "SegPath/Lymphocytes/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Lymphocytes/Breast/ViT256/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "ViT256",
+      "research_task": "SegPath/Plasma/Breast",
+      "configuration_count": 1,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/SegPath/Plasma/Breast/ViT256/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "Virchow",
+      "research_task": "CoNSeP",
+      "configuration_count": 10,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/CoNSeP/Virchow/CV-Aug/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "Virchow",
+      "research_task": "Ocelot",
+      "configuration_count": 60,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Ocelot/Virchow/Amount/Aug/10/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "Virchow2",
+      "research_task": "CoNSeP",
+      "configuration_count": 10,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/CoNSeP/Virchow2/CV-Aug/Fold-0/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    },
+    {
+      "backbone": "Virchow2",
+      "research_task": "Ocelot",
+      "configuration_count": 60,
+      "example_configuration": "https://github.com/TIO-IKIM/CellViT-plus-plus/blob/463c5c44bfdebfbe3943597eaa84daf3f5e26a5f/logs/Classifiers/Ocelot/Virchow2/Amount/Aug/10/Seed-1/config.yaml",
+      "checkpoint_status": "No separate per-experiment/fold checkpoint published in inspected Git tree; only explicit catalog models have verified executable artifacts."
+    }
+  ]
+}

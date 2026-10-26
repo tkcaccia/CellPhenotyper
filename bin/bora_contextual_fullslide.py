@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import closing
 import csv
 import hashlib
 import json
@@ -18,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import sys
 import time
 
@@ -35,6 +37,125 @@ BOUNDARY_SPEC = {"format": "bora-local-he-boundary-v1",
     "smoothness": 1.5, "iterations": 4}
 CLASS_NAMES = {1: "KODAMA Group 1", 2: "KODAMA Group 2",
                3: "KODAMA Group 3"}
+
+
+def _asset_references(value):
+    """Visit published file references, including nested indexed-cell assets.
+
+    The experiment schema uses the same ``path``/``sha256`` pair for images,
+    artifacts, features, cell indexes and registered tissue assets. Descriptive
+    paths without a digest are metadata and must not be rewritten.
+    """
+    if isinstance(value, dict):
+        if isinstance(value.get("path"), str) and isinstance(value.get("sha256"), str):
+            yield value
+        for child in value.values():
+            yield from _asset_references(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _asset_references(child)
+
+
+def _checked_project_asset(reference: dict, root: Path,
+                           hashes: dict[Path, str]) -> Path:
+    raw = reference["path"]
+    path = Path(raw)
+    if path.is_absolute() or "://" in raw or not raw.strip():
+        raise ValueError("Project assets require local relative paths")
+    resolved = (root / path).resolve(strict=True)
+    if not resolved.is_file():
+        raise ValueError(f"Project asset is not an ordinary file: {raw}")
+    expected = reference["sha256"]
+    if (len(expected) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in expected)):
+        raise ValueError(f"Project asset has an invalid SHA-256: {raw}")
+    if resolved not in hashes:
+        hashes[resolved] = sha256(resolved)
+    actual = hashes[resolved]
+    if actual != expected.lower():
+        raise ValueError(f"Project asset SHA-256 mismatch: {raw}")
+    return resolved
+
+
+def _validate_indexed_project(path: Path) -> dict:
+    """Validate complete references in a viewer-extended CellPhenotyper index.
+
+    The original Python exporter supports pooled Virchow2 features but predates
+    wsiTools' indexed CellViT and dual-MPP contracts. Preserve these typed
+    fields and check every referenced file rather than dropping them or trying
+    to reinterpret cell features as tile CSVs.
+    """
+    project = json.loads(path.read_text())
+    if (project.get("schema") != "cellphenotyper-experiment" or
+            project.get("schema_version") != 1 or
+            not isinstance(project.get("tissues"), list) or
+            not project["tissues"] or
+            not isinstance(project.get("settings"), dict)):
+        raise ValueError("Invalid CellPhenotyper project header")
+    hashes: dict[Path, str] = {}
+    tissue_ids = set()
+    for tissue in project["tissues"]:
+        tissue_id = tissue.get("tissue_id")
+        if not isinstance(tissue_id, str) or not tissue_id or tissue_id in tissue_ids:
+            raise ValueError("Project tissues need unique nonempty IDs")
+        tissue_ids.add(tissue_id)
+        image = tissue.get("image")
+        if (not isinstance(image, dict) or
+                any(key not in image for key in
+                    ("path", "sha256", "width", "height", "mpp_x", "mpp_y", "frame_id")) or
+                not isinstance(tissue.get("artifacts"), list) or
+                not isinstance(tissue.get("feature_sets"), list)):
+            raise ValueError(f"Project tissue {tissue_id} lacks its image/assets")
+        image_path = _checked_project_asset(image, path.parent, hashes)
+        from export_experiment import image_shape
+        if image_shape(image_path) != (image["width"], image["height"]):
+            raise ValueError(f"Project tissue {tissue_id} image dimensions differ")
+        classification = tissue.get("cell_classification")
+        if classification is not None and not isinstance(classification, dict):
+            raise ValueError("Cell classification must be a file reference")
+        if isinstance(classification, dict) and classification.get("index") is not None:
+            if not isinstance(classification.get("index"), dict):
+                raise ValueError("Indexed cell classification requires a SQLite reference")
+            index = classification["index"]
+            if index.get("format") != "sqlite":
+                raise ValueError("Indexed cell classification requires SQLite format")
+            index_path = _checked_project_asset(index, path.parent, hashes)
+            with index_path.open("rb") as index_stream:
+                header = index_stream.read(16)
+            if header != b"SQLite format 3\x00":
+                raise ValueError("Indexed cell classification has no SQLite header")
+            with closing(sqlite3.connect(index_path.as_uri() + "?mode=ro", uri=True)) as connection:
+                metadata = {key: json.loads(value) for key, value in connection.execute(
+                    "SELECT key,value FROM metadata WHERE key IN "
+                    "('schema','schema_version','cell_count','image','classification')")}
+            if (metadata.get("schema") != "cellphenotyper-cell-index" or
+                    metadata.get("schema_version") not in (1, 2, 3) or
+                    type(metadata.get("cell_count")) is not int):
+                raise ValueError("Indexed cell metadata has an unsupported schema or count")
+            indexed_count = metadata["cell_count"]
+            if (indexed_count < 0 or
+                    (classification.get("cell_count") is not None and
+                     indexed_count != classification["cell_count"])):
+                raise ValueError("Indexed cell population differs from its project reference")
+            indexed_image = metadata.get("image")
+            if (not isinstance(indexed_image, dict) or
+                    any(indexed_image.get(field) != image[field] for field in
+                        ("sha256", "width", "height", "mpp_x", "mpp_y", "frame_id"))):
+                raise ValueError("Indexed cells do not bind the base-project H&E")
+            indexed_source = metadata.get("classification")
+            if (not isinstance(indexed_source, dict) or
+                    indexed_source.get("sha256") != classification.get("sha256")):
+                raise ValueError("Indexed cell source differs from its project reference")
+    for reference in _asset_references(project):
+        _checked_project_asset(reference, path.parent, hashes)
+    return project
+
+
+def _validate_project(path: Path) -> dict:
+    project = json.loads(path.read_text())
+    if any("cell_classification" in tissue or "registered_tissue" in tissue
+           for tissue in project.get("tissues", [])):
+        return _validate_indexed_project(path)
+    return validate_experiment(path)
 
 
 def sha256(path: Path) -> str:
@@ -113,7 +234,7 @@ def _manifest(path: Path) -> tuple[dict, dict[str, Path], dict]:
     if (mode == "fit_from_kodama_tiles" and
             kodama.get("labeled_tiles_sha256") != sha256(files["labeled_tiles"])):
         raise ValueError("KODAMA binding does not pin the labeled tile table")
-    tissue = [item for item in validate_experiment(files["base_project"])["tissues"]
+    tissue = [item for item in _validate_project(files["base_project"])["tissues"]
               if item["image"]["sha256"] == sha256(files["native_he"])]
     if len(tissue) != 1:
         raise ValueError("Base project must contain exactly this registered native H&E")
@@ -261,19 +382,25 @@ def _project_window(tokens: np.ndarray, origin: tuple[int, int],
     return output
 
 
+def _rebase_project(base: Path, output: Path) -> dict:
+    """Preserve a checked project while moving only its JSON index."""
+    project = copy.deepcopy(json.loads(base.read_text()))
+    output_root = output.parent.resolve(strict=True)
+    checked_hashes: dict[Path, str] = {}
+    for asset in _asset_references(project):
+        old_path = asset["path"]
+        _checked_project_asset(asset, base.parent, checked_hashes)
+        asset["path"] = os.path.relpath(
+            (base.parent / old_path).resolve(strict=True), output_root)
+    return project
+
+
 def _export_project(base: Path, source_tissue: dict, geojson: Path,
                     receipt: Path, output: Path) -> None:
-    project = copy.deepcopy(json.loads(base.read_text()))
     # The new project sits beside this run, not beside the input manifest.
     # Rebase every existing relative asset reference without copying data.
-    for old_tissue in project["tissues"]:
-        for asset in (old_tissue["image"], *old_tissue["artifacts"],
-                      *old_tissue["feature_sets"]):
-            old_path = asset["path"]
-            if Path(old_path).is_absolute():
-                raise ValueError("Base project contains an absolute asset path")
-            asset["path"] = os.path.relpath(
-                (base.parent / old_path).resolve(strict=True), output.parent)
+    project = _rebase_project(base, output)
+    output_root = output.parent.resolve(strict=True)
     tissue = next(item for item in project["tissues"]
                   if item["tissue_id"] == source_tissue["tissue_id"])
     if any(item.get("artifact_id", "").startswith("bora-contextual-")
@@ -282,21 +409,21 @@ def _export_project(base: Path, source_tissue: dict, geojson: Path,
     tissue["artifacts"].append({
         "artifact_id": "bora-contextual-" + sha256(geojson)[:20],
         "role": "tissue_annotations", "label": "Bora · KODAMA 3 groups",
-        "path": os.path.relpath(geojson, output.parent),
+        "path": os.path.relpath(geojson.resolve(strict=True), output_root),
         "sha256": sha256(geojson), "format": "geojson",
         "source_frame_id": tissue["image"]["frame_id"],
         "image_sha256": tissue["image"]["sha256"],
         "predicted_not_expert_annotation": True,
         "training_eligible": False, "review_only": False,
         "provenance": {"algorithm": COMPLETE,
-            "completion_path": os.path.relpath(receipt, output.parent),
+            "completion_path": os.path.relpath(receipt.resolve(strict=True), output_root),
             "completion_sha256": sha256(receipt),
             "class_identity": "anonymous_KODAMA_groups"}})
     project["settings"]["bora_annotations_mode"] = "ordinary_editable"
     project["settings"]["bora_status"] = (
         "Predicted KODAMA groups; editable tissue annotation; biological identity unvalidated")
     atomic_json(output, project, overwrite=False)
-    validate_experiment(output)
+    _validate_project(output)
 
 
 def run(manifest_path: Path, bora_source: Path, expected_source_sha256: str,

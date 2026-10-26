@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import hashlib
 import os
 import shutil
 import sys
@@ -18,6 +19,87 @@ SPEC.loader.exec_module(cellvit)
 
 
 class CellVitBatchTest(unittest.TestCase):
+    def test_zero_clean_mask_core_is_conservative(self):
+        import numpy as np
+        import tifffile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mask = root / 'mask.tif'
+            shift = root / 'shift.json'
+            shift.write_text(json.dumps({'crop_size': {'width': 16, 'height': 16}}))
+            pixels = np.zeros((2, 2), dtype=np.uint8)
+            pixels[0, 1] = 255
+            tifffile.imwrite(mask, pixels)
+            shard = {'core': [0, 0, 8, 8]}
+            evidence = cellvit.empty_clean_core_evidence(mask, shift, shard, 16, 16)
+            self.assertEqual(evidence['mask_xyxy'], [0, 0, 1, 1])
+            self.assertEqual(evidence['nonzero_mask_pixels'], 0)
+            shard['core'] = [0, 0, 9, 8]
+            self.assertIsNone(cellvit.empty_clean_core_evidence(mask, shift, shard, 16, 16))
+
+    def test_missing_native_cells_requires_exact_zero_patch_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / 'raw'
+            raw.mkdir()
+            prepared = root / 'cellvit_input.tif'
+            prepared.write_bytes(b'checked-input')
+            log = root / 'native.log'
+            log.write_text(f'No patches sampled from {prepared}\n'
+                           'No cells have been extracted\nFinished processing\n')
+            record = {'native_exit_code': 0, 'truncated': False,
+                      'sha256': hashlib.sha256(log.read_bytes()).hexdigest(),
+                      'bytes': log.stat().st_size}
+            evidence = cellvit.no_patch_native_evidence(log, record, prepared, raw)
+            self.assertEqual(evidence['raw_output_files'], 0)
+            (raw / 'partial.pt').write_bytes(b'partial native output')
+            self.assertIsNone(cellvit.no_patch_native_evidence(log, record, prepared, raw))
+            (raw / 'partial.pt').unlink()
+            log.write_text(f'No patches sampled from {prepared}\nTotal patches sampled: 3\n'
+                           'No cells have been extracted\nFinished processing\n')
+            record['sha256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+            self.assertIsNone(cellvit.no_patch_native_evidence(log, record, prepared, raw))
+            log.write_text('No cells have been extracted\n')
+            record['sha256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+            self.assertIsNone(cellvit.no_patch_native_evidence(log, record, prepared, raw))
+            log.write_text(f'No patches sampled from {prepared}\nNo cells have been extracted\n')
+            record['sha256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+            record['truncated'] = True
+            self.assertIsNone(cellvit.no_patch_native_evidence(log, record, prepared, raw))
+
+    def test_empty_native_source_declares_zero_rows_at_sam_width(self):
+        class FakeTorch:
+            float32 = 'float32'
+            float64 = 'float64'
+
+            @staticmethod
+            def empty(shape, dtype):
+                return {'shape': shape, 'dtype': dtype}
+
+            @staticmethod
+            def save(payload, path):
+                Path(path).write_text(json.dumps(payload))
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('cellvit_models._torch', return_value=FakeTorch):
+            root = Path(directory)
+            cells, graph = cellvit.materialize_empty_native_source(
+                root, 0.25, 0.25, 1280, {'policy': 'tested-zero-clean-core'})
+            self.assertEqual(json.loads(cells.read_text())['cells'], [])
+            tensors = json.loads(graph.read_text())
+            self.assertEqual(tensors['x']['shape'], [0, 1280])
+            self.assertEqual(tensors['positions']['shape'], [0, 2])
+
+    def test_native_log_capture_records_exact_successful_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'native.log'
+            record = cellvit.run_native_with_bounded_log(
+                [sys.executable, '-c', 'print("No patches sampled from /tmp/core.tif"); '
+                 'print("No cells have been extracted")'], os.environ.copy(), log)
+            self.assertEqual(record['native_exit_code'], 0)
+            self.assertFalse(record['truncated'])
+            self.assertEqual(record['sha256'], hashlib.sha256(log.read_bytes()).hexdigest())
+
     def test_explicit_batch_is_clamped_to_supported_cli_range(self):
         self.assertEqual(cellvit.auto_batch_size(1, 0), 2)
         self.assertEqual(cellvit.auto_batch_size(16, 0), 16)

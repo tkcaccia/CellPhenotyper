@@ -26,6 +26,7 @@ Options:
   --cpu-def <path>               CPU Singularity definition file (default: singularity/cellphenotyper_full_cpu.def)
   --gpu-def <path>               GPU Singularity definition file (default: singularity/cellphenotyper_full_gpu.def)
   --upload                        Publish after build using --upload-mode
+  --verify-cellvit-wsi            Require official CellViT and pyvips imports before publishing
   --fakeroot                      Use --fakeroot for definition builds (requires host support)
   --force                         Overwrite existing output file
   -h, --help                      Show this message
@@ -78,6 +79,7 @@ UPLOAD_MODE="auto"
 CPU_DEF="singularity/cellphenotyper_full_cpu.def"
 GPU_DEF="singularity/cellphenotyper_full_gpu.def"
 UPLOAD="false"
+VERIFY_CELLVIT_WSI="false"
 USE_FAKEROOT="false"
 FORCE="false"
 
@@ -149,6 +151,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --upload)
       UPLOAD="true"
+      shift
+      ;;
+    --verify-cellvit-wsi)
+      VERIFY_CELLVIT_WSI="true"
       shift
       ;;
     --fakeroot)
@@ -338,6 +344,14 @@ fi
 FILE_BYTES="$(wc -c < "$OUT_SIF" | tr -d '[:space:]')"
 GITHUB_RELEASE_MAX_BYTES=2147483647
 echo "Built: $OUT_SIF (${FILE_BYTES} bytes)"
+sha256sum "$OUT_SIF"
+
+if [[ "$VERIFY_CELLVIT_WSI" == "true" ]]; then
+  "$SING_BIN" exec --cleanenv "$OUT_SIF" /opt/micromamba/envs/cellvit/bin/python -c \
+    'import cellvit, pyvips; assert pyvips.version(0) >= 8'
+  "$SING_BIN" exec --cleanenv "$OUT_SIF" /opt/micromamba/envs/cellvit/bin/cellvit-inference --help >/dev/null
+  echo "Verified CellViT WSI runtime: $OUT_SIF"
+fi
 
 if [[ "$UPLOAD" == "true" ]]; then
   SELECTED_UPLOAD_MODE="$UPLOAD_MODE"

@@ -8,6 +8,19 @@ Main command:
 nextflow run main.nf
 ```
 
+## Full-slide CellViT and accepted smooth Bora
+
+Use [`cellvit_fullslide.nf`](cellvit_fullslide.nf) for complete single-GPU
+CellViT++ WSI analysis with all eight pretrained taxonomies, retained cell
+vectors, compact archives and a viewport-indexed CellPhenotyper project.
+The [full-slide guide](docs/cellvit-fullslide.md) explains pinned Singularity
+execution, complete-core validation and the combined viewer handoff.
+Use the [contextual Bora continuation](docs/BORA_CONTEXTUAL_THREE_GROUP.md)
+for the accepted smooth, diagonal tissue boundaries. Its KODAMA groups need
+the separate frozen Neighbor-context PLS identity stage for tissue-type names.
+These explicit entry points are supported independently of the older
+`main.nf` ROI/consensus route.
+
 ## Documentation
 
 - [Installation](INSTALL.md)

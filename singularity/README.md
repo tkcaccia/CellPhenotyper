@@ -12,6 +12,34 @@ Important:
 - Publish `.sif` files to GHCR over `oras://`; small files may also be mirrored as GitHub Release assets.
 - Pipeline users pull automatically with `-profile singularity`.
 
+## Full-slide runtime updates
+
+The checked-in recipe and publication-workflow changes have not been built
+or GPU-qualified by this source publication. They apply only to a future
+versioned runtime.
+
+An active whole-slide campaign pins the SIF by its SHA-256. Never replace that
+file during the campaign: a new image is a **new version**, validated beside
+the old one. The host owns `systemd-run`, cgroup limits, GPU admission and
+terminal cleanup; official CellViT inference, planning and feature packing run
+inside the pinned SIF. Keeping the host supervisor outside the image is needed
+for it to inspect the real host workload.
+
+The amd64 GPU dependency/source update now builds an amd64 SIF from the same
+updated OCI image. The SIF build verifies the CellViT environment, `pyvips`
+and the official inference command before publication. Choose a fresh runtime
+version; record the resulting SIF SHA-256 in the next campaign's parameter
+file. The `pyvips` dependency is baked into that new image, so that campaign
+does not need the PM016 V7 supplemental pydeps bind. The current PM016 V7 SIF
+still does need its pinned bind and must remain untouched.
+
+The accepted smooth Bora algorithm remains a separately pinned **source**
+snapshot until its latest code and CPU/fastPLS runtime are qualified together
+inside a new image. A GPU SIF containing CellViT alone does not establish that
+the complete Virchow2 → KODAMA → Bora workflow ran in one container. Validate
+the exact Bora source, runtime and output on a small slide before switching a
+future full-slide campaign. Do not change a running campaign's source or SIF.
+
 ## Naming Convention
 
 For version `X.Y.Z`, expected asset names are:

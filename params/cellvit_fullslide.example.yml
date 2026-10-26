@@ -1,0 +1,50 @@
+# Host-run full-slide CellViT++ action on one retained calibrated 0.25-um/px
+# RGB image. It uses official process_wsi sequentially on bounded cores.
+cellvit_fullslide_action: run
+cellvit_fullslide_image: null
+cellvit_fullslide_shift: null
+cellvit_fullslide_clean_mask: null
+cellvit_fullslide_bundle: null
+cellvit_classifier_cache: null
+cellvit_fullslide_gpu_uuid: null
+cellvit_fullslide_runtime_sif: /absolute/runtime/cellphenotyper-gpu.sif
+cellvit_fullslide_runtime_sif_sha256: null
+cellvit_fullslide_runtime_python: /opt/micromamba/envs/cellvit/bin/python
+cellvit_fullslide_runtime_executable: /opt/micromamba/envs/cellvit/bin/cellvit-inference
+# The retained Chiamaka SIF needs the immutable supplemental pyvips directory.
+cellvit_fullslide_runtime_pydeps: null
+cellvit_fullslide_runtime_pydeps_sha256: null
+cellvit_fullslide_shard_id: null
+cellvit_fullslide_adopt_from: null
+cellvit_fullslide_expected_checkpoint_sha256: null
+cellvit_fullslide_adoption_cleanup_receipt: null
+cellvit_fullslide_adoption_cleanup_receipt_sha256: null
+# PM016 has 104 planned cores. Set 104 for that slide; use its exact plan
+# count for another image, never the count of currently finished cores.
+cellvit_fullslide_expected_shards: 0
+# Use 1 to qualify one fresh core, then 0 for the complete remaining slide.
+cellvit_fullslide_max_new_shards: 0
+cellvit_fullslide_name: CellViT++ full-slide cell review
+cellvit_fullslide_tissue_id: tissue
+cellvit_fullslide_reserve_gib: 40
+cellvit_fullslide_case_budget_gib: 4
+cellvit_fullslide_case_timeout_seconds: 7200
+cellvit_fullslide_memory_mb: 12288
+# CellViT/Ray receives 8 GiB; 4 GiB remains for model/runtime overhead inside
+# the 12 GiB service cgroup. The official inference still uses one GPU/2 CPUs.
+cellvit_fullslide_app_memory_mb: 8192
+cellvit_fullslide_case_tasks_max: 512
+cellvit_fullslide_batch_size: 2
+cellvit_fullslide_cpu_python: python3
+cellvit_python: null
+cellvit_executable: cellvit-inference
+# To attach the accepted smooth Bora annotation, set all four together.
+cellvit_fullslide_bora_geojson: null
+cellvit_fullslide_bora_receipt: null
+cellvit_fullslide_expected_bora_sha256: null
+cellvit_fullslide_combined_output: null
+cellvit_model: SAM
+cellvit_amp: true
+cellvit_taxonomies: all
+cellvit_classification_device: cpu
+gigatime_enable: false

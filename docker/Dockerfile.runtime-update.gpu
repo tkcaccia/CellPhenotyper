@@ -11,6 +11,13 @@ ARG FASTPLS_REVISION=dcf45cccee8a1cb1a3ae8b3353a410ab0902162f
 
 RUN chmod 0644 /opt/cellphenotyper/models/hovernet/hovernet_fast_monusac_type_tf2pytorch.tar
 
+# Official CellViT++ WSI inference imports pyvips from its own environment.
+# Keep this in the immutable image so new campaigns need no host pydeps bind.
+RUN set -euo pipefail && \
+    micromamba run -n cellvit pip install --no-cache-dir 'pyvips==3.1.1' && \
+    micromamba run -n cellvit python -c \
+      'import cellvit, pyvips; assert pyvips.version(0) >= 8; print("CellViT WSI runtime passed")'
+
 RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
     rm -rf /var/lib/apt/lists/*
 

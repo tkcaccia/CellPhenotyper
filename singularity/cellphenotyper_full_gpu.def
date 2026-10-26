@@ -138,11 +138,12 @@ PY
     micromamba run -n cellvit pip install --no-cache-dir --pre \
       --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision
   fi
-  micromamba run -n cellvit pip install --no-cache-dir cellvit==1.0.9
+  micromamba run -n cellvit pip install --no-cache-dir cellvit==1.0.9 pyvips==3.1.1
   mkdir -p /opt/cellphenotyper/models/cellvit
   CELLVIT_CACHE=/opt/cellphenotyper/models/cellvit micromamba run -n cellvit python -c \
     "from cellvit.utils.cache_models import cache_cellvit_256, cache_classifier; cache_cellvit_256(); cache_classifier()"
   micromamba run -n cellvit cellvit-inference --help >/dev/null
+  micromamba run -n cellvit python -c 'import cellvit, pyvips; assert pyvips.version(0) >= 8'
 
   micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi
 

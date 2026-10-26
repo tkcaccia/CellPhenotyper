@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -29,7 +30,7 @@ FILENAME = "experiment.cellphenotyper.json"
 FEATURE_WIDTHS = {"virchow2-pooled": ("tile", 2560), "virchow2-spatial": ("token", 1280)}
 COORDINATE_CONVENTION = "pixel-edge-origin_centres-in-native-pixels"
 NON_PREDICTORS = {"label", "class", "class_id", "cluster", "sample_id", "tissue_id", "specimen_id",
-                  "patient_id", "split", "observation_type", "area_px"}
+                  "patient_id", "split", "observation_type", "area_px", "source_id", "cell_id"}
 SPATIAL_ROLES = {"spatial_transcriptomics_object": "rds", "spatial_review_bundle": "json"}
 SPATIAL_BUNDLE_SCHEMA = "cellphenotyper-spatial-review-bundle"
 SPATIAL_MAX_BYTES = 16 * 1024 * 1024
@@ -132,6 +133,34 @@ def _csv(path):
 
 def _validate_features(feature, path, image, label):
     kind = feature.get("kind")
+    if kind == "cellvit-cell" and feature.get("format") == "partitioned-sqlite":
+        from index_cellvit_partitions import POINTER_SCHEMA
+        pointer = _read_json(path)
+        pointer_image = pointer.get("image")
+        identity_keys = ("sha256", "width", "height", "mpp_x", "mpp_y",
+                         "frame_id", "coordinate_convention", "coordinate_space",
+                         "origin_x", "origin_y")
+        descriptor = _mapping(feature.get("descriptor"), f"{label}.descriptor")
+        columns = feature.get("feature_columns")
+        if (feature.get("observation_unit") != "cell" or feature.get("coordinate_frame") != "image" or
+                feature.get("frame_id") != image.get("frame_id") or
+                type(feature.get("row_count")) is not int or feature["row_count"] < 0 or
+                descriptor.get("backbone") not in {"SAM", "HIPT", "Virchow2"} or
+                type(descriptor.get("feature_count")) is not int or
+                not 0 < descriptor["feature_count"] <= 4096 or
+                not isinstance(columns, list) or
+                len(columns) != descriptor["feature_count"] or
+                len(set(columns)) != len(columns) or NON_PREDICTORS.intersection(columns) or
+                pointer.get("schema") != POINTER_SCHEMA or
+                pointer.get("feature_storage") != "partition-row-reference-v1" or
+                not isinstance(pointer_image, dict) or
+                any(pointer_image.get(key) != image.get(key) for key in identity_keys) or
+                pointer.get("feature_set_id") != feature.get("feature_set_id") or
+                pointer.get("feature_columns") != columns or
+                pointer.get("descriptor") != descriptor or
+                pointer.get("row_count") != feature["row_count"]):
+            raise ExperimentError(f"{label}: invalid indexed CellViT feature pointer or source frame")
+        return feature["row_count"]
     if kind not in FEATURE_WIDTHS:
         raise ExperimentError(f"{label}.kind must be virchow2-pooled or virchow2-spatial")
     unit, width = FEATURE_WIDTHS[kind]
@@ -200,6 +229,15 @@ def _validate_features(feature, path, image, label):
 
 def _register_definition(definitions, feature, image):
     """A shared feature ID denotes the same representation across tissues."""
+    if feature["kind"] == "cellvit-cell":
+        signature = json.dumps({key: feature[key] for key in
+            ("kind", "observation_unit", "feature_columns", "descriptor")},
+            sort_keys=True, allow_nan=False)
+        fid = feature["feature_set_id"]
+        if fid in definitions and definitions[fid] != signature:
+            raise ExperimentError(f"Feature set {fid} has incompatible definitions across tissues")
+        definitions[fid] = signature
+        return
     grid = feature["grid"]
     physical_grid = [round(grid[key] * image[mpp], 6) for key, mpp in
                      (("tile_width_px", "mpp_x"), ("tile_height_px", "mpp_y"),
@@ -671,6 +709,73 @@ def _validate_gigatime_artifacts(payload, root, *, fill=False):
                                  artifacts[mask_id], headers[mask_id], image, fill)
 
 
+def _prepare_indexed_cell_classification(tissue, root, destination=None):
+    """Bind a complete partition index to the exact full-slide image.
+
+    Validation streams/checks the source manifest and SQLite index; it never
+    loads a whole-slide population into a Python list.
+    """
+    reference = _mapping(tissue.get("cell_classification"), "cell_classification")
+    if "index" not in reference or "feature_manifest" not in reference:
+        raise ExperimentError("Indexed CellViT cells require an index and feature manifest")
+    if destination is None:
+        item = copy.deepcopy(reference)
+        manifest_path = _verify_asset(item, root, "cell_classification")
+        index_path = _verify_asset(item["index"], root, "cell_classification.index")
+        feature_manifest = _verify_asset(item["feature_manifest"], root,
+                                         "cell_classification.feature_manifest")
+        image_root = root
+    else:
+        item, manifest_path = _asset(reference, root, destination, "cell_classification")
+        item["index"], index_path = _asset(reference["index"], root, destination,
+                                            "cell_classification.index")
+        item["feature_manifest"], feature_manifest = _asset(
+            reference["feature_manifest"], root, destination,
+            "cell_classification.feature_manifest")
+        image_root = destination.parent
+    if manifest_path != feature_manifest or item["index"].get("format") != "sqlite":
+        raise ExperimentError("Indexed CellViT source/feature manifest or SQLite format differs")
+    if "segmentation_review" in item or "tissue_context" in item:
+        raise ExperimentError("Indexed CellViT project cannot attach unchecked legacy sidecars")
+    image_path = _path(tissue["image"]["path"], image_root, "indexed cell image")
+    pointer_path = index_path.with_suffix(".features.json")
+    try:
+        from index_cellvit_partitions import validate_partition_index
+        metadata = validate_partition_index(index_path, manifest_path, pointer_path, image_path)
+    except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+        raise ExperimentError(f"Cannot validate complete CellViT partition index: {exc}") from exc
+    source_image = metadata["image"]
+    target_image = tissue["image"]
+    identity_keys = ("sha256", "width", "height", "mpp_x", "mpp_y", "frame_id",
+                     "coordinate_convention", "coordinate_space", "origin_x", "origin_y")
+    if any(source_image.get(key) != target_image.get(key) for key in identity_keys):
+        raise ExperimentError("Indexed CellViT image SHA/frame/dimensions/MPP differ from project")
+    registration = {
+        "source_frame_id": source_image["frame_id"],
+        "target_frame_id": target_image["frame_id"],
+        "source_to_image_affine": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "identity_verified": {key: source_image[key] for key in identity_keys if key != "frame_id"},
+    }
+    if "registration" in item and item["registration"] != registration:
+        raise ExperimentError("Indexed CellViT registration differs from verified source")
+    if destination is None and "registration" not in item:
+        raise ExperimentError("Indexed CellViT project lacks verified registration")
+    item["registration"] = registration
+    count = metadata["cell_count"]
+    for key, value in (("cell_count", count),
+                       ("review_status", "available" if count else "empty")):
+        if key in item and item[key] != value:
+            raise ExperimentError(f"Indexed CellViT {key} differs from source")
+        item[key] = value
+    feature = copy.deepcopy(metadata["feature_set"])
+    feature["path"] = str(_path(metadata["feature_store"]["path"], index_path.parent,
+                                 "indexed feature pointer"))
+    feature["source_frame_id"] = source_image["frame_id"]
+    feature["frame_id"] = target_image["frame_id"]
+    feature["registration"] = registration
+    return item, feature
+
+
 def validate_experiment(path: Path) -> dict:
     """Verify schema, local assets, hashes, identity and every cached CSV row."""
     path = Path(path).absolute()
@@ -710,6 +815,12 @@ def validate_experiment(path: Path) -> dict:
         image_path = _verify_asset(image, path.parent, f"{label}.image")
         if image_shape(image_path) != (image["width"], image["height"]):
             raise ExperimentError(f"{label}: image header dimensions disagree with manifest")
+        if "registered_tissue" in tissue:
+            from registered_tissue_assets import validate_registered_tissue
+            try:
+                validate_registered_tissue(tissue["registered_tissue"], path.parent, image)
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+                raise ExperimentError(f"{label}: registered tissue differs: {exc}") from exc
         artifacts = tissue.get("artifacts")
         features = tissue.get("feature_sets")
         if not isinstance(artifacts, list) or not isinstance(features, list):
@@ -736,6 +847,15 @@ def validate_experiment(path: Path) -> dict:
             feature_path = _verify_asset(feature, path.parent, f"{label}.feature {fid}")
             _validate_features(feature, feature_path, image, f"{label}.feature {fid}")
             _register_definition(definitions, feature, image)
+        if tissue.get("cell_classification") is not None:
+            item, expected = _prepare_indexed_cell_classification(tissue, path.parent)
+            if item != tissue["cell_classification"]:
+                raise ExperimentError("Indexed CellViT classification lacks verified metadata")
+            matches = [feature for feature in features
+                       if feature.get("feature_set_id") == expected["feature_set_id"]]
+            expected["path"] = Path(os.path.relpath(expected["path"], path.parent)).as_posix()
+            if matches != [expected]:
+                raise ExperimentError("Indexed CellViT feature pointer is not registered exactly once")
     _validate_spatial_artifacts(payload, path.parent)
     _validate_gigatime_artifacts(payload, path.parent)
     return payload
@@ -815,8 +935,27 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
         feature_ids = set()
         image.setdefault("frame_id", f"{tid}:image")
         image["coordinate_convention"] = COORDINATE_CONVENTION
+        if tissue.get("cell_classification") is not None:
+            image.setdefault("coordinate_space", "crop-native-pixels")
+            image.setdefault("origin_x", 0)
+            image.setdefault("origin_y", 0)
         result = copy.deepcopy(tissue)
         result.update(tissue_id=tid, name=name, image=image, artifacts=[], feature_sets=[])
+        if "registered_tissue" in tissue:
+            declared = _mapping(tissue["registered_tissue"], f"{label}.registered_tissue")
+            registered = {}
+            for key in ("registration", "image"):
+                registered[key], _ = _asset(declared.get(key), base_dir, output,
+                                           f"{label}.registered_tissue.{key}")
+            registered["assets"] = [_asset(asset, base_dir, output,
+                f"{label}.registered_tissue.asset")[0] for asset in
+                _array(declared.get("assets", []), f"{label}.registered_tissue.assets")]
+            from registered_tissue_assets import validate_registered_tissue
+            try:
+                validate_registered_tissue(registered, output.parent, image)
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+                raise ExperimentError(f"{label}: registered tissue differs: {exc}") from exc
+            result["registered_tissue"] = registered
         for key in ("specimen_id", "provenance"):
             if key in tissue:
                 result[key] = tissue[key]
@@ -834,7 +973,20 @@ def export_experiment(spec: dict, output: Path, *, base_dir=Path("."), overwrite
             item.setdefault("artifact_id", f"{tid}:artifact-{ai + 1}")
             item.setdefault("frame_id", image["frame_id"])
             result["artifacts"].append(item)
-        for fi, feature in enumerate(_array(tissue.get("feature_sets", []), f"{label}.feature_sets")):
+        supplied_features = copy.deepcopy(_array(tissue.get("feature_sets", []),
+                                                 f"{label}.feature_sets"))
+        if tissue.get("cell_classification") is not None:
+            cell_reference, cell_feature = _prepare_indexed_cell_classification(
+                result, base_dir, output)
+            result["cell_classification"] = cell_reference
+            existing = [feature for feature in supplied_features
+                        if feature.get("feature_set_id") == cell_feature["feature_set_id"]]
+            if existing:
+                if len(existing) != 1 or existing[0] != cell_feature:
+                    raise ExperimentError("Existing indexed feature conflicts with classification")
+            else:
+                supplied_features.append(cell_feature)
+        for fi, feature in enumerate(supplied_features):
             item, feature_path = _asset(feature, base_dir, output, f"{label}.feature_sets[{fi}]")
             prefix = item.pop("feature_columns_prefix", None)
             if "feature_columns" not in item and prefix is not None:
