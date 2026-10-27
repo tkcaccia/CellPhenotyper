@@ -35,9 +35,13 @@ local_copies/
 remote_previews/
 /Visium_HD_11mm_Human_Breast_Cancer_*/
 
-# manuscript working material; retain only the current revised artifact
+# manuscript working material; publish only the named revision artifacts
 Manuscript/*
 !Manuscript/CellPhenotyper revised 280826 TITAN PathoFMPred.docx
+!Manuscript/CellPhenotyper_manuscript_20261027.docx
+!Manuscript/CellPhenotyper_Supplementary_Methods_20261027.docx
+!Manuscript/README.md
+!Manuscript/REVISION_20261027.md
 
 # local container artifacts
 singularity/*.sif
@@ -48,6 +52,11 @@ singularity-cellphenotyper-*.sif
 
 # runtime outputs
 *.html
+!docs/pipeline_metro/*.html
+
+# local implementation-validation artifacts
+.qc/
 
 # local TensorFlow build artifacts used for maintainer-only GPU image builds
 docker/wheels/
+.gpu_locks/

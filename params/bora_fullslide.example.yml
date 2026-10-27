@@ -1,0 +1,10 @@
+# Copy separately for each slide after its complete, verified three-scale
+# Virchow2 inventory and direct-fit KODAMA receipt exist. No automatic next
+# slide or GPU case is launched by this entry point.
+bora_fullslide_manifest: null      # absolute, source-bound bora-wsi-global-v1 JSON
+bora_fullslide_output: null        # absolute, not yet existing directory
+bora_fullslide_cpu_sif: null       # absolute, qualified CPython 3.10 CPU SIF
+bora_fullslide_executable: bora
+bora_fullslide_required_groups: null  # PM016: 2; set separately for other slides
+bora_fullslide_memory_gb: 12
+compute_device: cpu

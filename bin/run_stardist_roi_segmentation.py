@@ -33,7 +33,6 @@ import math
 import io
 import contextlib
 import os
-import re
 import subprocess
 import shutil
 import sys
@@ -44,69 +43,27 @@ from typing import Any, Dict, Iterable, List, Tuple, Optional
 import numpy as np
 import tifffile
 
-
-def _safe_float(value) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (tuple, list)) and len(value) == 2:
-        num, den = value
-        try:
-            den = float(den)
-            if den == 0.0:
-                return None
-            return float(num) / den
-        except Exception:
-            return None
-    try:
-        return float(value)
-    except Exception:
-        return None
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hardware_runtime import query_gpu_memory_mib
 
 
 def read_mpp_from_tiff(path: Path) -> float | None:
-    unit_to_um = {
-        2: 25_400.0,  # inch
-        3: 10_000.0,  # centimeter
-    }
-    try:
-        with tifffile.TiffFile(str(path)) as tf:
-            page = tf.pages[0]
-            desc = None
-            try:
-                desc = page.tags["ImageDescription"].value
-            except Exception:
-                desc = getattr(tf, "ome_metadata", None)
-            if isinstance(desc, str):
-                vals = []
-                for pattern in (
-                    r'PhysicalSizeX="([0-9]+(?:\.[0-9]+)?)"',
-                    r'PhysicalSizeY="([0-9]+(?:\.[0-9]+)?)"',
-                    r"MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
-                    r"aperio.MPP\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)",
-                ):
-                    vals.extend(float(m.group(1)) for m in re.finditer(pattern, desc))
-                if vals:
-                    return float(sum(vals) / len(vals))
+    from validate_input_resolution import read_resolution
 
-            unit = None
-            try:
-                unit = int(page.tags["ResolutionUnit"].value)
-            except Exception:
-                unit = None
-            if unit in unit_to_um:
-                vals = []
-                for tag_name in ("XResolution", "YResolution"):
-                    try:
-                        res = _safe_float(page.tags[tag_name].value)
-                    except Exception:
-                        res = None
-                    if res and res > 0:
-                        vals.append(unit_to_um[unit] / res)
-                if vals:
-                    return float(sum(vals) / len(vals))
+    try:
+        info = read_resolution(path)
     except Exception:
         return None
-    return None
+    mpp_x = float(info.mpp_x)
+    mpp_y = float(info.mpp_y if info.mpp_y is not None else info.mpp_x)
+    mean_mpp = (mpp_x + mpp_y) / 2.0
+    anisotropy = abs(mpp_x - mpp_y) / mean_mpp
+    if anisotropy > 0.05:
+        raise ValueError(
+            f"StarDist input X/Y pixel sizes differ by {anisotropy:.2%}; "
+            "a scalar MPP would corrupt downstream physical calibration."
+        )
+    return mean_mpp
 
 def write_full_labels_tif(full_out: Path, labels_crop: np.ndarray, x0: int, y0: int, full_w: int, full_h: int) -> None:
     """Write a full-resolution label image (BigTIFF) without allocating the full array in RAM."""
@@ -147,6 +104,8 @@ def write_full_labels_zarr(full_out: Path, labels_crop: np.ndarray, x0: int, y0:
 
 import zarr
 
+from model_provenance import model_bundle_records
+
 STARDIST_AVAILABLE = True
 STARDIST_IMPORT_ERROR = None
 try:
@@ -164,10 +123,7 @@ def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
       $KERAS_HOME/models/StarDist2D/<model_name>
     """
     candidates: List[Tuple[str, str]] = []
-    keras_home = (os.environ.get("KERAS_HOME") or "").strip()
-    if not keras_home:
-        return candidates
-
+    keras_home = (os.environ.get("KERAS_HOME") or str(Path.home() / ".keras")).strip()
     root = Path(keras_home) / "models" / "StarDist2D"
     names = [model_name]
     if not model_name.startswith("python_"):
@@ -175,9 +131,37 @@ def _local_stardist_candidates(model_name: str) -> List[Tuple[str, str]]:
 
     for name in names:
         model_dir = root / name
-        if model_dir.is_dir():
-            candidates.append((str(root), name))
+        # Some offline caches preserve the release zip and unpack its contents
+        # into a sibling `*_extracted` directory. A directory with only a zip
+        # is not a loadable StarDist model and must not trigger a download.
+        for candidate in (model_dir, model_dir / f"{name}_extracted"):
+            if (candidate / "config.json").is_file() and (candidate / "weights_best.h5").is_file():
+                candidates.append((str(candidate.parent), candidate.name))
     return candidates
+
+
+def stardist_model_dir(model_name: str) -> Optional[Path]:
+    candidates = _local_stardist_candidates(model_name)
+    for basedir, name in candidates:
+        candidate = Path(basedir) / name
+        if candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def stardist_model_provenance(model_name: str, used_model: bool) -> Dict[str, Any]:
+    model_dir = stardist_model_dir(model_name) if used_model else None
+    standard_release = model_name in {
+        "2D_versatile_he", "2D_versatile_fluo", "2D_paper_dsb2018", "2D_demo"
+    }
+    return {
+        "used_model": bool(used_model),
+        "source_repository": "https://github.com/stardist/stardist",
+        "requested_revision": model_name,
+        "resolved_revision": "release:stardist-models-v0.1" if standard_release and model_dir else None,
+        "cache_path": str(model_dir) if model_dir else None,
+        "checkpoints": model_bundle_records(model_dir) if model_dir else [],
+    }
 
 
 def load_stardist_model_filtered(model_name: str):
@@ -198,6 +182,12 @@ def load_stardist_model_filtered(model_name: str):
             return StarDist2D(None, name=name, basedir=basedir)
         except Exception as exc:
             local_errors.append(f"{basedir}/{name}: {exc}")
+
+    if os.environ.get("STARDIST_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            f"Offline StarDist model {model_name!r} could not be loaded: "
+            + ("; ".join(local_errors) if local_errors else "no complete local checkpoint")
+        )
 
     # Fallback to StarDist pretrained resolver (may download if cache is incomplete).
     buf_out, buf_err = io.StringIO(), io.StringIO()
@@ -1318,27 +1308,10 @@ def estimate_rgb_percentiles(reader: CropSourceReader, p_lo: float = 1.0, p_hi: 
 
 def detect_gpu_memory_gib() -> Optional[float]:
     try:
-        out = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        ).strip()
+        usable_mib, _ = query_gpu_memory_mib(0)
     except Exception:
         return None
-    if not out:
-        return None
-    first = out.splitlines()[0].strip()
-    if not first:
-        return None
-    try:
-        return float(first) / 1024.0
-    except Exception:
-        return None
+    return float(usable_mib) / 1024.0
 
 
 def build_big_block_candidates(requested_block_size: int,
@@ -1543,6 +1516,8 @@ def main() -> None:
     ap.add_argument("--max-polygons", type=int, default=0,
                     help="Limit polygons written when --write-polygons (0 = no limit)")
     ap.add_argument("--pad", type=int, default=200, help="Fixed padding (pixels) added on each side of the ROI crop bbox (default 200).")
+    ap.add_argument("--source-shift", default="", help="Shift JSON for a pre-created shared detector crop.")
+    ap.add_argument("--clean-tissue-mask", default="", help="Crop-aligned GrandQC clean-tissue mask used to filter detections.")
 
     args = ap.parse_args()
 
@@ -1660,15 +1635,28 @@ def main() -> None:
             log("Deferring crop TIFF creation until after blockwise StarDist inference.")
 
         # ---- 3) save shift info for future mapping ----
+        orig_x0, orig_y0 = int(x0), int(y0)
+        full_width, full_height = int(W0), int(H0)
+        original_input = str(in_path)
+        if args.source_shift:
+            parent_shift = json.loads(Path(args.source_shift).read_text())
+            parent_offset = parent_shift.get("offset_crop_to_original", {})
+            orig_x0 += int(parent_offset.get("dx", 0))
+            orig_y0 += int(parent_offset.get("dy", 0))
+            parent_full = parent_shift.get("full_size", {})
+            full_width = int(parent_full.get("width", full_width))
+            full_height = int(parent_full.get("height", full_height))
+            original_input = str(parent_shift.get("input_image", original_input))
+            source_mpp = parent_shift.get("source_mpp", parent_shift.get("microns_per_pixel", source_mpp))
         shift_info = {
-            "input_image": str(in_path),
+            "input_image": original_input,
             "roi_input_geojson": str(roi_path),
             "crop_tif": str(crop_tif),
             "crop_bbox_xyxy": {"x0": int(x0), "y0": int(y0), "x1": int(x1), "y1": int(y1)},
             "pad_pixels_used": int(pad_used),
-            "offset_crop_to_original": {"dx": int(x0), "dy": int(y0)},
+            "offset_crop_to_original": {"dx": int(orig_x0), "dy": int(orig_y0)},
             "crop_size": {"width": int(crop_w), "height": int(crop_h)},
-            "full_size": {"width": int(W0), "height": int(H0)},
+            "full_size": {"width": full_width, "height": full_height},
         }
         if source_mpp and source_mpp > 0:
             shift_info["source_mpp"] = float(source_mpp)
@@ -1776,40 +1764,9 @@ def main() -> None:
             log("Writing large-image QC preview with bounded tiled reads.")
             write_preview_big(crop_reader, labels_arr, (crop_h, crop_w), outdir, max_side=int(args.big_preview_max_side))
             gc.collect()
-            if args.write_full_labels:
-                fmt = str(args.full_format).strip().lower()
-                out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
-                if fmt == "zarr":
-                    write_full_labels_from_crop(
-                        labels_crop=labels_arr,
-                        full_h=H0,
-                        full_w=W0,
-                        x0=x0, y0=y0, x1=x1, y1=y1,
-                        out_path=out_full,
-                        fmt=fmt,
-                        chunk=args.full_chunk,
-                        compression="zlib",
-                        allow_huge_tif=args.allow_huge_tif,
-                    )
-                else:
-                    log("[WARN] Skipping dense full-size TIFF labels export in large-image mode. Use --full-format zarr if a later stage requires full-canvas labels.")
         else:
             assert labels_np is not None and img_yxc is not None and roi_mask is not None
             tifffile.imwrite(outdir / "labels.tif", labels_np, compression="zlib")
-            if args.write_full_labels:
-                fmt = args.full_format
-                out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
-                write_full_labels_from_crop(
-                    labels_crop=labels_np,
-                    full_h=H0,
-                    full_w=W0,
-                    x0=x0, y0=y0, x1=x1, y1=y1,
-                    out_path=out_full,
-                    fmt=fmt,
-                    chunk=args.full_chunk,
-                    compression="zlib",
-                    allow_huge_tif=args.allow_huge_tif,
-                )
 
             props = regionprops_table(
                 labels_np,
@@ -1825,6 +1782,53 @@ def main() -> None:
             })
             save_qc_plots(img_yxc, labels_np, roi_mask, outdir, max_side=int(args.big_preview_max_side))
 
+        # Filter every StarDist output before it can enter consensus or feature extraction.
+        if args.clean_tissue_mask:
+            from grandqc_mask import CropCleanTissueMask, filter_labels_in_place
+            clean_mask = CropCleanTissueMask(args.clean_tissue_mask, outdir / "shift.json")
+            before_count = int(len(df))
+            keep_rows = clean_mask.keep_xy(zip(df["x"], df["y"])) if not df.empty else np.zeros(0, dtype=bool)
+            df = df.loc[keep_rows].copy()
+            keep_labels = set(df["label"].astype(int).tolist()) if not df.empty else set()
+            if use_big:
+                filter_labels_in_place(labels_arr, keep_labels, (crop_h, crop_w), block_size=int(args.big_tiff_tile))
+                write_tiled_tiff_2d(
+                    outdir / "labels.tif", labels_arr, shape=(crop_h, crop_w), dtype=np.uint32,
+                    tile_hw=int(args.big_tiff_tile), compression="zlib",
+                )
+                write_preview_big(crop_reader, labels_arr, (crop_h, crop_w), outdir, max_side=int(args.big_preview_max_side))
+            else:
+                assert labels_np is not None and img_yxc is not None and roi_mask is not None
+                filter_labels_in_place(labels_np, keep_labels, (crop_h, crop_w), block_size=int(args.big_tiff_tile))
+                tifffile.imwrite(outdir / "labels.tif", labels_np, compression="zlib")
+                save_qc_plots(img_yxc, labels_np, roi_mask, outdir, max_side=int(args.big_preview_max_side))
+            filter_summary = {
+                "input_cells": before_count,
+                "retained_cells": int(len(df)),
+                "removed_outside_grandqc_clean_tissue": before_count - int(len(df)),
+                "clean_tissue_mask": str(Path(args.clean_tissue_mask).resolve()),
+            }
+            (outdir / "grandqc_cell_filter_summary.json").write_text(json.dumps(filter_summary, indent=2))
+
+        if args.write_full_labels:
+            fmt = str(args.full_format).strip().lower()
+            out_full = Path(args.full_out) if args.full_out else (outdir / f"labels_full.{fmt}")
+            if use_big and fmt != "zarr":
+                log("[WARN] Skipping dense full-size TIFF labels export in large-image mode. Use --full-format zarr.")
+            else:
+                write_full_labels_from_crop(
+                    labels_crop=labels_arr,
+                    full_h=full_height,
+                    full_w=full_width,
+                    x0=orig_x0, y0=orig_y0,
+                    x1=orig_x0 + crop_w, y1=orig_y0 + crop_h,
+                    out_path=out_full,
+                    fmt=fmt,
+                    chunk=args.full_chunk,
+                    compression="zlib",
+                    allow_huge_tif=args.allow_huge_tif,
+                )
+
         # ---- 6) details / objects / optional polygons ----
         def _jsonable(obj: Any) -> Any:
             if isinstance(obj, np.ndarray):
@@ -1837,16 +1841,23 @@ def main() -> None:
                 return obj
             return str(obj)
 
-        (outdir / "stardist_details.json").write_text(json.dumps(_jsonable(details), indent=2))
+        details_payload = _jsonable(details)
+        if not isinstance(details_payload, dict):
+            details_payload = {"details": details_payload}
+        details_payload["pipeline_model_provenance"] = stardist_model_provenance(
+            model_name,
+            used_model=bool(STARDIST_AVAILABLE),
+        )
+        (outdir / "stardist_details.json").write_text(json.dumps(details_payload, indent=2))
 
         if not df.empty:
-            df["x_orig"] = df["x"] + x0
-            df["y_orig"] = df["y"] + y0
+            df["x_orig"] = df["x"] + orig_x0
+            df["y_orig"] = df["y"] + orig_y0
             if "xmin" in df.columns:
-                df["xmin_orig"] = df["xmin"] + x0
-                df["xmax_orig"] = df["xmax"] + x0
-                df["ymin_orig"] = df["ymin"] + y0
-                df["ymax_orig"] = df["ymax"] + y0
+                df["xmin_orig"] = df["xmin"] + orig_x0
+                df["xmax_orig"] = df["xmax"] + orig_x0
+                df["ymin_orig"] = df["ymin"] + orig_y0
+                df["ymax_orig"] = df["ymax"] + orig_y0
         df.to_csv(outdir / "objects.csv", index=False)
 
         if args.write_polygons:

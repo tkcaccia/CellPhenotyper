@@ -2,17 +2,16 @@ process RUN_GIGATIME_ON_CROP {
     tag "${sample_id}"
     label 'compute_heavy'
     label 'gpu_capable'
-    maxForks 1
 
     publishDir "${params.outdir_base}/05_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "gigatime_${sample_id}"
     publishDir "${params.outdir_base}/05_gigatime/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true, pattern: "quantification_${sample_id}"
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.gigatime_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.gigatime_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.gigatime_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.gigatime_memory_gb as int))} GB" }
     time { params.gigatime_time as String }
 
     input:
-    tuple val(sample_id), path(crop_tif), path(shift_json), path(nuclei_mask_tif), path(cyto_mask_tif)
+    tuple val(sample_id), path(crop_tif), path(shift_json), path(nuclei_mask_tif), path(cyto_mask_tif), path(tissue_mask_tif), path(canonical_input_report)
 
     output:
     tuple val(sample_id), path("gigatime_${sample_id}"), emit: gigatime_dir
@@ -21,7 +20,7 @@ process RUN_GIGATIME_ON_CROP {
     script:
     def gigatime_script = "${projectDir}/${params.gigatime_script}"
     def codeDigest = java.security.MessageDigest.getInstance('SHA-256')
-    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py"].each {
+    [gigatime_script, "${projectDir}/bin/gigatime_hardware.py", "${projectDir}/bin/gigatime_resolution.py", "${projectDir}/bin/gigatime_seam_qc.py", "${projectDir}/bin/validate_input_resolution.py"].each {
       codeDigest.update(new File(it).bytes)
     }
     def codeFingerprint = codeDigest.digest().encodeHex().toString()
@@ -29,6 +28,7 @@ process RUN_GIGATIME_ON_CROP {
     def device_value = resolvedComputeDevice == 'gpu' ? 'cuda' : 'cpu'
     def token_env_file = params.hf_token_env_file ? (params.hf_token_env_file.toString().startsWith('/') ? params.hf_token_env_file : "${projectDir}/${params.hf_token_env_file}") : ''
     def strict_target_flag = params.gigatime_strict_target_mpp ? '--strict-target-mpp' : ''
+    def auto_parameters_flag = params.gigatime_auto_parameters ? '--auto-parameters' : ''
     def pyramid_flag = params.gigatime_output_pyramid ? '--pyramid' : ''
     def blockwise_flag = params.gigatime_blockwise ? '--blockwise' : ''
     def predictor_flag = params.gigatime_output_predictor ? '--predictor' : ''
@@ -44,7 +44,7 @@ process RUN_GIGATIME_ON_CROP {
     def resolved_max_auto_output_gib = (params.gigatime_max_auto_output_gib as double) > 0 ? (params.gigatime_max_auto_output_gib as double) : (params.hardware_max_auto_output_gib as double)
     def resolved_min_free_system_gb = (params.gigatime_min_free_system_gb as double) > 0 ? (params.gigatime_min_free_system_gb as double) : (params.hardware_min_free_system_gb as double)
     def auto_hardware_flag = resolved_auto_hardware ? '--auto-hardware' : ''
-    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params.max_memory_gb as int)
+    def task_mem_gb = task.memory ? Math.max(1, task.memory.toGiga() as int) : Math.max(1, params._executor_max_memory_gb as int)
     def clean_channel_spec = { raw ->
       if (raw == null) return ''
       if (raw instanceof Boolean) return ''
@@ -116,6 +116,8 @@ PY
 
     mkdir -p "gigatime_${sample_id}"
     mkdir -p "quantification_${sample_id}"
+    printf '[]\n' > "gigatime_${sample_id}/gigatime_channels.json"
+    printf '{"model_provenance":{"used_model":false}}\n' > "gigatime_${sample_id}/gigatime_metadata.json"
 
     wait_for_gigatime_memory() {
       local waited=0
@@ -166,6 +168,8 @@ PY
       --image "${crop_tif}" \\
       --shift-json "${shift_json}" \\
       --outdir "gigatime_${sample_id}" \\
+      --input-normalization-report "${canonical_input_report}" \\
+      --qc-tissue-mask "${tissue_mask_tif}" \\
       ${nuclei_mask_flag} \\
       ${cyto_mask_flag} \\
       ${quant_dir_flag} \\
@@ -173,6 +177,7 @@ PY
       --page ${params.gigatime_page} \\
       --patch-size ${params.gigatime_patch_size} \\
       --stride ${params.gigatime_stride} \\
+      ${auto_parameters_flag} \\
       --batch-size ${params.gigatime_batch_size} \\
       ${auto_hardware_flag} \\
       --hardware-profile ${resolved_hardware_profile} \\
@@ -199,6 +204,9 @@ PY
       --skip-background-close-radius ${params.gigatime_skip_background_close_radius} \\
       --skip-background-min-obj-area ${params.gigatime_skip_background_min_obj_area} \\
       --skip-background-hole-area ${params.gigatime_skip_background_hole_area} \\
+      --seam-qc-mode ${params.gigatime_seam_qc_mode} \\
+      --seam-qc-max-p95-excess ${params.gigatime_seam_qc_max_p95_excess} \\
+      --seam-qc-min-affected-fraction ${params.gigatime_seam_qc_min_affected_fraction} \\
       --max-output-gib ${params.gigatime_max_output_gib} \\
       --disk-buffer-threshold-gib ${params.gigatime_disk_buffer_threshold_gib} \\
       ${strict_target_flag} \\

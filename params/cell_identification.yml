@@ -1,0 +1,21 @@
+# Opt-in cell identification. Combine with one container profile on approved hardware.
+# nextflow run main.nf -profile docker -params-file params/cell_identification.yml \
+#   --image_input /data/crop.ome.tif --folder_input '' --outdir_base /results/cell-review \
+#   --cellvit_classifier_cache /models/classifier
+run_full_pipeline: false
+start_point: convert
+end_point: cell_identification
+compute_device: gpu
+cell_detection_mode: cellvitpp
+cell_identification_enable: true
+cellvit_input_scope: roi  # explicit small-ROI example; full-slide remains the pipeline default
+cellvit_model: SAM
+cellvit_taxonomies: all
+cellvit_classification_device: cpu
+cell_segmentation_review_enable: false
+cell_segmentation_review_max_pixels: 64000000
+# Supply existing verified model paths. Missing heads are reported unavailable.
+cellvit_classifier_cache: ""
+# Optional existing writable absolute cache, shared with Bora in a full tissue run.
+virchow2_feature_cache: ""
+bora_cell_context_enable: false

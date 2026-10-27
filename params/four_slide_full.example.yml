@@ -1,0 +1,30 @@
+# Historical conversion-only preparation template, not the accepted Bora recipe.
+# For the current contextual three-group route, see docs/BORA_CONTEXTUAL_THREE_GROUP.md.
+# Copy this file and provide the image/folder and model locations for one
+# slide at a time. Repeat for PM016, PM049, F0065 and F0085. Converted 0.25-
+# and 0.5-um/px images are retained. This example only prepares images until
+# the three-scale Virchow2/KODAMA/Bora producer is integrated. Full-slide
+# CellViT++ uses cellvit_fullslide.nf after 0.25-um conversion; completed
+# source-bound tissue manifests use bora_fullslide.nf one slide at a time.
+image_input: null
+folder_input: null
+roi_geojson: null
+outdir_base: results_full
+run_full_pipeline: false
+start_point: convert
+end_point: convert
+compute_device: cpu
+cell_detection_mode: stardist
+cell_identification_enable: false
+cellvit_model: SAM
+cellvit_taxonomies: all
+cellvit_classification_device: cpu
+gigatime_enable: false
+storage_preflight_mode: fail
+storage_min_free_gib: 40.0
+
+# Declare and validate each slide's KODAMA group count separately; do not merge
+# cluster labels after fitting. The accepted PM016 review uses three groups,
+# not the superseded k=2 trial. This conversion-only template produces no tissue
+# prediction. See docs/BORA_CONTEXTUAL_THREE_GROUP.md for the current accepted
+# route; docs/bora-fullslide.md describes a separate historical hard-group route.

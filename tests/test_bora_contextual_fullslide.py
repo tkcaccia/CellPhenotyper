@@ -141,7 +141,7 @@ def test_head_cannot_transfer_to_other_slide(tmp_path: Path):
 
 def test_full_small_slide_emits_exact_and_editable_predictions(tmp_path: Path):
     source = Path(os.environ.get("BORA_SOURCE_DIR",
-        str(Path(__file__).resolve().parents[2] / "bora-main-20261025")))
+        str(Path(__file__).resolve().parents[2] / "Bora")))
     if not (source / "src/bora/kodama_bora.py").is_file():
         pytest.skip("Sibling Bora integration source is unavailable")
     manifest, _ = _case(tmp_path / "case")

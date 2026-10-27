@@ -18,6 +18,10 @@ RUN set -euo pipefail && \
     micromamba run -n cellvit python -c \
       'import cellvit, pyvips; assert pyvips.version(0) >= 8; print("CellViT WSI runtime passed")'
 
+# CPU contour export uses the same tiled raster contract as existing cell masks.
+RUN micromamba run -n stardist pip install --no-cache-dir 'shapely==2.1.1' && \
+    micromamba run -n stardist python -c 'import shapely, rasterio; print("Cell mask export dependencies passed")'
+
 RUN apt-get update && apt-get install -y --no-install-recommends libuv1-dev && \
     rm -rf /var/lib/apt/lists/*
 

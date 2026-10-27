@@ -1,0 +1,17 @@
+# Copy for one completed slide at a time. All paths must be absolute. The
+# input JSON is a filled copy of bora_global_inputs.example.json. None of
+# these paths is a GPU job request; the producer inventory must already be
+# complete and cleanup-verified.
+bora_fullslide_input_spec: null
+bora_fullslide_manifest_output: null   # new directory
+bora_fullslide_output: null            # new directory
+bora_fullslide_cpu_sif: null           # qualified CPU SIF, not the GPU SIF
+bora_fullslide_required_groups: 2      # PM016 only; declare per other slide
+bora_fullslide_memory_gb: 12
+compute_device: cpu
+
+# Optional: attach exact Bora GeoJSON as a tissue annotation in a new project.
+# Supply both fields or neither. The existing project must bind the same
+# image SHA and frame ID as the manifest.
+bora_fullslide_base_project: null
+bora_fullslide_project_output: null

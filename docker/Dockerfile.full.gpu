@@ -54,7 +54,7 @@ RUN set -euo pipefail && \
       # TensorFlow is pinned to a source-built wheel that supports sm_120/sm_120a.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \
         "numpy<2" /tmp/tensorflow-2.22.0.dev0+selfbuilt-cp311-cp311-linux_x86_64.whl stardist csbdeep "imagecodecs<2025" && \
-      micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi && \
+      micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine 'shapely==2.1.1' pyvips openslide-python aicsimageio aicspylibczi && \
       # TensorFlow's source-built wheel expects NVIDIA CUDA libs from pip packages.
       # Keep these on image so runtime does not depend on host-side Python installs.
       micromamba run -n stardist pip install --no-cache-dir --upgrade \

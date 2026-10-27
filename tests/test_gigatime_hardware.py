@@ -50,6 +50,19 @@ class GigaTIMEHardwarePolicyTest(unittest.TestCase):
         self.assertEqual(result["effective"]["batch_size"], 4)
         self.assertEqual(result["effective"]["block_size"], 768)
 
+    def test_high_memory_gpu_can_exceed_legacy_batch_ceiling(self):
+        result = settings(
+            profile="aggressive",
+            max_auto_batch=32,
+            task_memory_gib=80.0,
+            min_free_system_gib=6.0,
+            system_mem_available_gib=100.0,
+            cuda_mem_free_gib=72.0,
+            cuda_mem_total_gib=80.0,
+        )
+        self.assertEqual(result["effective"]["batch_size"], 24)
+        self.assertEqual(result["effective"]["block_size"], 3072)
+
     def test_unknown_cuda_memory_keeps_conservative_requested_batch(self):
         result = settings(cuda_mem_free_gib=None, cuda_mem_total_gib=None)
         self.assertEqual(result["effective"]["batch_size"], 1)

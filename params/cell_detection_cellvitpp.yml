@@ -1,0 +1,10 @@
+# Exactly one detector, full-slide typed cells. Supply pinned full-slide runtime/input paths
+# from params/cellvit_fullslide.example.yml and docs/cellvit-fullslide.md.
+cell_detection_mode: cellvitpp
+cellvit_input_scope: full_slide
+cellvit_fullslide_model: SAM
+cellvit_taxonomies: all
+cellvit_classification_device: cpu
+cell_segmentation_review_enable: false
+compute_device: gpu
+uni2_use_roi_crop: true

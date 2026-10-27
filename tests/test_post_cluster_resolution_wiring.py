@@ -9,7 +9,10 @@ def test_growth_and_medsam_receive_stardist_resolution_sidecar() -> None:
     assert "def resolution_for_growth_variant_ch = Channel.empty()" in workflow
     assert "resolution_for_growth_variant_ch = shift_json_ch" in workflow
     spatial = (ROOT / "subworkflows" / "post_grow_spatial_outputs.nf").read_text(encoding="utf-8")
-    assert workflow.count(".join(resolution_for_growth_variant_ch)") == 1
+    # Both the retained growth route and the Virchow2/Bora route need the
+    # original image's measured resolution sidecar.
+    assert workflow.count(".join(resolution_for_growth_variant_ch)") == 2
+    assert "def bora_input_ch = cluster_mask_ch" in workflow
     assert spatial.count(".join(resolution_for_growth_variant_ch)") == 1
 
     grow = (ROOT / "modules/grow_to_tissue.nf").read_text(encoding="utf-8")
@@ -18,6 +21,20 @@ def test_growth_and_medsam_receive_stardist_resolution_sidecar() -> None:
     assert '--resolution-json "${resolution_json}"' in grow
     assert "path(resolution_json)" in medsam
     assert '--resolution-json "${resolution_json}"' in medsam
+    assert "path(cluster_mask_tif, stageAs: 'seed_cluster_mask.tif')" in medsam
+    assert "path(grown_mask_tif, stageAs: 'baseline_grown_mask.ome.tif')" in medsam
+    assert "tissue_mask_variant_ch" in spatial
+    assert "path(tissue_mask_tif)" in medsam
+    assert '--tissue-mask "${tissue_mask_tif}"' in medsam
+    medsam_script = (ROOT / "bin/refine_grown_tissue_medsam.py").read_text(encoding="utf-8")
+    medsam_core = (ROOT / "bin/medsam_border_refine.py").read_text(encoding="utf-8")
+    assert "allowed_support_mask=tissue_support" in medsam_script
+    assert "allowed_support_mask=tile_tissue" in medsam_script
+    assert "final_outside_allowed_support_pixels" in medsam_core
+    assert "label_outer &= allowed_support" in medsam_core
+    assert "background_mask = _obvious_background_mask(image) | ~allowed_support" in medsam_core
+    assert "final_mask &= allowed_support" in medsam_core
+    assert "final_labels[~allowed_support] = 0" in medsam_core
 
 
 def test_neoplastic_section_uses_validated_bioformats_ome_output() -> None:
@@ -44,7 +61,10 @@ def test_explicit_false_is_not_replaced_for_default_true_stages() -> None:
     assert "params.tma_enable ?: true" not in workflow
     assert "params.cell_consensus_enable ?: true" not in workflow
     assert "params.tma_enable == null" in workflow
-    assert "params.cell_consensus_enable == null" in workflow
+    detector = (ROOT / "modules" / "cell_detection_settings.nf").read_text(encoding="utf-8")
+    assert "resolveCellDetectionSettings(params, resolved_compute_device)" in workflow
+    assert "params.cell_consensus_enable != null && !truth(params.cell_consensus_enable)" in detector
+    assert "legacyStarDist ? 'stardist' : 'cellvitpp'" in detector
 
 
 def test_repair_staging_drops_inherited_ome_xml() -> None:

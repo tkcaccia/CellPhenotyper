@@ -145,7 +145,7 @@ PY
   micromamba run -n cellvit cellvit-inference --help >/dev/null
   micromamba run -n cellvit python -c 'import cellvit, pyvips; assert pyvips.version(0) >= 8'
 
-  micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi
+  micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine 'shapely==2.1.1' pyvips openslide-python aicsimageio aicspylibczi
 
   # OME tools
   micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff

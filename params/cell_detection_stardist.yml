@@ -1,0 +1,4 @@
+# Exactly one nuclear detector. Combine with your tissue/input/runtime settings.
+cell_detection_mode: stardist
+cell_identification_enable: false
+cell_segmentation_review_enable: false

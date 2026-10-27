@@ -51,7 +51,7 @@ RUN set -euo pipefail && \
     if ! micromamba run -n stardist python -c "import imagecodecs" >/dev/null 2>&1; then \
       micromamba run -n stardist pip install --no-cache-dir "imagecodecs<2025" ; \
     fi && \
-    micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine pyvips openslide-python aicsimageio aicspylibczi && \
+    micromamba run -n stardist pip install --no-cache-dir --upgrade rasterio affine 'shapely==2.1.1' pyvips openslide-python aicsimageio aicspylibczi && \
     for attempt in 1 2 3; do \
       if micromamba install -y -n stardist -c ome -c conda-forge bioformats2raw raw2ometiff; then \
         break; \

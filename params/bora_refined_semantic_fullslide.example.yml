@@ -1,0 +1,22 @@
+# One source-bound, CPU-only Bora continuation after complete Virchow2 tokens
+# and a passing independently marked same-slide tissue holdout. Replace every
+# placeholder with one slide's absolute, hash-verified paths. This is not a
+# PM016 ready-to-run manifest and does not authorize a Chiamaka execution.
+bora_refined_algorithm: bora-wsi-native-he-refined-semantic-chain-v1
+compute_device: cpu
+bora_refined_roi_spec: /absolute/slide/semantic-roi-spec.json
+bora_refined_evaluation_folder: /absolute/slide/passing-evaluation
+bora_refined_materialization_folder: /absolute/slide/materialized-tokens
+bora_refined_registration: /absolute/slide/dual-mpp-registration.json
+bora_refined_support_tiff: /absolute/slide/native-grandqc-support.tif
+bora_refined_base_project: /absolute/slide/experiment.cellphenotyper.json
+bora_refined_source: /absolute/path/to/reviewed-bora
+bora_refined_source_sha256: REPLACE_WITH_IDENTITY_SOURCE_SHA256
+bora_refined_runtime_sha256: REPLACE_WITH_IDENTITY_RUNTIME_SHA256
+bora_refined_output: /absolute/new-slide-refined-bora-output
+bora_refined_core_pixels: 2048
+bora_refined_source_halo_pixels: 96
+bora_refined_output_halo_pixels: 3
+bora_refined_memory_gb: 3
+bora_refined_disk_gb: 64
+bora_refined_deadline_seconds: 86400

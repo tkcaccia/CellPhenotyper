@@ -1,0 +1,37 @@
+{
+  "schema": "cellphenotyper-bora-global-inputs-v1",
+  "sample_id": "PM016",
+  "identity_status": "exploratory_transfer",
+  "evidence_class": "verified_gpu_inventory",
+  "run_root": "/absolute/path/to/completed-token-run",
+  "producer_source": "/absolute/path/to/frozen-producer-source-parent",
+  "inputs": {
+    "registration": "/absolute/path/to/registration.json",
+    "grid_csv": "/absolute/path/to/grid.csv",
+    "cluster_csv": "/absolute/path/to/direct-kodama-clusters.csv",
+    "cluster_receipt": "/absolute/path/to/direct-kodama-receipt.json",
+    "grid_metadata": "/absolute/path/to/grid-metadata.json",
+    "support_mask": "/absolute/path/to/full-support-mask.tif",
+    "working_image": "/absolute/path/to/working-0.5um-image.tif",
+    "model": "/absolute/path/to/virchow2-checkpoint.safetensors",
+    "classifier_model": "/absolute/path/to/exploratory-colon-classifier.npz"
+  },
+  "fastpls_site": "/absolute/path/inside/qualified-cpu-runtime/site-packages",
+  "native_libraries": ["/absolute/path/inside/qualified-cpu-runtime/libvips.so"],
+  "required_group_count": 2,
+  "palette_rgb": [[210, 35, 75], [35, 170, 70]],
+  "limits": {
+    "total_seconds": 7200,
+    "admission_seconds": 900,
+    "stage_seconds": {
+      "coarse": 360, "observations": 360, "selected": 360,
+      "rgb9": 360, "rgb19": 360, "replay": 360,
+      "rgb_image": 360, "evidence": 360, "af_inputs": 360,
+      "af_1": 360, "af_2": 360, "af_readout": 360,
+      "descriptors": 360, "classifier": 360, "vectors": 360
+    },
+    "memory_budget_bytes": 1073741824,
+    "stage_disk_budget_bytes": 2147483648,
+    "minimum_free_bytes": 42949672960
+  }
+}

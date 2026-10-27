@@ -4,8 +4,8 @@ process MAP_CELLS_TO_ROI_POLYGONS {
 
     publishDir "${params.outdir_base}/07_cell_assignments/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.assign_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.assign_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.assign_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.assign_memory_gb as int))} GB" }
     time { params.assign_time as String }
 
     input:

@@ -4,8 +4,8 @@ process PREPARE_INPUT_OMETIFF {
 
     publishDir "${params.outdir_base}/01_input/${sample_id}", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.convert_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.convert_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.convert_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.convert_memory_gb as int))} GB" }
     time { params.convert_time as String }
 
     input:
@@ -14,6 +14,7 @@ process PREPARE_INPUT_OMETIFF {
     output:
     tuple val(sample_id), path("${sample_id}.ome.tif"), emit: ome_tif
     tuple val(sample_id), path("${sample_id}.source_resolution.json"), emit: source_resolution_report
+    tuple val(sample_id), path("${sample_id}.canonical_input.json"), emit: canonical_input_report
     tuple val(sample_id), path("${sample_id}.converted_resolution.json"), emit: converted_resolution_report
 
     script:
@@ -26,10 +27,22 @@ process PREPARE_INPUT_OMETIFF {
     def overwrite_flag = params.convert_overwrite ? '--overwrite' : ''
     def btf_converter_script = "${projectDir}/${params.btf_converter_script}"
     def generic_converter_script = "${projectDir}/bin/convert_image_to_tiff.py"
+    def canonical_input_script = "${projectDir}/bin/canonicalize_he_input.py"
     def resolution_validator_script = "${projectDir}/${params.input_resolution_validator_script}"
     def resolution_strict_flag = params.input_resolution_strict ? '--strict' : ''
+    def resolution_hash_flag = params.input_hash_enable ? '' : '--skip-file-hash'
+    def converted_rgb_requirement = params.input_require_rgb ? '--require-rgb' : ''
+    def converted_pyramid_requirement = params.input_require_pyramid ? '--require-pyramid' : ''
+    def codeFingerprint = PipelineHelpers.codeFingerprint([
+      resolution_validator_script,
+      generic_converter_script,
+      canonical_input_script,
+      btf_converter_script,
+    ])
     """
     set -euo pipefail
+
+    echo "[INFO] Input conversion code fingerprint: ${codeFingerprint}"
 
     export OMP_NUM_THREADS=${task.cpus}
     export MKL_NUM_THREADS=1
@@ -66,7 +79,9 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
@@ -104,6 +119,12 @@ PY
 
     [[ -s "${sample_id}.ome.tif" ]] || { echo "Converted OME-TIFF missing or empty: ${sample_id}.ome.tif" >&2; exit 1; }
 
+    python "${canonical_input_script}" \
+      --image "${sample_id}.ome.tif" \
+      --source-resolution-report "${sample_id}.source_resolution.json" \
+      --channel-order "${params.input_channel_order}" \
+      --report "${sample_id}.canonical_input.json"
+
     if [[ "${params.input_resolution_check}" == "true" ]]; then
       python "${resolution_validator_script}" \
         --image "${sample_id}.ome.tif" \
@@ -114,7 +135,11 @@ PY
         --cell-target-mpp ${params.input_resolution_cell_target_mpp} \
         --max-anisotropy-fraction ${params.input_resolution_max_anisotropy_fraction} \
         --max-conversion-drift-fraction ${params.input_resolution_max_conversion_drift_fraction} \
+        --max-metadata-conflict-fraction ${params.input_resolution_max_metadata_conflict_fraction} \
         --override-mpp ${params.input_resolution_override_mpp} \
+        ${resolution_hash_flag} \
+        ${converted_rgb_requirement} \
+        ${converted_pyramid_requirement} \
         ${resolution_strict_flag}
     else
       printf '{"schema_version":1,"image":"%s","status":"skipped","strict":false}\n' \
@@ -126,6 +151,7 @@ PY
     """
     touch "${sample_id}.ome.tif"
     printf '{"status":"stub"}\n' > "${sample_id}.source_resolution.json"
+    printf '{"status":"stub"}\n' > "${sample_id}.canonical_input.json"
     printf '{"status":"stub"}\n' > "${sample_id}.converted_resolution.json"
     """
 }

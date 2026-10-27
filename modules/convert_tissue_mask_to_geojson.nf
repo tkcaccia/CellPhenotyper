@@ -4,8 +4,8 @@ process CONVERT_TISSUE_MASK_TO_GEOJSON {
 
     publishDir "${params.outdir_base}/04_tissue_geojson", mode: (params.publish_dir_mode ?: 'rellink'), overwrite: true
 
-    cpus { Math.max(1, Math.min(params.max_cpus as int, params.tissue_geojson_cpus as int)) }
-    memory { "${Math.max(2, Math.min(params.max_memory_gb as int, params.tissue_geojson_memory_gb as int))} GB" }
+    cpus { Math.max(1, Math.min(params._executor_max_cpus as int, params.tissue_geojson_cpus as int)) }
+    memory { "${Math.max(2, Math.min(params._executor_max_memory_gb as int, params.tissue_geojson_memory_gb as int))} GB" }
     time { params.tissue_geojson_time as String }
 
     input:

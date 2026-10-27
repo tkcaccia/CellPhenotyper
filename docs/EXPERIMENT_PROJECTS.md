@@ -5,15 +5,9 @@ calibrated images, annotations and existing feature tables; it does not embed
 images, weights or feature arrays. Exporting, validating and opening the index
 do not run an encoder or submit a workflow.
 
-This exporter and report hook do not add a Virchow2 inference route to the
-Nextflow pipeline in this revision. Its existing UNI-2 outputs cannot be
-relabeled as Virchow2. Use `--spec` for independently generated compatible
-features, or `--run` for an existing output tree matching the completion-record
-contract below. The Virchow2 producer integration is separate work.
-
-For a run that already contains compatible Virchow2 caches, execution reporting creates
+For a current completed Virchow2 run, execution reporting automatically creates
 `00_execution/experiment.cellphenotyper.json` when its image, grid and cached
-features pass validation. `00_execution/final_report.md` links the project file. Choose
+features pass validation. The landing page links the project file. Choose
 **Open Project** in a compatible wsiTools Desktop version and select that file.
 Keep the index in its output tree so relative paths continue to resolve.
 
@@ -46,7 +40,7 @@ sampling and uses the published analysis crop. Ambiguous/missing images or
 multiple unmatched shards require an explicit specification; no tissue is
 silently paired by filename alone. Current automatic discovery supports the
 producer's single pooled shard per tissue. It does not invent dense token caches.
-The supported completion-record layout does not retain a source-image digest.
+Current producer completion records do not retain a source-image digest.
 Export verifies the present image bytes/header, table/grid hashes and geometry,
 but cannot retroactively prove which historical image bytes the encoder read.
 This limitation is recorded in tissue provenance. Preserve original run inputs
@@ -112,8 +106,8 @@ revision/checkpoint digest, preprocessing, grid and verified row count:
 | `virchow2-pooled` | `tile` | 2560 | CLS concatenated with mean spatial-patch features for one model tile |
 | `virchow2-spatial` | `token` | 1280 | Spatial-patch token features; CLS and four registers excluded |
 
-The automatic-discovery contract requires model tiles covering 224 pixels at
-0.5 µm/pixel, with no overlap. Spatial tokens occupy a 14-model-pixel lattice. Pooled tiles are not
+Model tiles cover 224 pixels at 0.5 µm/pixel in the current pipeline, with no
+overlap. Spatial tokens occupy a 14-model-pixel lattice. Pooled tiles are not
 cell observations and cannot reconstruct the dense token field. A different
 scale, halo/window origin or preprocessing recipe defines a different feature
 set even if the model hash agrees. Do not pool incompatible feature definitions
