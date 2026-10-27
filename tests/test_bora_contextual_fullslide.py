@@ -22,6 +22,8 @@ from bora_contextual_fullslide import (  # noqa: E402
 from combine_cellvit_bora_project import combine  # noqa: E402
 import combine_cellvit_bora_project as combined_export  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("isolated_bora_source_imports")
+
 
 def _json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n")
@@ -384,3 +386,28 @@ def test_combined_export_removes_staging_on_validation_failure(
     assert calls == 2
     assert not output.parent.exists()
     assert not list(tmp_path.glob(".combined.staging-*"))
+
+
+def test_another_imported_bora_is_rejected_before_output(tmp_path: Path, monkeypatch):
+    """Test isolation must not relax the production source-provenance guard."""
+    from types import ModuleType
+
+    source = tmp_path / "pinned-bora"
+    package = source / "src/bora"
+    package.mkdir(parents=True)
+    (source / "pyproject.toml").write_text("# synthetic source identity\n")
+    (package / "__init__.py").write_text("# synthetic source identity\n")
+    (package / "placeholder.py").write_text("# no inference is invoked\n")
+    unrelated = tmp_path / "unrelated/bora/__init__.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("# deliberately different installation\n")
+    imported = ModuleType("bora")
+    imported.__file__ = str(unrelated)
+    monkeypatch.setitem(sys.modules, "bora", imported)
+    manifest, _ = _case(tmp_path / "case")
+    output = tmp_path / "must-not-exist"
+
+    with pytest.raises(ValueError, match="Another Bora installation is already imported"):
+        run(manifest, source, _source_identity(source), output,
+            disk_budget_bytes=4 * 1024**3)
+    assert not output.exists()

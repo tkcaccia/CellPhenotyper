@@ -16,30 +16,12 @@ from bin.export_experiment import export_experiment, validate_experiment
 
 BORA_SOURCE = Path(os.environ.get("BORA_CONTINUOUS_SOURCE_DIR",
     os.environ.get("BORA_SOURCE_DIR", str(Path(__file__).resolve().parents[2] / "Bora"))))
-pytestmark = pytest.mark.skipif(
-    not (BORA_SOURCE / "src/bora/wsi_continuous_chain.py").is_file(),
-    reason="Bora integration source is unavailable; set BORA_SOURCE_DIR")
-
-
-@pytest.fixture(autouse=True)
-def isolated_bora_source_imports():
-    # Independent source-pinned integrations must not reuse the contextual
-    # package imported by a preceding test. Production still rejects a mixed
-    # installation; isolate imports here instead of weakening that guard.
-    import sys
-    saved = {name: value for name, value in sys.modules.items()
-             if name == "bora" or name.startswith("bora.")}
-    saved_path = sys.path[:]
-    for name in saved:
-        sys.modules.pop(name, None)
-    try:
-        yield
-    finally:
-        for name in list(sys.modules):
-            if name == "bora" or name.startswith("bora."):
-                sys.modules.pop(name, None)
-        sys.modules.update(saved)
-        sys.path[:] = saved_path
+pytestmark = [
+    pytest.mark.usefixtures("isolated_bora_source_imports"),
+    pytest.mark.skipif(
+        not (BORA_SOURCE / "src/bora/wsi_continuous_chain.py").is_file(),
+        reason="Bora integration source is unavailable; set BORA_SOURCE_DIR"),
+]
 
 
 def _case(root: Path) -> dict:
